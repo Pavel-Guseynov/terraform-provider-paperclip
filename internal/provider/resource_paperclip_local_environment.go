@@ -113,6 +113,7 @@ func (r *PaperclipLocalEnvironmentResource) Read(ctx context.Context, req resour
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
-func (r *PaperclipLocalEnvironmentResource) Delete(context.Context, resource.DeleteRequest, *resource.DeleteResponse) {
+func (r *PaperclipLocalEnvironmentResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	// Relinquish this binding only; the producer owns the environment lifecycle.
+	_ = req
 }

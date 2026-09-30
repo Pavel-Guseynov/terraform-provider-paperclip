@@ -1383,46 +1383,87 @@ func TestAgentSchemaIdentityAttributes(t *testing.T) {
 	if strings.Contains(assignAttr.Description, "create and assign") {
 		t.Errorf("can_assign_tasks description must not claim agent may create tasks: %s", assignAttr.Description)
 	}
+
+	createAttr, ok := resp.Schema.Attributes["can_create_agents"].(schema.BoolAttribute)
+	if !ok {
+		t.Fatalf("can_create_agents attribute missing or not a bool attribute")
+	}
+	if !createAttr.Required || createAttr.Optional || createAttr.Computed {
+		t.Fatalf("can_create_agents must be declared for every managed agent: %+v", createAttr)
+	}
 }
 
-func TestAgentTaskAssignmentReconciliation(t *testing.T) {
-	ctx := context.Background()
-	var permissionWrites []map[string]bool
-	canAssign := true
+// permissionBoard serves one agent whose permissions the test controls and
+// records every permissions write the provider sends.
+func permissionBoard(t *testing.T, permissions map[string]interface{}, applyWrites bool) (*PaperclipAgentResource, *[]map[string]bool) {
+	t.Helper()
+	var writes []map[string]bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		switch {
 		case req.URL.Path == "/api/agents/agent-1" && req.Method == http.MethodGet:
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "agent-1", "companyId": "comp-1", "name": "harness",
-				"permissions": map[string]interface{}{"canCreateAgents": false, "canCreateSkills": true, "canAssignTasks": canAssign},
-			})
+			agent := map[string]interface{}{"id": "agent-1", "companyId": "comp-1", "name": "inventory"}
+			if permissions != nil {
+				agent["permissions"] = permissions
+			}
+			_ = json.NewEncoder(w).Encode(agent)
 		case req.URL.Path == "/api/agents/agent-1/permissions" && req.Method == http.MethodPatch:
 			var body map[string]bool
 			_ = json.NewDecoder(req.Body).Decode(&body)
-			permissionWrites = append(permissionWrites, body)
-			canAssign = body["canAssignTasks"]
+			writes = append(writes, body)
+			if applyWrites {
+				for flag, value := range body {
+					permissions[flag] = value
+				}
+			}
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "agent-1"})
 		default:
 			http.NotFound(w, req)
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 	cli, _ := client.NewClient(server.URL, "board-token")
-	r := &PaperclipAgentResource{client: cli}
+	return &PaperclipAgentResource{client: cli}, &writes
+}
 
-	// A declared value the board already reports writes nothing.
-	if err := r.reconcileTaskAssignment(ctx, "agent-1", true); err != nil || len(permissionWrites) != 0 {
-		t.Fatalf("converged value must not be rewritten: err %v writes %v", err, permissionWrites)
-	}
-	// A declared value that differs is written once, carrying the other flags
+func TestAgentPermissionReconciliation(t *testing.T) {
+	ctx := context.Background()
+	// The board state inventory held on 2026-09-30: created with the
+	// create-agents permission that no managed agent declares.
+	r, writes := permissionBoard(t, map[string]interface{}{"canCreateAgents": true, "canCreateSkills": true, "canAssignTasks": true}, true)
+
+	// Declared values that differ are written once, carrying the undeclared flag
 	// back unchanged because the route replaces all of them, and proven by a read.
-	expected := []map[string]bool{{"canCreateAgents": false, "canCreateSkills": true, "canAssignTasks": false}}
-	if err := r.reconcileTaskAssignment(ctx, "agent-1", false); err != nil || !reflect.DeepEqual(permissionWrites, expected) {
-		t.Fatalf("declared value must be written once with the other flags preserved: err %v writes %v", err, permissionWrites)
+	expected := []map[string]bool{{"canCreateAgents": false, "canCreateSkills": true, "canAssignTasks": true}}
+	if err := r.reconcilePermissions(ctx, "agent-1", true, false); err != nil || !reflect.DeepEqual(*writes, expected) {
+		t.Fatalf("drifted create-agents flag must be written once with the other flags preserved: err %v writes %v", err, *writes)
 	}
-	if err := r.reconcileTaskAssignment(ctx, "agent-1", false); err != nil || len(permissionWrites) != 1 {
-		t.Fatalf("converged value must not be rewritten again: err %v writes %v", err, permissionWrites)
+	// Declared values the board already reports write nothing.
+	if err := r.reconcilePermissions(ctx, "agent-1", true, false); err != nil || len(*writes) != 1 {
+		t.Fatalf("converged values must not be rewritten: err %v writes %v", err, *writes)
 	}
+	// A changed task-assignment declaration keeps the declared create-agents value.
+	expected = append(expected, map[string]bool{"canCreateAgents": false, "canCreateSkills": true, "canAssignTasks": false})
+	if err := r.reconcilePermissions(ctx, "agent-1", false, false); err != nil || !reflect.DeepEqual(*writes, expected) {
+		t.Fatalf("task assignment must be written with the declared create-agents value: err %v writes %v", err, *writes)
+	}
+}
+
+func TestAgentPermissionReconciliationRefusesUnprovenState(t *testing.T) {
+	ctx := context.Background()
+	t.Run("board reports no permissions", func(t *testing.T) {
+		r, writes := permissionBoard(t, nil, true)
+		err := r.reconcilePermissions(ctx, "agent-1", true, false)
+		if err == nil || !strings.Contains(err.Error(), "board reported no permissions for agent agent-1") || len(*writes) != 0 {
+			t.Fatalf("absent permissions must fail without a write: err %v writes %v", err, *writes)
+		}
+	})
+	t.Run("board ignores the write", func(t *testing.T) {
+		r, writes := permissionBoard(t, map[string]interface{}{"canCreateAgents": true, "canCreateSkills": true, "canAssignTasks": true}, false)
+		err := r.reconcilePermissions(ctx, "agent-1", true, false)
+		if err == nil || !strings.Contains(err.Error(), "agent permissions did not converge: declared can_assign_tasks true and can_create_agents false") || len(*writes) != 1 {
+			t.Fatalf("an unconverged write must fail after one attempt: err %v writes %v", err, *writes)
+		}
+	})
 }
 
 func TestResultValueNormalization(t *testing.T) {

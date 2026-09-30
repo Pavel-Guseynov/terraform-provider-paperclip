@@ -3,7 +3,9 @@ package client
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -30,6 +32,9 @@ func NewClient(endpoint, token string) (*Client, error) {
 		endpoint = "http://127.0.0.1:3100"
 	}
 	endpoint = strings.TrimRight(endpoint, "/")
+	if _, err := url.ParseRequestURI(endpoint); err != nil {
+		return nil, fmt.Errorf("invalid endpoint URL: %w", err)
+	}
 	return &Client{
 		Endpoint: endpoint,
 		Token:    token,

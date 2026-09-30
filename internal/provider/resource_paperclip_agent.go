@@ -42,8 +42,9 @@ type PaperclipAgentResourceModel struct {
 	RuntimeConfig  types.String `tfsdk:"runtime_config"`
 	AdapterConfig  types.String `tfsdk:"adapter_config"`
 	Metadata       types.String `tfsdk:"metadata"`
-	Instructions   types.String `tfsdk:"instructions"`
-	CanAssignTasks types.Bool   `tfsdk:"can_assign_tasks"`
+	Instructions    types.String `tfsdk:"instructions"`
+	CanAssignTasks  types.Bool   `tfsdk:"can_assign_tasks"`
+	CanCreateAgents types.Bool   `tfsdk:"can_create_agents"`
 }
 
 func (r *PaperclipAgentResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -136,27 +137,32 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 				Description: "Whether the agent holds the task-assignment permission. The protected project assignment policy gates assignment through the tasks:assign grant that can_assign_tasks mints, but it does not deny an agent key from creating an unassigned issue; a filing made inside a heartbeat run is detected after the fact by the paperclip-fleet-health finding issue_filed_from_heartbeat_run. Harness declares the value for every managed agent, reconciles it after each write, and reads it back from the board.",
 				Required:    true,
 			},
+			"can_create_agents": schema.BoolAttribute{
+				Description: "Whether the agent may create other agents. Paperclip can grant it when it creates an agent, and it also derives task assignment from it (access.taskAssignSource agent_creator), so an undeclared value drifts unseen. Harness declares the value for every managed agent, reconciles it after each write, and reads it back from the board.",
+				Required:    true,
+			},
 		},
 	}
 }
 
-// reconcileTaskAssignment brings the agent's task-assignment permission flag
-// to the declared value and proves it from the board's own read.
-func (r *PaperclipAgentResource) reconcileTaskAssignment(ctx context.Context, agentID string, desired bool) error {
+// reconcilePermissions brings the agent's declared permission flags to their
+// declared values in one write and proves them from the board's own read.
+func (r *PaperclipAgentResource) reconcilePermissions(ctx context.Context, agentID string, canAssignTasks, canCreateAgents bool) error {
 	agent, err := r.client.GetAgent(ctx, agentID)
 	if err != nil {
 		return err
 	}
 	if agent.Permissions == nil {
-		// The permissions route replaces every flag, so the unchanged ones are
+		// The permissions route replaces every flag, so the undeclared ones are
 		// only ever written back from the board's own report.
-		return fmt.Errorf("board reported no permissions for agent %s, so its task assignment cannot be changed without altering the other flags", agentID)
+		return fmt.Errorf("board reported no permissions for agent %s, so its declared flags cannot be changed without altering the undeclared ones", agentID)
 	}
-	if agent.Permissions.CanAssignTasks == desired {
+	if agent.Permissions.CanAssignTasks == canAssignTasks && agent.Permissions.CanCreateAgents == canCreateAgents {
 		return nil
 	}
 	permissions := *agent.Permissions
-	permissions.CanAssignTasks = desired
+	permissions.CanAssignTasks = canAssignTasks
+	permissions.CanCreateAgents = canCreateAgents
 	if err := r.client.UpdateAgentPermissions(ctx, agentID, permissions); err != nil {
 		return err
 	}
@@ -164,17 +170,19 @@ func (r *PaperclipAgentResource) reconcileTaskAssignment(ctx context.Context, ag
 	if err != nil {
 		return err
 	}
-	if agent.Permissions == nil || agent.Permissions.CanAssignTasks != desired {
-		return fmt.Errorf("agent task assignment did not converge: declared %t, board reports %+v", desired, agent.Permissions)
+	if agent.Permissions == nil || agent.Permissions.CanAssignTasks != canAssignTasks || agent.Permissions.CanCreateAgents != canCreateAgents {
+		return fmt.Errorf("agent permissions did not converge: declared can_assign_tasks %t and can_create_agents %t, board reports %+v", canAssignTasks, canCreateAgents, agent.Permissions)
 	}
 	return nil
 }
 
-func taskAssignmentValue(permissions *client.PaperclipAgentPermissions) types.Bool {
+// permissionState reports the declared permission flags as the board reads
+// them, or nulls when the board reports no permissions.
+func permissionState(permissions *client.PaperclipAgentPermissions) (canAssignTasks, canCreateAgents types.Bool) {
 	if permissions == nil {
-		return types.BoolNull()
+		return types.BoolNull(), types.BoolNull()
 	}
-	return types.BoolValue(permissions.CanAssignTasks)
+	return types.BoolValue(permissions.CanAssignTasks), types.BoolValue(permissions.CanCreateAgents)
 }
 
 func (r *PaperclipAgentResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -243,8 +251,8 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 		}
 	}
 
-	if err := r.reconcileTaskAssignment(ctx, created.ID, plan.CanAssignTasks.ValueBool()); err != nil {
-		resp.Diagnostics.AddError("Error reconciling Paperclip agent task assignment", err.Error())
+	if err := r.reconcilePermissions(ctx, created.ID, plan.CanAssignTasks.ValueBool(), plan.CanCreateAgents.ValueBool()); err != nil {
+		resp.Diagnostics.AddError("Error reconciling Paperclip agent permissions", err.Error())
 		return
 	}
 
@@ -325,7 +333,7 @@ func (r *PaperclipAgentResource) Read(ctx context.Context, req resource.ReadRequ
 	state.RuntimeConfig = refreshManagedJSONState(state.RuntimeConfig, agent.RuntimeConfig)
 	state.AdapterConfig = refreshManagedJSONState(state.AdapterConfig, agent.AdapterConfig)
 	state.Metadata = refreshManagedJSONState(state.Metadata, agent.Metadata)
-	state.CanAssignTasks = taskAssignmentValue(agent.Permissions)
+	state.CanAssignTasks, state.CanCreateAgents = permissionState(agent.Permissions)
 
 	instructions, err := r.client.GetAgentInstructionsFile(ctx, state.ID.ValueString(), "AGENTS.md")
 	if err == nil && instructions != "" {
@@ -418,8 +426,8 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		}
 	}
 
-	if err := r.reconcileTaskAssignment(ctx, state.ID.ValueString(), plan.CanAssignTasks.ValueBool()); err != nil {
-		resp.Diagnostics.AddError("Error reconciling Paperclip agent task assignment", err.Error())
+	if err := r.reconcilePermissions(ctx, state.ID.ValueString(), plan.CanAssignTasks.ValueBool(), plan.CanCreateAgents.ValueBool()); err != nil {
+		resp.Diagnostics.AddError("Error reconciling Paperclip agent permissions", err.Error())
 		return
 	}
 

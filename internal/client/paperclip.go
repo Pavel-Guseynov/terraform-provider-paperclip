@@ -1008,23 +1008,25 @@ func (c *Client) GetSkill(ctx context.Context, companyID, skillID string) (*Pape
 		}
 
 		skills, err := c.ListSkills(ctx, companyID)
-		if err == nil {
-			for _, s := range skills {
-				if s.ID == skillID || s.Slug == skillID || strings.EqualFold(s.Name, skillID) {
-					return &s, nil
-				}
+		if err != nil {
+			return nil, err
+		}
+		for _, s := range skills {
+			if s.ID == skillID || s.Slug == skillID || strings.EqualFold(s.Name, skillID) {
+				return &s, nil
 			}
 		}
 	} else {
 		companies, err := c.ListCompanies(ctx)
-		if err == nil {
-			for _, comp := range companies {
-				skills, err := c.ListSkills(ctx, comp.ID)
-				if err == nil {
-					for _, s := range skills {
-						if s.ID == skillID || s.Slug == skillID || strings.EqualFold(s.Name, skillID) {
-							return &s, nil
-						}
+		if err != nil {
+			return nil, err
+		}
+		for _, comp := range companies {
+			skills, err := c.ListSkills(ctx, comp.ID)
+			if err == nil {
+				for _, s := range skills {
+					if s.ID == skillID || s.Slug == skillID || strings.EqualFold(s.Name, skillID) {
+						return &s, nil
 					}
 				}
 			}
@@ -1190,14 +1192,15 @@ func (c *Client) GetAgent(ctx context.Context, agentID string) (*PaperclipAgent,
 	}
 
 	companies, err := c.ListCompanies(ctx)
-	if err == nil {
-		for _, comp := range companies {
-			agents, err := c.ListAgents(ctx, comp.ID)
-			if err == nil {
-				for _, a := range agents {
-					if a.ID == agentID || strings.EqualFold(a.Name, agentID) {
-						return &a, nil
-					}
+	if err != nil {
+		return nil, err
+	}
+	for _, comp := range companies {
+		agents, err := c.ListAgents(ctx, comp.ID)
+		if err == nil {
+			for _, a := range agents {
+				if a.ID == agentID || strings.EqualFold(a.Name, agentID) {
+					return &a, nil
 				}
 			}
 		}
@@ -1441,14 +1444,15 @@ func (c *Client) GetToolConnection(ctx context.Context, connID string) (*Papercl
 	}
 
 	companies, err := c.ListCompanies(ctx)
-	if err == nil {
-		for _, comp := range companies {
-			conns, err := c.ListToolConnections(ctx, comp.ID)
-			if err == nil {
-				for _, conn := range conns {
-					if conn.ID == connID || strings.EqualFold(conn.Name, connID) {
-						return &conn, nil
-					}
+	if err != nil {
+		return nil, err
+	}
+	for _, comp := range companies {
+		conns, err := c.ListToolConnections(ctx, comp.ID)
+		if err == nil {
+			for _, conn := range conns {
+				if conn.ID == connID || strings.EqualFold(conn.Name, connID) {
+					return &conn, nil
 				}
 			}
 		}

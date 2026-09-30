@@ -59,14 +59,15 @@ func templateStrings(ctx context.Context, list types.List) ([]string, diag.Diagn
 
 // templateListState reads a live string list back into state; an empty live
 // list keeps a null configured list so an omitted attribute stays converged.
-func templateListState(ctx context.Context, prior types.List, remote []string) (types.List, diag.Diagnostics) {
+func templateListState(ctx context.Context, prior types.List, remote []string) types.List {
 	if len(remote) == 0 && prior.IsNull() {
-		return prior, nil
+		return prior
 	}
 	if remote == nil {
 		remote = []string{}
 	}
-	return types.ListValueFrom(ctx, types.StringType, remote)
+	list, _ := types.ListValueFrom(ctx, types.StringType, remote)
+	return list
 }
 
 func (r *PaperclipStdioTemplateResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -222,15 +223,8 @@ func (r *PaperclipStdioTemplateResource) Read(ctx context.Context, req resource.
 		state.Description = types.StringValue(tpl.Description)
 	}
 	state.Command = types.StringValue(tpl.Command)
-	args, diags := templateListState(ctx, state.Args, tpl.Args)
-	resp.Diagnostics.Append(diags...)
-	envKeys, diags := templateListState(ctx, state.EnvKeys, tpl.EnvKeys)
-	resp.Diagnostics.Append(diags...)
-	if resp.Diagnostics.HasError() {
-		return
-	}
-	state.Args = args
-	state.EnvKeys = envKeys
+	state.Args = templateListState(ctx, state.Args, tpl.Args)
+	state.EnvKeys = templateListState(ctx, state.EnvKeys, tpl.EnvKeys)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
