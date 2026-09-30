@@ -32,16 +32,16 @@ type PaperclipAgentResource struct {
 }
 
 type PaperclipAgentResourceModel struct {
-	ID             types.String `tfsdk:"id"`
-	CompanyID      types.String `tfsdk:"company_id"`
-	Name           types.String `tfsdk:"name"`
-	Role           types.String `tfsdk:"role"`
-	Title          types.String `tfsdk:"title"`
-	AdapterType    types.String `tfsdk:"adapter_type"`
-	Status         types.String `tfsdk:"status"`
-	RuntimeConfig  types.String `tfsdk:"runtime_config"`
-	AdapterConfig  types.String `tfsdk:"adapter_config"`
-	Metadata       types.String `tfsdk:"metadata"`
+	ID              types.String `tfsdk:"id"`
+	CompanyID       types.String `tfsdk:"company_id"`
+	Name            types.String `tfsdk:"name"`
+	Role            types.String `tfsdk:"role"`
+	Title           types.String `tfsdk:"title"`
+	AdapterType     types.String `tfsdk:"adapter_type"`
+	Status          types.String `tfsdk:"status"`
+	RuntimeConfig   types.String `tfsdk:"runtime_config"`
+	AdapterConfig   types.String `tfsdk:"adapter_config"`
+	Metadata        types.String `tfsdk:"metadata"`
 	Instructions    types.String `tfsdk:"instructions"`
 	CanAssignTasks  types.Bool   `tfsdk:"can_assign_tasks"`
 	CanCreateAgents types.Bool   `tfsdk:"can_create_agents"`

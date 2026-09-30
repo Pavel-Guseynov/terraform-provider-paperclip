@@ -857,8 +857,8 @@ func TestPaperclipAgentResourceLifecycle(t *testing.T) {
 				"title": "Senior Engineer", "adapterType": "antigravity_local", "status": "active",
 				"runtimeConfig": map[string]interface{}{"mode": "fast"},
 				"adapterConfig": map[string]interface{}{"timeout": 30},
-				"metadata": map[string]interface{}{"tag": "v1"},
-				"permissions": currentPerms,
+				"metadata":      map[string]interface{}{"tag": "v1"},
+				"permissions":   currentPerms,
 			})
 		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/agent-1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -866,8 +866,8 @@ func TestPaperclipAgentResourceLifecycle(t *testing.T) {
 				"title": "Senior Engineer", "adapterType": "antigravity_local", "status": "active",
 				"runtimeConfig": map[string]interface{}{"mode": "fast"},
 				"adapterConfig": map[string]interface{}{"timeout": 30},
-				"metadata": map[string]interface{}{"tag": "v1"},
-				"permissions": currentPerms,
+				"metadata":      map[string]interface{}{"tag": "v1"},
+				"permissions":   currentPerms,
 			})
 		case req.Method == http.MethodPatch && req.URL.Path == "/api/agents/agent-1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -875,8 +875,8 @@ func TestPaperclipAgentResourceLifecycle(t *testing.T) {
 				"title": "Staff Engineer", "adapterType": "antigravity_local", "status": "active",
 				"runtimeConfig": map[string]interface{}{"mode": "accurate"},
 				"adapterConfig": map[string]interface{}{"timeout": 60},
-				"metadata": map[string]interface{}{"tag": "v2"},
-				"permissions": currentPerms,
+				"metadata":      map[string]interface{}{"tag": "v2"},
+				"permissions":   currentPerms,
 			})
 		case req.Method == http.MethodDelete && req.URL.Path == "/api/agents/agent-1":
 			w.WriteHeader(http.StatusOK)
