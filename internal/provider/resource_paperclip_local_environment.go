@@ -2,9 +2,12 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -14,9 +17,10 @@ import (
 )
 
 var (
-	_ resource.Resource               = &PaperclipLocalEnvironmentResource{}
-	_ resource.ResourceWithConfigure  = &PaperclipLocalEnvironmentResource{}
-	_ resource.ResourceWithModifyPlan = &PaperclipLocalEnvironmentResource{}
+	_ resource.Resource                = &PaperclipLocalEnvironmentResource{}
+	_ resource.ResourceWithConfigure   = &PaperclipLocalEnvironmentResource{}
+	_ resource.ResourceWithImportState = &PaperclipLocalEnvironmentResource{}
+	_ resource.ResourceWithModifyPlan  = &PaperclipLocalEnvironmentResource{}
 )
 
 // This resource owns PATH inheritance on an existing producer-owned Local row,
@@ -130,8 +134,15 @@ func (r *PaperclipLocalEnvironmentResource) Read(ctx context.Context, req resour
 	}
 	env, err := r.client.GetLocalEnvironment(ctx, model.ID.ValueString())
 	if err != nil {
+		if errors.Is(err, client.ErrNotFound) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("Error reading Local environment PATH", err.Error())
 		return
+	}
+	if env.CompanyID != "" {
+		model.CompanyID = types.StringValue(env.CompanyID)
 	}
 	model.InheritServicePath = types.BoolValue(env.InheritsServicePath())
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
@@ -140,4 +151,23 @@ func (r *PaperclipLocalEnvironmentResource) Read(ctx context.Context, req resour
 func (r *PaperclipLocalEnvironmentResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
 	// Relinquish this binding only; the producer owns the environment lifecycle.
 	_ = req
+}
+
+func (r *PaperclipLocalEnvironmentResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	id := req.ID
+	if strings.Contains(id, "/") {
+		parts := strings.SplitN(id, "/", 2)
+		if parts[0] != "" && parts[1] != "" {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+			return
+		}
+	} else if id != "" {
+		resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+		return
+	}
+	resp.Diagnostics.AddError(
+		"Invalid Local Environment Import ID",
+		fmt.Sprintf("Expected <company_id>/<environment_id> or <environment_id>, got %q", id),
+	)
 }

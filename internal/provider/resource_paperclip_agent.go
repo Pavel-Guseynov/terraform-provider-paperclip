@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -105,24 +106,36 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 				Description: "Optional JSON runtime configuration string.",
 				Optional:    true,
 				Computed:    true,
+				Validators: []validator.String{
+					JSONAttributeValidator(),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
+					SemanticJSONPlanModifier(),
 				},
 			},
 			"adapter_config": schema.StringAttribute{
 				Description: "Optional JSON adapter configuration string (e.g. skill assignments).",
 				Optional:    true,
 				Computed:    true,
+				Validators: []validator.String{
+					JSONAttributeValidator(),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
+					SemanticJSONPlanModifier(),
 				},
 			},
 			"metadata": schema.StringAttribute{
 				Description: "Optional JSON metadata object for the agent.",
 				Optional:    true,
 				Computed:    true,
+				Validators: []validator.String{
+					JSONAttributeValidator(),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
+					SemanticJSONPlanModifier(),
 				},
 			},
 			"instructions": schema.StringAttribute{
@@ -209,13 +222,22 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 
 	var runtimeMap, adapterMap, metaMap map[string]interface{}
 	if !plan.RuntimeConfig.IsNull() && !plan.RuntimeConfig.IsUnknown() && plan.RuntimeConfig.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.RuntimeConfig.ValueString()), &runtimeMap)
+		if err := json.Unmarshal([]byte(plan.RuntimeConfig.ValueString()), &runtimeMap); err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("runtime_config"), "Invalid JSON", err.Error())
+			return
+		}
 	}
 	if !plan.AdapterConfig.IsNull() && !plan.AdapterConfig.IsUnknown() && plan.AdapterConfig.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.AdapterConfig.ValueString()), &adapterMap)
+		if err := json.Unmarshal([]byte(plan.AdapterConfig.ValueString()), &adapterMap); err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("adapter_config"), "Invalid JSON", err.Error())
+			return
+		}
 	}
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap)
+		if err := json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap); err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("metadata"), "Invalid JSON", err.Error())
+			return
+		}
 	}
 
 	role := "engineer"
@@ -264,29 +286,20 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 	} else if plan.Role.IsUnknown() {
 		plan.Role = types.StringNull()
 	}
-	if created.Title != "" {
-		plan.Title = types.StringValue(created.Title)
-	} else if plan.Title.IsUnknown() {
-		plan.Title = types.StringNull()
-	}
+	plan.Title = stringOrNull(created.Title)
 	if created.AdapterType != "" {
 		plan.AdapterType = types.StringValue(created.AdapterType)
 	} else if plan.AdapterType.IsUnknown() {
 		plan.AdapterType = types.StringNull()
 	}
 	plan.Status = stringOrNull(created.Status)
-	if plan.RuntimeConfig.IsUnknown() {
-		plan.RuntimeConfig = jsonStringOrNull(created.RuntimeConfig)
-	}
-	if plan.AdapterConfig.IsUnknown() {
-		plan.AdapterConfig = refreshAgentAdapterConfig(types.StringNull(), created.AdapterConfig)
-	}
-	if plan.Metadata.IsUnknown() {
-		plan.Metadata = jsonStringOrNull(created.Metadata)
-	}
+	plan.RuntimeConfig = refreshManagedJSONState(plan.RuntimeConfig, created.RuntimeConfig)
+	plan.AdapterConfig = refreshAgentAdapterConfig(plan.AdapterConfig, created.AdapterConfig)
+	plan.Metadata = refreshManagedJSONState(plan.Metadata, created.Metadata)
 	if plan.Instructions.IsUnknown() {
 		plan.Instructions = types.StringNull()
 	}
+	plan.CanAssignTasks, plan.CanCreateAgents = permissionState(created.Permissions)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -465,6 +478,9 @@ func refreshAgentAdapterConfig(current types.String, remote map[string]interface
 
 func refreshManagedJSONState(current types.String, remote map[string]interface{}) types.String {
 	if current.IsNull() || current.IsUnknown() {
+		if len(remote) == 0 && current.IsNull() {
+			return types.StringNull()
+		}
 		return jsonStringOrNull(remote)
 	}
 	var managed map[string]interface{}
@@ -504,11 +520,17 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 
 	var runtimeMap, adapterMap, metaMap map[string]interface{}
 	if !plan.RuntimeConfig.IsNull() && !plan.RuntimeConfig.IsUnknown() && plan.RuntimeConfig.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.RuntimeConfig.ValueString()), &runtimeMap)
+		if err := json.Unmarshal([]byte(plan.RuntimeConfig.ValueString()), &runtimeMap); err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("runtime_config"), "Invalid JSON", err.Error())
+			return
+		}
 	}
 	var replaceAdapterConfig bool
 	if !plan.AdapterConfig.IsNull() && !plan.AdapterConfig.IsUnknown() && plan.AdapterConfig.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.AdapterConfig.ValueString()), &adapterMap)
+		if err := json.Unmarshal([]byte(plan.AdapterConfig.ValueString()), &adapterMap); err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("adapter_config"), "Invalid JSON", err.Error())
+			return
+		}
 		if adapterMap != nil {
 			current, err := r.client.GetAgent(ctx, state.ID.ValueString())
 			if err != nil {
@@ -518,18 +540,30 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 			preservePaperclipManagedAdapterConfig(current.AdapterConfig, adapterMap)
 			replaceAdapterConfig = true
 		}
+	} else if plan.AdapterConfig.IsNull() && !state.AdapterConfig.IsNull() {
+		adapterMap = make(map[string]interface{})
+		current, err := r.client.GetAgent(ctx, state.ID.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Error reading Paperclip agent before update", err.Error())
+			return
+		}
+		preservePaperclipManagedAdapterConfig(current.AdapterConfig, adapterMap)
+		replaceAdapterConfig = true
 	}
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap)
+		if err := json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap); err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("metadata"), "Invalid JSON", err.Error())
+			return
+		}
 	}
 
-	role := state.Role.ValueString()
-	if !plan.Role.IsNull() && !plan.Role.IsUnknown() && plan.Role.ValueString() != "" {
-		role = plan.Role.ValueString()
+	role := plan.Role.ValueString()
+	if plan.Role.IsUnknown() {
+		role = state.Role.ValueString()
 	}
-	adapterType := state.AdapterType.ValueString()
-	if !plan.AdapterType.IsNull() && !plan.AdapterType.IsUnknown() && plan.AdapterType.ValueString() != "" {
-		adapterType = plan.AdapterType.ValueString()
+	adapterType := plan.AdapterType.ValueString()
+	if plan.AdapterType.IsUnknown() {
+		adapterType = state.AdapterType.ValueString()
 	}
 
 	agent := client.PaperclipAgent{
@@ -564,14 +598,21 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 
 	plan.ID = types.StringValue(updated.ID)
 	plan.Name = types.StringValue(updated.Name)
-	plan.Role = types.StringValue(updated.Role)
-	if updated.Title != "" {
-		plan.Title = types.StringValue(updated.Title)
-	} else {
-		plan.Title = types.StringNull()
+	if plan.Role.IsUnknown() {
+		plan.Role = stringOrNull(updated.Role)
 	}
-	plan.AdapterType = types.StringValue(updated.AdapterType)
+	plan.Title = stringOrNull(updated.Title)
+	if plan.AdapterType.IsUnknown() {
+		plan.AdapterType = stringOrNull(updated.AdapterType)
+	}
 	plan.Status = stringOrNull(updated.Status)
+	plan.RuntimeConfig = refreshManagedJSONState(plan.RuntimeConfig, updated.RuntimeConfig)
+	plan.AdapterConfig = refreshAgentAdapterConfig(plan.AdapterConfig, updated.AdapterConfig)
+	plan.Metadata = refreshManagedJSONState(plan.Metadata, updated.Metadata)
+	plan.CanAssignTasks, plan.CanCreateAgents = permissionState(updated.Permissions)
+	if plan.Instructions.IsUnknown() {
+		plan.Instructions = types.StringNull()
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -595,9 +636,17 @@ func (r *PaperclipAgentResource) ImportState(ctx context.Context, req resource.I
 	id := req.ID
 	if strings.Contains(id, "/") {
 		parts := strings.SplitN(id, "/", 2)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+		if parts[0] != "" && parts[1] != "" {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+			return
+		}
+	} else if id != "" {
+		resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 		return
 	}
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	resp.Diagnostics.AddError(
+		"Invalid Agent Import ID",
+		fmt.Sprintf("Expected <company_id>/<agent_id> or <agent_id>, got %q", id),
+	)
 }

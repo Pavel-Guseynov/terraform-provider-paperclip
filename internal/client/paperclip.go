@@ -21,7 +21,7 @@ import (
 type PaperclipToolSelection struct {
 	EnabledTools      []string          `json:"enabled_tools"`
 	ApprovalMode      string            `json:"approval_mode"`
-	ToolApprovalModes map[string]string `json:"tool_approval_modes"`
+	ToolApprovalModes map[string]string `json:"tool_approval_modes,omitempty"`
 }
 
 func SelectAppPermissions(catalog []map[string]interface{}, policyJSON string, agents []string) (PaperclipAppFinish, error) {
@@ -437,10 +437,10 @@ func (conn PaperclipToolConnection) AwaitingAuthorization() bool {
 
 type paperclipToolConnectionUpdate struct {
 	Name                 string                   `json:"name"`
-	Transport            string                   `json:"transport,omitempty"`
-	AuthKind             string                   `json:"authKind,omitempty"`
-	Config               map[string]interface{}   `json:"config,omitempty"`
-	CredentialRefs       []map[string]interface{} `json:"credentialRefs,omitempty"`
+	Transport            string                   `json:"transport"`
+	AuthKind             string                   `json:"authKind"`
+	Config               map[string]interface{}   `json:"config"`
+	CredentialRefs       []map[string]interface{} `json:"credentialRefs"`
 	CredentialSecretRefs []map[string]interface{} `json:"credentialSecretRefs"`
 }
 
@@ -967,10 +967,8 @@ func (c *Client) FindCompanyByName(ctx context.Context, name string) (*Paperclip
 func (c *Client) UpdateCompany(ctx context.Context, id, name, description string, requireTaskStartConfirmation bool) (*PaperclipCompany, error) {
 	payload := map[string]interface{}{
 		"name":                         name,
+		"description":                  description,
 		"requireTaskStartConfirmation": requireTaskStartConfirmation,
-	}
-	if description != "" {
-		payload["description"] = description
 	}
 	var resp PaperclipCompany
 	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/companies/%s", url.PathEscape(id)), payload, &resp); err != nil {
@@ -1031,12 +1029,10 @@ func (c *Client) GetProject(ctx context.Context, projectID string) (*PaperclipPr
 }
 
 func (c *Client) UpdateProject(ctx context.Context, projectID, name, description string, executionWorkspacePolicy map[string]interface{}) (*PaperclipProject, error) {
-	payload := map[string]interface{}{"name": name}
-	if description != "" {
-		payload["description"] = description
-	}
-	if executionWorkspacePolicy != nil {
-		payload["executionWorkspacePolicy"] = executionWorkspacePolicy
+	payload := map[string]interface{}{
+		"name":                     name,
+		"description":              description,
+		"executionWorkspacePolicy": executionWorkspacePolicy,
 	}
 	var resp PaperclipProject
 	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/projects/%s", url.PathEscape(projectID)), payload, &resp); err != nil {
@@ -1208,14 +1204,21 @@ func (c *Client) GetSkill(ctx context.Context, companyID, skillID string) (*Pape
 func (c *Client) UpdateSkill(ctx context.Context, companyID, skillID string, skill PaperclipSkill) (*PaperclipSkill, error) {
 	skillPath := fmt.Sprintf("/api/companies/%s/skills/%s", url.PathEscape(companyID), url.PathEscape(skillID))
 	metadata := map[string]interface{}{"description": skill.Description}
+	if skill.Name != "" {
+		metadata["name"] = skill.Name
+	}
+	if skill.Slug != "" {
+		metadata["slug"] = skill.Slug
+	}
+	if skill.Metadata != nil {
+		metadata["metadata"] = skill.Metadata
+	}
 	if err := c.paperclipRequest(ctx, http.MethodPatch, skillPath, metadata, nil); err != nil {
 		return nil, err
 	}
-	if skill.Content != "" {
-		file := map[string]interface{}{"path": "SKILL.md", "content": skill.Content}
-		if err := c.paperclipRequest(ctx, http.MethodPatch, skillPath+"/files", file, nil); err != nil {
-			return nil, err
-		}
+	file := map[string]interface{}{"path": "SKILL.md", "content": skill.Content}
+	if err := c.paperclipRequest(ctx, http.MethodPatch, skillPath+"/files", file, nil); err != nil {
+		return nil, err
 	}
 	return c.GetSkill(ctx, companyID, skillID)
 }
@@ -1351,8 +1354,32 @@ func (c *Client) GetAgent(ctx context.Context, agentID string) (*PaperclipAgent,
 }
 
 func (c *Client) UpdateAgent(ctx context.Context, agentID string, agent PaperclipAgent) (*PaperclipAgent, error) {
+	payload := map[string]interface{}{
+		"name":        agent.Name,
+		"role":        agent.Role,
+		"title":       agent.Title,
+		"adapterType": agent.AdapterType,
+	}
+	if agent.RuntimeConfig != nil {
+		payload["runtimeConfig"] = agent.RuntimeConfig
+	} else {
+		payload["runtimeConfig"] = map[string]interface{}{}
+	}
+	if agent.AdapterConfig != nil {
+		payload["adapterConfig"] = agent.AdapterConfig
+	} else if agent.ReplaceAdapterConfig {
+		payload["adapterConfig"] = map[string]interface{}{}
+	}
+	if agent.ReplaceAdapterConfig {
+		payload["replaceAdapterConfig"] = true
+	}
+	if agent.Metadata != nil {
+		payload["metadata"] = agent.Metadata
+	} else {
+		payload["metadata"] = map[string]interface{}{}
+	}
 	var resp PaperclipAgent
-	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/agents/%s", url.PathEscape(agentID)), agent, &resp); err != nil {
+	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/agents/%s", url.PathEscape(agentID)), payload, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -1484,7 +1511,17 @@ func (c *Client) UpdateToolApp(ctx context.Context, appID string, app PaperclipT
 		return nil, err
 	}
 	var resp PaperclipToolApp
-	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/tool-applications/%s", url.PathEscape(appID)), app, &resp); err != nil {
+	payload := map[string]interface{}{
+		"name":           app.Name,
+		"type":           app.Type,
+		"description":    app.Description,
+		"applicationKey": app.ApplicationKey,
+		"metadata":       app.Metadata,
+	}
+	if app.Metadata == nil {
+		payload["metadata"] = map[string]interface{}{}
+	}
+	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/tool-applications/%s", url.PathEscape(appID)), payload, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Type == "" {
@@ -1574,12 +1611,20 @@ func (c *Client) GetToolConnection(ctx context.Context, connID string) (*Papercl
 
 func (c *Client) UpdateToolConnection(ctx context.Context, connID string, conn PaperclipToolConnection) (*PaperclipToolConnection, error) {
 	var resp PaperclipToolConnection
+	config := conn.Config
+	if config == nil {
+		config = map[string]interface{}{}
+	}
+	credRefs := conn.CredentialRefs
+	if credRefs == nil {
+		credRefs = []map[string]interface{}{}
+	}
 	payload := paperclipToolConnectionUpdate{
 		Name:                 conn.Name,
 		Transport:            conn.Transport,
 		AuthKind:             conn.AuthKind,
-		Config:               conn.Config,
-		CredentialRefs:       conn.CredentialRefs,
+		Config:               config,
+		CredentialRefs:       credRefs,
 		CredentialSecretRefs: []map[string]interface{}{},
 	}
 	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/tool-connections/%s", url.PathEscape(connID)), payload, &resp); err != nil {
@@ -1765,7 +1810,19 @@ func (c *Client) UpdateToolPolicy(ctx context.Context, companyID, polID string, 
 	if companyID == "" {
 		reqPath = fmt.Sprintf("/api/tool-policies/%s", url.PathEscape(polID))
 	}
-	if err := c.paperclipRequest(ctx, http.MethodPatch, reqPath, pol, &resp); err != nil {
+	payload := map[string]interface{}{
+		"name":       pol.Name,
+		"policyType": pol.PolicyType,
+		"rules":      pol.Rules,
+		"metadata":   pol.Metadata,
+	}
+	if pol.Rules == nil {
+		payload["rules"] = map[string]interface{}{}
+	}
+	if pol.Metadata == nil {
+		payload["metadata"] = map[string]interface{}{}
+	}
+	if err := c.paperclipRequest(ctx, http.MethodPatch, reqPath, payload, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil

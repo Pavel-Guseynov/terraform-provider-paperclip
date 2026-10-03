@@ -696,7 +696,7 @@ func TestPaperclipClientCRUD(t *testing.T) {
 		case r.URL.Path == "/api/companies/comp-123/skills/skill-123/files" && r.Method == http.MethodPatch:
 			var req map[string]interface{}
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			if req["path"] != "SKILL.md" || req["content"] == "" {
+			if req["path"] != "SKILL.md" || req["content"] == nil {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
@@ -1059,6 +1059,11 @@ func TestPaperclipClientCRUD(t *testing.T) {
 	if _, err = cli.UpdateSkill(ctx, "comp-123", "skill-123", metadataOnly); err != nil {
 		t.Fatalf("UpdateSkill without content failed: %v", err)
 	}
+	metadataWithVal := *skill
+	metadataWithVal.Metadata = map[string]interface{}{"author": "antigravity"}
+	if _, err = cli.UpdateSkill(ctx, "comp-123", "skill-123", metadataWithVal); err != nil {
+		t.Fatalf("UpdateSkill with metadata failed: %v", err)
+	}
 	skills, err := cli.ListSkills(ctx, "comp-123")
 	if err != nil || len(skills) != 1 {
 		t.Fatalf("ListSkills failed: %v", err)
@@ -1110,6 +1115,19 @@ func TestPaperclipClientCRUD(t *testing.T) {
 	agent, err = cli.UpdateAgent(ctx, "agent-123", *agent)
 	if err != nil {
 		t.Fatalf("UpdateAgent failed: %v", err)
+	}
+	agentWithConfigs := *agent
+	agentWithConfigs.RuntimeConfig = map[string]interface{}{"env": "prod"}
+	agentWithConfigs.AdapterConfig = map[string]interface{}{"model": "gpt-4"}
+	agentWithConfigs.Metadata = map[string]interface{}{"team": "core"}
+	if _, err = cli.UpdateAgent(ctx, "agent-123", agentWithConfigs); err != nil {
+		t.Fatalf("UpdateAgent with configs failed: %v", err)
+	}
+	agentWithReset := *agent
+	agentWithReset.AdapterConfig = nil
+	agentWithReset.ReplaceAdapterConfig = true
+	if _, err = cli.UpdateAgent(ctx, "agent-123", agentWithReset); err != nil {
+		t.Fatalf("UpdateAgent with reset failed: %v", err)
 	}
 	agents, err := cli.ListAgents(ctx, "comp-123")
 	if err != nil || len(agents) != 1 {

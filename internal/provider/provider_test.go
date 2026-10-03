@@ -1484,24 +1484,20 @@ func TestResultValueNormalization(t *testing.T) {
 	}
 }
 
-func TestSkillContentStatePreservesManagedContentWhenPaperclipOmitsIt(t *testing.T) {
-	configured := types.StringValue("# Managed skill")
-	if got := skillContentState(configured, ""); got != configured {
-		t.Fatalf("omissive response must preserve configured content: %#v", got)
+func TestSkillExactContentAndDescriptionRefresh(t *testing.T) {
+	if got := stringOrNull(""); !got.IsNull() {
+		t.Fatalf("empty string must normalize to null, got: %#v", got)
 	}
-	if got := skillContentState(configured, "# Board content"); got.ValueString() != "# Board content" {
-		t.Fatalf("returned content must refresh state: %#v", got)
+	if got := stringOrNull("desc"); got.ValueString() != "desc" {
+		t.Fatalf("non-empty string must normalize to value, got: %#v", got)
 	}
-	for name, value := range map[string]types.String{
-		"null":    types.StringNull(),
-		"unknown": types.StringUnknown(),
-	} {
-		t.Run(name, func(t *testing.T) {
-			got := skillContentState(value, "")
-			if got.IsNull() || got.IsUnknown() || got.ValueString() != "" {
-				t.Fatalf("absent prior content must normalize to a known value: %#v", got)
-			}
-		})
+	skill := client.PaperclipSkill{
+		Name:        "skill-1",
+		Content:     "# Exact content",
+		Description: "remote desc",
+	}
+	if skill.Content != "# Exact content" {
+		t.Fatalf("unexpected content: %s", skill.Content)
 	}
 }
 
@@ -1720,25 +1716,44 @@ func TestPaperclipSecretRotationValidationFailsClosed(t *testing.T) {
 	}
 }
 
-func TestPaperclipResourceStatePreservesConfiguredFieldsWhenResponseOmitsThem(t *testing.T) {
+func TestPaperclipResourceStateRefreshesExactRemoteState(t *testing.T) {
 	appState := PaperclipAppResourceModel{
 		ApplicationKey: types.StringValue("committer"),
 		Description:    types.StringValue("generated application"),
 		Metadata:       types.StringValue(`{"managed":true}`),
 	}
 	normalizePaperclipAppState(&appState, &client.PaperclipToolApp{ID: "app-1", Name: "committer"})
-	if appState.ApplicationKey.ValueString() != "committer" || appState.Description.ValueString() != "generated application" || appState.Metadata.ValueString() != `{"managed":true}` {
-		t.Fatalf("omissive application response must preserve configured state: %+v", appState)
+	if !appState.ApplicationKey.IsNull() || !appState.Description.IsNull() || !appState.Metadata.IsNull() {
+		t.Fatalf("omissive application response must refresh cleared fields to null: %+v", appState)
+	}
+
+	appStateWithRemote := PaperclipAppResourceModel{}
+	normalizePaperclipAppState(&appStateWithRemote, &client.PaperclipToolApp{
+		ID:             "app-1",
+		Name:           "committer",
+		ApplicationKey: "app-key",
+		Description:    "app-desc",
+		Metadata:       map[string]interface{}{"managed": true},
+	})
+	if appStateWithRemote.ApplicationKey.ValueString() != "app-key" || appStateWithRemote.Description.ValueString() != "app-desc" || appStateWithRemote.Metadata.IsNull() {
+		t.Fatalf("remote values must refresh into state: %+v", appStateWithRemote)
 	}
 
 	secretState := PaperclipSecretResourceModel{Description: types.StringValue("operator token")}
 	normalizePaperclipSecretState(&secretState, &client.PaperclipSecret{ID: "secret-1", Name: "committer-token"})
-	if secretState.Description.ValueString() != "operator token" {
-		t.Fatalf("omissive secret response must preserve configured description: %+v", secretState)
+	if !secretState.Description.IsNull() {
+		t.Fatalf("omissive secret response must refresh cleared description to null: %+v", secretState)
+	}
+
+	secretStateWithDesc := PaperclipSecretResourceModel{}
+	normalizePaperclipSecretState(&secretStateWithDesc, &client.PaperclipSecret{ID: "secret-1", Name: "committer-token", Description: "operator token"})
+	if secretStateWithDesc.Description.ValueString() != "operator token" {
+		t.Fatalf("remote description must refresh into state: %+v", secretStateWithDesc)
 	}
 }
 
-func TestApplicationCRUDPreservesConfiguredKeyWhenResponsesOmitIt(t *testing.T) {
+func TestApplicationCRUDRefreshesRemoteKey(t *testing.T) {
+	returnAppKey := true
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if req.Method == http.MethodPost || req.Method == http.MethodPatch {
@@ -1750,7 +1765,15 @@ func TestApplicationCRUDPreservesConfiguredKeyWhenResponsesOmitIt(t *testing.T) 
 				t.Fatalf("configured application key was not sent to Paperclip: %#v", body)
 			}
 		}
-		_, _ = w.Write([]byte(`{"id":"app-123","companyId":"comp-123","name":"gitea-committer"}`))
+		resp := map[string]interface{}{
+			"id":        "app-123",
+			"companyId": "comp-123",
+			"name":      "gitea-committer",
+		}
+		if returnAppKey {
+			resp["applicationKey"] = "harness.mcp.gitea-committer"
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 	cli, err := client.NewClient(server.URL, "test-token")
@@ -1784,24 +1807,23 @@ func TestApplicationCRUDPreservesConfiguredKeyWhenResponsesOmitIt(t *testing.T) 
 			}
 		})
 	}
+
+	returnAppKey = false
+	got, err := r.readAppState(context.Background(), model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ApplicationKey.IsNull() {
+		t.Fatalf("expected omitted application key to refresh to null, got: %#v", got.ApplicationKey)
+	}
 }
 
 func TestApplicationKeyState(t *testing.T) {
-	configured := types.StringValue("harness.mcp.gitea-committer")
-	if got := applicationStringState(configured, "paperclip.canonical-key"); got.ValueString() != "paperclip.canonical-key" {
-		t.Fatalf("returned application key must replace prior state, got %#v", got)
+	if got := stringOrNull("paperclip.canonical-key"); got.ValueString() != "paperclip.canonical-key" {
+		t.Fatalf("returned application key must normalize to value, got %#v", got)
 	}
-	for name, prior := range map[string]types.String{
-		"unset":   types.StringNull(),
-		"unknown": types.StringUnknown(),
-		"empty":   types.StringValue(""),
-	} {
-		t.Run(name+" optional application key remains known null", func(t *testing.T) {
-			got := applicationStringState(prior, "")
-			if !got.IsNull() || got.IsUnknown() {
-				t.Fatalf("omitted optional application key must normalize to known null: %#v", got)
-			}
-		})
+	if got := stringOrNull(""); !got.IsNull() {
+		t.Fatalf("omitted optional application key must normalize to known null: %#v", got)
 	}
 }
 

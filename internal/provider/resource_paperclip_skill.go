@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -38,16 +39,6 @@ type PaperclipSkillResourceModel struct {
 	Content       types.String `tfsdk:"content"`
 	SchemaVersion types.Int64  `tfsdk:"schema_version"`
 	Metadata      types.String `tfsdk:"metadata"`
-}
-
-func skillContentState(current types.String, remote string) types.String {
-	if remote != "" {
-		return types.StringValue(remote)
-	}
-	if !current.IsNull() && !current.IsUnknown() {
-		return current
-	}
-	return types.StringValue("")
 }
 
 func (r *PaperclipSkillResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -100,6 +91,9 @@ func (r *PaperclipSkillResource) Schema(ctx context.Context, req resource.Schema
 			"metadata": schema.StringAttribute{
 				Description: "Paperclip-owned skill metadata as a computed JSON object.",
 				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					SemanticJSONPlanModifier(),
+				},
 			},
 		},
 	}
@@ -151,18 +145,14 @@ func (r *PaperclipSkillResource) Create(ctx context.Context, req resource.Create
 	plan.CompanyID = types.StringValue(created.CompanyID)
 	plan.Name = types.StringValue(created.Name)
 	plan.Slug = types.StringValue(created.Slug)
-	if created.Description != "" {
-		plan.Description = types.StringValue(created.Description)
-	} else {
-		plan.Description = types.StringNull()
-	}
-	plan.Content = skillContentState(plan.Content, created.Content)
+	plan.Description = stringOrNull(created.Description)
+	plan.Content = types.StringValue(created.Content)
 	if created.SchemaVersion > 0 {
 		plan.SchemaVersion = types.Int64Value(created.SchemaVersion)
 	} else {
 		plan.SchemaVersion = types.Int64Value(1)
 	}
-	plan.Metadata = jsonStringOrNull(created.Metadata)
+	plan.Metadata = refreshSemanticJSON(plan.Metadata, created.Metadata)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -190,18 +180,14 @@ func (r *PaperclipSkillResource) Read(ctx context.Context, req resource.ReadRequ
 	}
 	state.Name = types.StringValue(skill.Name)
 	state.Slug = types.StringValue(skill.Slug)
-	if skill.Description != "" {
-		state.Description = types.StringValue(skill.Description)
-	} else {
-		state.Description = types.StringNull()
-	}
-	state.Content = skillContentState(state.Content, skill.Content)
+	state.Description = stringOrNull(skill.Description)
+	state.Content = types.StringValue(skill.Content)
 	if skill.SchemaVersion > 0 {
 		state.SchemaVersion = types.Int64Value(skill.SchemaVersion)
 	} else {
 		state.SchemaVersion = types.Int64Value(1)
 	}
-	state.Metadata = jsonStringOrNull(skill.Metadata)
+	state.Metadata = refreshSemanticJSON(state.Metadata, skill.Metadata)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -221,6 +207,11 @@ func (r *PaperclipSkillResource) Update(ctx context.Context, req resource.Update
 		schemaVer = plan.SchemaVersion.ValueInt64()
 	}
 
+	var metaMap map[string]interface{}
+	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
+		_ = json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap)
+	}
+
 	skill := client.PaperclipSkill{
 		CompanyID:     state.CompanyID.ValueString(),
 		Name:          plan.Name.ValueString(),
@@ -228,6 +219,7 @@ func (r *PaperclipSkillResource) Update(ctx context.Context, req resource.Update
 		Description:   plan.Description.ValueString(),
 		Content:       plan.Content.ValueString(),
 		SchemaVersion: schemaVer,
+		Metadata:      metaMap,
 	}
 
 	updated, err := r.client.UpdateSkill(ctx, state.CompanyID.ValueString(), state.ID.ValueString(), skill)
@@ -239,18 +231,14 @@ func (r *PaperclipSkillResource) Update(ctx context.Context, req resource.Update
 	plan.ID = types.StringValue(updated.ID)
 	plan.Name = types.StringValue(updated.Name)
 	plan.Slug = types.StringValue(updated.Slug)
-	if updated.Description != "" {
-		plan.Description = types.StringValue(updated.Description)
-	} else {
-		plan.Description = types.StringNull()
-	}
-	plan.Content = skillContentState(plan.Content, updated.Content)
+	plan.Description = stringOrNull(updated.Description)
+	plan.Content = types.StringValue(updated.Content)
 	if updated.SchemaVersion > 0 {
 		plan.SchemaVersion = types.Int64Value(updated.SchemaVersion)
 	} else {
 		plan.SchemaVersion = types.Int64Value(1)
 	}
-	plan.Metadata = jsonStringOrNull(updated.Metadata)
+	plan.Metadata = refreshSemanticJSON(plan.Metadata, updated.Metadata)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -274,9 +262,14 @@ func (r *PaperclipSkillResource) ImportState(ctx context.Context, req resource.I
 	id := req.ID
 	if strings.Contains(id, "/") {
 		parts := strings.SplitN(id, "/", 2)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
-		return
+		if parts[0] != "" && parts[1] != "" {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+			return
+		}
 	}
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	resp.Diagnostics.AddError(
+		"Invalid Skill Import ID",
+		fmt.Sprintf("Expected <company_id>/<skill_id>, got %q", id),
+	)
 }

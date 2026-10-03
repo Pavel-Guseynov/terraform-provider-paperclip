@@ -35,6 +35,7 @@ func configureTestDataSource(t *testing.T, endpoint string, d datasource.DataSou
 func TestPaperclipCompanyResourceLifecycle(t *testing.T) {
 	ctx := context.Background()
 	fail := false
+	var archiveCalled bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if fail {
 			http.Error(w, "server error", http.StatusInternalServerError)
@@ -54,7 +55,8 @@ func TestPaperclipCompanyResourceLifecycle(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": "comp-1", "name": "Acme Updated", "description": "New Desc", "requireTaskStartConfirmation": true,
 			})
-		case req.Method == http.MethodDelete && req.URL.Path == "/api/companies/comp-1":
+		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-1/archive":
+			archiveCalled = true
 			w.WriteHeader(http.StatusOK)
 		default:
 			http.NotFound(w, req)
@@ -119,6 +121,9 @@ func TestPaperclipCompanyResourceLifecycle(t *testing.T) {
 
 	// Delete
 	r.Delete(ctx, resource.DeleteRequest{State: updated.State}, &resource.DeleteResponse{})
+	if !archiveCalled {
+		t.Fatal("expected company delete to call POST /archive, not DELETE")
+	}
 
 	// ImportState
 	importResp := resource.ImportStateResponse{State: tfsdk.State{Schema: schema}}
@@ -134,7 +139,7 @@ func TestPaperclipCompanyResourceLifecycle(t *testing.T) {
 	_ = read404.State.Set(ctx, &model404)
 	r.Read(ctx, resource.ReadRequest{State: read404.State}, &read404)
 	if !read404.State.Raw.IsNull() {
-		// verified removed
+		t.Fatal("expected state to be removed on 404")
 	}
 
 	// Server failure error paths
@@ -251,6 +256,9 @@ func TestPaperclipProjectResourceLifecycle(t *testing.T) {
 	m404 := PaperclipProjectResourceModel{ID: types.StringValue("proj-missing")}
 	_ = read404.State.Set(ctx, &m404)
 	r.Read(ctx, resource.ReadRequest{State: read404.State}, &read404)
+	if !read404.State.Raw.IsNull() {
+		t.Fatal("expected state to be removed on 404")
+	}
 
 	// Server failure error paths
 	fail = true
@@ -350,6 +358,9 @@ func TestPaperclipSkillResourceLifecycle(t *testing.T) {
 	m404 := PaperclipSkillResourceModel{ID: types.StringValue("skill-missing"), CompanyID: types.StringValue("comp-1")}
 	_ = read404.State.Set(ctx, &m404)
 	r.Read(ctx, resource.ReadRequest{State: read404.State}, &read404)
+	if !read404.State.Raw.IsNull() {
+		t.Fatal("expected state to be removed on 404")
+	}
 
 	// Server failure error paths
 	fail = true
@@ -459,6 +470,9 @@ func TestPaperclipSecretResourceLifecycle(t *testing.T) {
 	m404 := PaperclipSecretResourceModel{ID: types.StringValue("sec-missing"), CompanyID: types.StringValue("comp-1")}
 	_ = read404.State.Set(ctx, &m404)
 	r.Read(ctx, resource.ReadRequest{State: read404.State}, &read404)
+	if !read404.State.Raw.IsNull() {
+		t.Fatal("expected state to be removed on 404")
+	}
 
 	// Server failure error paths
 	fail = true
@@ -559,6 +573,9 @@ func TestPaperclipPolicyResourceLifecycle(t *testing.T) {
 	m404 := PaperclipPolicyResourceModel{ID: types.StringValue("pol-missing"), CompanyID: types.StringValue("comp-1")}
 	_ = read404.State.Set(ctx, &m404)
 	r.Read(ctx, resource.ReadRequest{State: read404.State}, &read404)
+	if !read404.State.Raw.IsNull() {
+		t.Fatal("expected state to be removed on 404")
+	}
 
 	// Server failure error paths
 	fail = true
@@ -963,6 +980,9 @@ func TestPaperclipAgentResourceLifecycle(t *testing.T) {
 	m404 := PaperclipAgentResourceModel{ID: types.StringValue("agent-missing"), CompanyID: types.StringValue("comp-1")}
 	_ = read404.State.Set(ctx, &m404)
 	r.Read(ctx, resource.ReadRequest{State: read404.State}, &read404)
+	if !read404.State.Raw.IsNull() {
+		t.Fatal("expected state to be removed on 404")
+	}
 
 	// Server failure error paths
 	fail = true
@@ -1072,6 +1092,9 @@ func TestPaperclipAppResourceLifecycle(t *testing.T) {
 	m404 := PaperclipAppResourceModel{ID: types.StringValue("app-missing"), CompanyID: types.StringValue("comp-1")}
 	_ = read404.State.Set(ctx, &m404)
 	r.Read(ctx, resource.ReadRequest{State: read404.State}, &read404)
+	if !read404.State.Raw.IsNull() {
+		t.Fatal("expected state to be removed on 404")
+	}
 
 	// Server failure error paths
 	fail = true

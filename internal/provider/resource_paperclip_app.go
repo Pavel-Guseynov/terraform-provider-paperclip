@@ -62,38 +62,15 @@ type PaperclipAppResourceModel struct {
 	Metadata       types.String `tfsdk:"metadata"`
 }
 
-func applicationStringState(prior types.String, remote string) types.String {
-	if remote != "" {
-		return types.StringValue(remote)
-	}
-	if !prior.IsNull() && !prior.IsUnknown() && prior.ValueString() != "" {
-		return prior
-	}
-	return types.StringNull()
-}
-
-func applicationMetadataState(prior types.String, remote map[string]interface{}) types.String {
-	if remote != nil {
-		data, err := json.Marshal(remote)
-		if err == nil {
-			return types.StringValue(string(data))
-		}
-	}
-	if !prior.IsNull() && !prior.IsUnknown() && prior.ValueString() != "" {
-		return prior
-	}
-	return types.StringNull()
-}
-
 func normalizePaperclipAppState(state *PaperclipAppResourceModel, app *client.PaperclipToolApp) {
 	state.ID = types.StringValue(app.ID)
 	if app.CompanyID != "" {
 		state.CompanyID = types.StringValue(app.CompanyID)
 	}
 	state.Name = types.StringValue(app.Name)
-	state.ApplicationKey = applicationStringState(state.ApplicationKey, app.ApplicationKey)
-	state.Description = applicationStringState(state.Description, app.Description)
-	state.Metadata = applicationMetadataState(state.Metadata, app.Metadata)
+	state.ApplicationKey = stringOrNull(app.ApplicationKey)
+	state.Description = stringOrNull(app.Description)
+	state.Metadata = refreshSemanticJSON(state.Metadata, app.Metadata)
 }
 
 func (r *PaperclipAppResource) createAppState(ctx context.Context, plan PaperclipAppResourceModel) (PaperclipAppResourceModel, error) {
@@ -106,7 +83,9 @@ func (r *PaperclipAppResource) createAppState(ctx context.Context, plan Papercli
 	}
 	var metaMap map[string]interface{}
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap)
+		if err := json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap); err != nil {
+			return plan, fmt.Errorf("invalid metadata JSON: %w", err)
+		}
 	}
 	created, err := r.client.CreateToolApp(ctx, plan.CompanyID.ValueString(), client.PaperclipToolApp{
 		CompanyID: plan.CompanyID.ValueString(), Name: plan.Name.ValueString(), Type: appType, ApplicationKey: plan.ApplicationKey.ValueString(),
@@ -148,7 +127,9 @@ func (r *PaperclipAppResource) updateAppState(ctx context.Context, plan, state P
 	}
 	var metaMap map[string]interface{}
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap)
+		if err := json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap); err != nil {
+			return plan, fmt.Errorf("invalid metadata JSON: %w", err)
+		}
 	}
 	updated, err := r.client.UpdateToolApp(ctx, state.ID.ValueString(), client.PaperclipToolApp{
 		CompanyID: state.CompanyID.ValueString(), Name: plan.Name.ValueString(), Type: appType, ApplicationKey: plan.ApplicationKey.ValueString(),
@@ -217,8 +198,12 @@ func (r *PaperclipAppResource) Schema(ctx context.Context, req resource.SchemaRe
 				Description: "Optional JSON metadata object for the application.",
 				Optional:    true,
 				Computed:    true,
+				Validators: []validator.String{
+					JSONAttributeValidator(),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
+					SemanticJSONPlanModifier(),
 				},
 			},
 		},
@@ -314,9 +299,17 @@ func (r *PaperclipAppResource) ImportState(ctx context.Context, req resource.Imp
 	id := req.ID
 	if strings.Contains(id, "/") {
 		parts := strings.SplitN(id, "/", 2)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+		if parts[0] != "" && parts[1] != "" {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+			return
+		}
+	} else if id != "" {
+		resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 		return
 	}
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	resp.Diagnostics.AddError(
+		"Invalid Application Import ID",
+		fmt.Sprintf("Expected <company_id>/<app_id> or <app_id>, got %q", id),
+	)
 }

@@ -103,11 +103,7 @@ func (r *PaperclipCompanyResource) Create(ctx context.Context, req resource.Crea
 
 	plan.ID = types.StringValue(comp.ID)
 	plan.Name = types.StringValue(comp.Name)
-	if comp.Description != "" {
-		plan.Description = types.StringValue(comp.Description)
-	} else if plan.Description.IsNull() {
-		plan.Description = types.StringNull()
-	}
+	plan.Description = stringOrNull(comp.Description)
 	plan.RequireTaskStartConfirmation = types.BoolValue(comp.RequireTaskStartConfirmation)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -132,11 +128,7 @@ func (r *PaperclipCompanyResource) Read(ctx context.Context, req resource.ReadRe
 
 	state.ID = types.StringValue(comp.ID)
 	state.Name = types.StringValue(comp.Name)
-	if comp.Description != "" {
-		state.Description = types.StringValue(comp.Description)
-	} else {
-		state.Description = types.StringNull()
-	}
+	state.Description = stringOrNull(comp.Description)
 	state.RequireTaskStartConfirmation = types.BoolValue(comp.RequireTaskStartConfirmation)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -160,11 +152,7 @@ func (r *PaperclipCompanyResource) Update(ctx context.Context, req resource.Upda
 
 	plan.ID = types.StringValue(comp.ID)
 	plan.Name = types.StringValue(comp.Name)
-	if comp.Description != "" {
-		plan.Description = types.StringValue(comp.Description)
-	} else {
-		plan.Description = types.StringNull()
-	}
+	plan.Description = stringOrNull(comp.Description)
 	plan.RequireTaskStartConfirmation = types.BoolValue(comp.RequireTaskStartConfirmation)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -186,5 +174,9 @@ func (r *PaperclipCompanyResource) Delete(ctx context.Context, req resource.Dele
 }
 
 func (r *PaperclipCompanyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
+	if req.ID == "" {
+		resp.Diagnostics.AddError("Invalid Company Import ID", "Expected non-empty company_id")
+		return
+	}
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }

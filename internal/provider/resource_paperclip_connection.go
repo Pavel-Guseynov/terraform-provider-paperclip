@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"reflect"
 	"strings"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
@@ -15,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -112,16 +112,24 @@ func (r *PaperclipConnectionResource) Schema(ctx context.Context, req resource.S
 				Description: "JSON connection configuration (command, args, env, url).",
 				Optional:    true,
 				Computed:    true,
+				Validators: []validator.String{
+					JSONAttributeValidator(),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
+					SemanticJSONPlanModifier(),
 				},
 			},
 			"credential_refs": schema.StringAttribute{
 				Description: "Optional JSON array of Paperclip credential references.",
 				Optional:    true,
 				Computed:    true,
+				Validators: []validator.String{
+					JSONAttributeValidator(),
+				},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
+					SemanticJSONPlanModifier(),
 				},
 			},
 			"credential_policy": schema.StringAttribute{
@@ -153,15 +161,6 @@ func knownCredentialPolicy(current types.String, remote string) types.String {
 		return types.StringNull()
 	}
 	return current
-}
-
-func preserveEquivalentConnectionJSON(current types.String, remote interface{}) types.String {
-	data, _ := json.Marshal(remote)
-	var prior, actual interface{}
-	if !current.IsUnknown() && !current.IsNull() && json.Unmarshal([]byte(current.ValueString()), &prior) == nil && json.Unmarshal(data, &actual) == nil && reflect.DeepEqual(prior, actual) {
-		return current
-	}
-	return types.StringValue(string(data))
 }
 
 func (r *PaperclipConnectionResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -240,21 +239,18 @@ func (r *PaperclipConnectionResource) Create(ctx context.Context, req resource.C
 	} else if plan.AppID.IsUnknown() {
 		plan.AppID = types.StringNull()
 	}
-	// A gallery connector's configuration is Paperclip's; record what it built.
-	if plan.Config.IsUnknown() {
-		plan.Config = preserveEquivalentConnectionJSON(plan.Config, created.Config)
+	if created.Config != nil {
+		plan.Config = refreshSemanticJSON(plan.Config, created.Config)
+	} else if plan.Config.IsUnknown() {
+		plan.Config = types.StringNull()
 	}
-	if created.Transport != "" {
-		plan.Transport = types.StringValue(created.Transport)
-	}
-	if created.AuthKind != "" {
-		plan.AuthKind = types.StringValue(created.AuthKind)
-	}
+	plan.Transport = stringOrNull(created.Transport)
+	plan.AuthKind = stringOrNull(created.AuthKind)
 	plan.CredentialPolicy = knownCredentialPolicy(plan.CredentialPolicy, created.CredentialPolicy)
 	// A computed reference list must be known after apply: record what Paperclip
 	// echoes, or the empty list a credential-less connection reads back later.
 	if created.CredentialRefs != nil {
-		plan.CredentialRefs = preserveEquivalentConnectionJSON(plan.CredentialRefs, created.CredentialRefs)
+		plan.CredentialRefs = refreshSemanticJSON(plan.CredentialRefs, created.CredentialRefs)
 	} else if plan.CredentialRefs.IsUnknown() || plan.CredentialRefs.IsNull() {
 		plan.CredentialRefs = types.StringValue("[]")
 	}
@@ -312,12 +308,8 @@ func (r *PaperclipConnectionResource) Read(ctx context.Context, req resource.Rea
 		)
 		return
 	}
-	if conn.Transport != "" {
-		state.Transport = types.StringValue(conn.Transport)
-	}
-	if conn.AuthKind != "" {
-		state.AuthKind = types.StringValue(conn.AuthKind)
-	}
+	state.Transport = stringOrNull(conn.Transport)
+	state.AuthKind = stringOrNull(conn.AuthKind)
 	state.CredentialPolicy = knownCredentialPolicy(state.CredentialPolicy, conn.CredentialPolicy)
 	// The gallery source identifies an included connector, so an adopted one
 	// matches its declaration and a custom one plans its replacement.
@@ -325,12 +317,8 @@ func (r *PaperclipConnectionResource) Read(ctx context.Context, req resource.Rea
 	if source, ok := conn.Config["sourceTemplateKey"].(string); ok && source != "" {
 		state.GalleryKey = types.StringValue(source)
 	}
-	if conn.Config != nil {
-		state.Config = preserveEquivalentConnectionJSON(state.Config, conn.Config)
-	}
-	if conn.CredentialRefs != nil {
-		state.CredentialRefs = preserveEquivalentConnectionJSON(state.CredentialRefs, conn.CredentialRefs)
-	}
+	state.Config = refreshSemanticJSON(state.Config, conn.Config)
+	state.CredentialRefs = refreshSemanticJSON(state.CredentialRefs, conn.CredentialRefs)
 	state.CredentialGrantReady = types.BoolValue(true)
 	if len(conn.CredentialRefs) > 0 {
 		refs, err := client.ConnectionCredentialSecretRefs(conn.CredentialRefs)
@@ -401,11 +389,13 @@ func (r *PaperclipConnectionResource) Update(ctx context.Context, req resource.U
 	if updated.AppID != "" {
 		plan.AppID = types.StringValue(updated.AppID)
 	}
-	if updated.Transport != "" {
-		plan.Transport = types.StringValue(updated.Transport)
+	plan.Transport = stringOrNull(updated.Transport)
+	plan.AuthKind = stringOrNull(updated.AuthKind)
+	if updated.Config != nil {
+		plan.Config = refreshSemanticJSON(plan.Config, updated.Config)
 	}
-	if updated.AuthKind != "" {
-		plan.AuthKind = types.StringValue(updated.AuthKind)
+	if updated.CredentialRefs != nil {
+		plan.CredentialRefs = refreshSemanticJSON(plan.CredentialRefs, updated.CredentialRefs)
 	}
 	plan.CredentialPolicy = knownCredentialPolicy(plan.CredentialPolicy, updated.CredentialPolicy)
 	if len(credentialRefs) > 0 {
@@ -438,9 +428,17 @@ func (r *PaperclipConnectionResource) ImportState(ctx context.Context, req resou
 	id := req.ID
 	if strings.Contains(id, "/") {
 		parts := strings.SplitN(id, "/", 2)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+		if parts[0] != "" && parts[1] != "" {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+			return
+		}
+	} else if id != "" {
+		resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 		return
 	}
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	resp.Diagnostics.AddError(
+		"Invalid Connection Import ID",
+		fmt.Sprintf("Expected <company_id>/<connection_id> or <connection_id>, got %q", id),
+	)
 }

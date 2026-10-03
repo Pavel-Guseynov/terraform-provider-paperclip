@@ -39,23 +39,13 @@ type PaperclipSecretResourceModel struct {
 	Rotation    types.String `tfsdk:"rotation"`
 }
 
-func secretDescriptionState(prior types.String, remote string) types.String {
-	if remote != "" {
-		return types.StringValue(remote)
-	}
-	if !prior.IsNull() && !prior.IsUnknown() && prior.ValueString() != "" {
-		return prior
-	}
-	return types.StringNull()
-}
-
 func normalizePaperclipSecretState(state *PaperclipSecretResourceModel, secret *client.PaperclipSecret) {
 	state.ID = types.StringValue(secret.ID)
 	if secret.CompanyID != "" {
 		state.CompanyID = types.StringValue(secret.CompanyID)
 	}
 	state.Name = types.StringValue(secret.Name)
-	state.Description = secretDescriptionState(state.Description, secret.Description)
+	state.Description = stringOrNull(secret.Description)
 }
 
 func (r *PaperclipSecretResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -185,6 +175,9 @@ func (r *PaperclipSecretResource) Create(ctx context.Context, req resource.Creat
 	}
 
 	normalizePaperclipSecretState(&plan, secret)
+	if plan.Rotation.IsUnknown() {
+		plan.Rotation = types.StringNull()
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -253,6 +246,9 @@ func (r *PaperclipSecretResource) Update(ctx context.Context, req resource.Updat
 	}
 
 	normalizePaperclipSecretState(&plan, secret)
+	if plan.Rotation.IsUnknown() {
+		plan.Rotation = state.Rotation
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -283,9 +279,14 @@ func (r *PaperclipSecretResource) ImportState(ctx context.Context, req resource.
 	id := req.ID
 	if strings.Contains(id, "/") {
 		parts := strings.SplitN(id, "/", 2)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
-		return
+		if parts[0] != "" && parts[1] != "" {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+			return
+		}
 	}
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	resp.Diagnostics.AddError(
+		"Invalid Secret Import ID",
+		fmt.Sprintf("Expected <company_id>/<secret_id>, got %q", id),
+	)
 }
