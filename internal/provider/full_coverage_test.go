@@ -838,6 +838,8 @@ func TestFullCoverageLocalEnvironmentRemaining(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/instance/settings/experimental":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"enableEnvironments": true})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/environments":
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{{"id": "env-1", "companyId": "comp-1", "driver": "local"}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/environments/env-1":

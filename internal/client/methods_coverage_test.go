@@ -176,9 +176,9 @@ func TestClientMethodsSuccessAndErrors(t *testing.T) {
 		t.Fatalf("expected ErrNotFound for skill-not-found, got %v", err)
 	}
 
-	// findToolAppInCompanies returns nil when not found in any company
-	if app := cli.findToolAppInCompanies(ctx, "nonexistent-app"); app != nil {
-		t.Fatalf("expected nil from findToolAppInCompanies, got %v", app)
+	// FindCompanyByName not found returns ErrNotFound
+	if _, err := cli.FindCompanyByName(ctx, "nonexistent"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound from FindCompanyByName, got %v", err)
 	}
 
 	// EnsureConnectionCredentialGrant on draft connection
@@ -239,7 +239,9 @@ func TestAllClientMethodsFailures(t *testing.T) {
 	_, _ = cli.CreateAgentKey(ctx, "agent-1", "key-name")
 	_, _ = cli.CreateToolApp(ctx, "comp-1", PaperclipToolApp{Name: "app"})
 	_, _ = cli.GetToolApp(ctx, "app-1")
-	_ = cli.findToolAppInCompanies(ctx, "app-1")
+	_, _ = cli.FindCompanyByName(ctx, "app-1")
+	_, _ = cli.GetExperimentalSettings(ctx)
+	_ = cli.CheckCapability(ctx, "enableEnvironments")
 	_, _ = cli.UpdateToolApp(ctx, "app-1", PaperclipToolApp{Name: "app"})
 	_ = cli.ArchiveToolApp(ctx, "app-1")
 	_, _ = cli.ListToolApps(ctx, "comp-1")
@@ -289,6 +291,22 @@ func TestClientSpecificBranches(t *testing.T) {
 	fallbackServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id": "comp-1", "name": "Company One",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/skills/skill-1":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id": "skill-1", "name": "Skill One", "slug": "skill-one", "markdown": "# Skill One",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/tool-connections/conn-1":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id": "conn-1", "name": "Connection One", "status": "active",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/agents/agent-1":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id": "agent-1", "name": "Agent One",
+			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies":
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 				{"id": "comp-1", "name": "Company One"},
@@ -335,26 +353,33 @@ func TestClientSpecificBranches(t *testing.T) {
 
 	cliFallback, _ := NewClient(fallbackServer.URL, "token")
 
-	// GetSkill with empty companyID searches all companies
-	sk, err := cliFallback.GetSkill(ctx, "", "skill-1")
+	// GetSkill with empty companyID returns ErrNotFound
+	if _, err := cliFallback.GetSkill(ctx, "", "skill-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for empty companyID, got %v", err)
+	}
+	// direct lookup succeeds
+	sk, err := cliFallback.GetSkill(ctx, "comp-1", "skill-1")
 	if err != nil || sk.ID != "skill-1" {
 		t.Fatalf("expected skill-1, got %v (%v)", sk, err)
 	}
 	// not found
-	if _, err := cliFallback.GetSkill(ctx, "", "missing"); !errors.Is(err, ErrNotFound) {
+	if _, err := cliFallback.GetSkill(ctx, "comp-1", "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 
-	// GetSecret with empty companyID searches all companies
-	sec, err := cliFallback.GetSecret(ctx, "", "sec-1")
+	// GetSecret with empty companyID returns ErrNotFound
+	if _, err := cliFallback.GetSecret(ctx, "", "sec-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for empty companyID, got %v", err)
+	}
+	sec, err := cliFallback.GetSecret(ctx, "comp-1", "sec-1")
 	if err != nil || sec.ID != "sec-1" {
 		t.Fatalf("expected sec-1, got %v (%v)", sec, err)
 	}
-	if _, err := cliFallback.GetSecret(ctx, "", "missing"); !errors.Is(err, ErrNotFound) {
+	if _, err := cliFallback.GetSecret(ctx, "comp-1", "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 
-	// GetToolConnection fallback
+	// GetToolConnection
 	conn, err := cliFallback.GetToolConnection(ctx, "conn-1")
 	if err != nil || conn.ID != "conn-1" {
 		t.Fatalf("expected conn-1, got %v (%v)", conn, err)
@@ -363,17 +388,30 @@ func TestClientSpecificBranches(t *testing.T) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 
-	// GetAgent fallback missing
+	// GetAgent
+	ag, err := cliFallback.GetAgent(ctx, "agent-1")
+	if err != nil || ag.ID != "agent-1" {
+		t.Fatalf("expected agent-1, got %v (%v)", ag, err)
+	}
 	if _, err := cliFallback.GetAgent(ctx, "missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 
-	// GetCompany fallback by name
-	comp, err := cliFallback.GetCompany(ctx, "Company One")
+	// GetCompany direct
+	comp, err := cliFallback.GetCompany(ctx, "comp-1")
 	if err != nil || comp.ID != "comp-1" {
 		t.Fatalf("expected comp-1, got %v (%v)", comp, err)
 	}
-	if _, err := cliFallback.GetCompany(ctx, "Missing"); !errors.Is(err, ErrNotFound) {
+	if _, err := cliFallback.GetCompany(ctx, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+
+	// FindCompanyByName
+	comp, err = cliFallback.FindCompanyByName(ctx, "Company One")
+	if err != nil || comp.ID != "comp-1" {
+		t.Fatalf("expected comp-1, got %v (%v)", comp, err)
+	}
+	if _, err := cliFallback.FindCompanyByName(ctx, "Missing"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
 	}
 
@@ -753,7 +791,7 @@ func TestClientRemainingCoverage(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies":
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{{"id": "c1"}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/tool-applications/app-fallback":
-			http.NotFound(w, r)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "app-fallback", "companyId": "c1"})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/companies/c-err/tools/applications":
 			http.Error(w, "app create error", http.StatusInternalServerError) // line 1303
 		case r.Method == http.MethodPost && r.URL.Path == "/api/companies/c1/tools/applications":
@@ -878,10 +916,10 @@ func TestClientRemainingCoverage(t *testing.T) {
 		t.Fatalf("expected empty content, got %q, %v", content, err)
 	}
 
-	// GetToolApp fallback (line 1326)
+	// GetToolApp backfills Type when direct response omits it
 	appFallback, err := cliMock.GetToolApp(ctx, "app-fallback")
-	if err != nil || appFallback.ID != "app-fallback" {
-		t.Fatalf("expected app-fallback, got %v, %v", appFallback, err)
+	if err != nil || appFallback.ID != "app-fallback" || appFallback.Type != "mcp_http" {
+		t.Fatalf("expected app-fallback with type mcp_http, got %v, %v", appFallback, err)
 	}
 
 	// CreateToolApp error (line 1303)

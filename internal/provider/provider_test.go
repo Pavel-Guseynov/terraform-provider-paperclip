@@ -2715,9 +2715,10 @@ func TestPaperclipAppRetirementArchivesAndReadsArchivedAsAbsent(t *testing.T) {
 			t.Errorf("hard application delete reached Paperclip")
 			w.WriteHeader(http.StatusConflict)
 		case r.URL.Path == "/api/tool-applications/app-9" && r.Method == http.MethodGet:
-			// The installed release exposes no direct application read.
-			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]string{"error": "API route not found"})
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id": "app-9", "companyId": "comp-1", "name": "phonemata", "type": "mcp_stdio",
+				"applicationKey": "harness.mcp.phonemata", "status": status,
+			})
 		case r.URL.Path == "/api/companies" && r.Method == http.MethodGet:
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{{"id": "comp-1", "name": "acme"}})
 		case r.URL.Path == "/api/companies/comp-1/tools/applications" && r.Method == http.MethodGet:

@@ -109,7 +109,7 @@ func TestClientErrors(t *testing.T) {
 	if strings.Contains(err.Error(), "SECRET_KEY_123") {
 		t.Fatalf("secret leaked in secret request error: %v", err)
 	}
-	if err.Error() != "paperclip http 500" {
-		t.Fatalf("expected redacted error 'paperclip http 500', got: %v", err)
+	if !strings.Contains(err.Error(), "body=[REDACTED]") || !strings.Contains(err.Error(), "path=/api/500") {
+		t.Fatalf("expected redacted structured error, got: %v", err)
 	}
 }

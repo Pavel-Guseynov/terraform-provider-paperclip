@@ -541,6 +541,8 @@ func TestLocalEnvironmentEdgeCases(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/instance/settings/experimental":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"enableEnvironments": true})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/environments" && r.URL.Query().Get("driver") == "local":
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 				{"id": "env-1", "driver": "local", "envVars": map[string]interface{}{}},

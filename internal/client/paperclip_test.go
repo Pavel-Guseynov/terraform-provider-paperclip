@@ -964,9 +964,9 @@ func TestPaperclipClientCRUD(t *testing.T) {
 	if err != nil || comp.Name != "guseynov" || !comp.RequireTaskStartConfirmation {
 		t.Fatalf("GetCompany failed: %v", err)
 	}
-	comp, err = cli.GetCompany(ctx, "guseynov")
+	comp, err = cli.FindCompanyByName(ctx, "guseynov")
 	if err != nil || comp.ID != "comp-123" || !comp.RequireTaskStartConfirmation {
-		t.Fatalf("GetCompany by name failed: %v", err)
+		t.Fatalf("FindCompanyByName failed: %v", err)
 	}
 	comp, err = cli.UpdateCompany(ctx, "comp-123", "guseynov2", "desc2", true)
 	if err != nil || !comp.RequireTaskStartConfirmation {
@@ -1242,22 +1242,22 @@ func TestPaperclipClientCRUD(t *testing.T) {
 		t.Fatalf("FinishAppPermissions failed: %v", err)
 	}
 
-	// 15. Scoped Lookups by Name
-	foundComp, err := cli.GetCompany(ctx, "guseynov")
+	// 15. Exact Lookups vs Name Lookups
+	foundComp, err := cli.FindCompanyByName(ctx, "guseynov")
 	if err != nil || foundComp.ID != "comp-123" {
-		t.Fatalf("GetCompany by name failed: %v", err)
+		t.Fatalf("FindCompanyByName failed: %v", err)
 	}
-	foundSkill, err := cli.GetSkill(ctx, "comp-123", "fleet-task")
-	if err != nil || foundSkill.ID != "skill-123" {
-		t.Fatalf("GetSkill by slug/name failed: %v", err)
+	if _, err := cli.GetCompany(ctx, "guseynov"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound when looking up company by name via GetCompany, got: %v", err)
 	}
-	foundSecret, err := cli.GetSecret(ctx, "comp-123", "test-sec")
-	if err != nil || foundSecret.ID != "sec-123" {
-		t.Fatalf("GetSecret by name failed: %v", err)
+	if _, err := cli.GetSkill(ctx, "comp-123", "fleet-task"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound when looking up skill by slug via GetSkill, got: %v", err)
 	}
-	foundAgent, err := cli.GetAgent(ctx, "engineer")
-	if err != nil || foundAgent.ID != "agent-123" {
-		t.Fatalf("GetAgent by name failed: %v", err)
+	if _, err := cli.GetSecret(ctx, "comp-123", "test-sec"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound when looking up secret by name via GetSecret, got: %v", err)
+	}
+	if _, err := cli.GetAgent(ctx, "engineer"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound when looking up agent by name via GetAgent, got: %v", err)
 	}
 
 	// Error handling

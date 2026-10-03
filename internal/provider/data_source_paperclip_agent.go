@@ -127,6 +127,14 @@ func (d *PaperclipAgentDataSource) Read(ctx context.Context, req datasource.Read
 			resp.Diagnostics.AddError("Error reading Paperclip agent", err.Error())
 			return
 		}
+		if config.Name.ValueString() != "" && !strings.EqualFold(a.Name, config.Name.ValueString()) {
+			resp.Diagnostics.AddError("Agent Not Found", fmt.Sprintf("Agent with id %q has name %q, which does not match requested name %q", a.ID, a.Name, config.Name.ValueString()))
+			return
+		}
+		if config.CompanyID.ValueString() != "" && a.CompanyID != config.CompanyID.ValueString() {
+			resp.Diagnostics.AddError("Agent Not Found", fmt.Sprintf("Agent with id %q belongs to company %q, not %q", a.ID, a.CompanyID, config.CompanyID.ValueString()))
+			return
+		}
 		agent = a
 	} else if config.CompanyID.ValueString() != "" && config.Name.ValueString() != "" {
 		agents, err := d.client.ListAgents(ctx, config.CompanyID.ValueString())
@@ -134,16 +142,25 @@ func (d *PaperclipAgentDataSource) Read(ctx context.Context, req datasource.Read
 			resp.Diagnostics.AddError("Error listing Paperclip agents", err.Error())
 			return
 		}
+		var matches []client.PaperclipAgent
 		for _, a := range agents {
 			if strings.EqualFold(a.Name, config.Name.ValueString()) {
-				agent = &a
-				break
+				matches = append(matches, a)
 			}
 		}
-		if agent == nil {
+		if len(matches) == 0 {
 			resp.Diagnostics.AddError("Agent Not Found", fmt.Sprintf("Agent %s in company %s not found", config.Name.ValueString(), config.CompanyID.ValueString()))
 			return
 		}
+		if len(matches) > 1 {
+			var ids []string
+			for _, m := range matches {
+				ids = append(ids, m.ID)
+			}
+			resp.Diagnostics.AddError("Ambiguous Agent Name", fmt.Sprintf("multiple agents found with name %q in company %s: candidate IDs: %s", config.Name.ValueString(), config.CompanyID.ValueString(), strings.Join(ids, ", ")))
+			return
+		}
+		agent = &matches[0]
 	} else {
 		resp.Diagnostics.AddError("Invalid Arguments", "Must specify either 'id' or both 'company_id' and 'name'")
 		return

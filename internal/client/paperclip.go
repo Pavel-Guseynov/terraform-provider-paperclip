@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -538,7 +539,10 @@ func (c *Client) EnsureConnectionCredentialGrant(ctx context.Context, connection
 			rawActual, _ := json.Marshal(actual)
 			createdBytes, _ := json.Marshal(rawCreated)
 			expectedBytes, _ := json.Marshal(refs)
-			return fmt.Errorf("native default credential grant differs after installation: created=%s actual=%s expected_refs=%s", string(createdBytes), string(rawActual), string(expectedBytes))
+			sanitizedActual := sanitizeResponseBody(rawActual)
+			sanitizedCreated := sanitizeResponseBody(createdBytes)
+			sanitizedExpected := sanitizeResponseBody(expectedBytes)
+			return fmt.Errorf("native default credential grant differs after installation: created=%s actual=%s expected_refs=%s", sanitizedCreated, sanitizedActual, sanitizedExpected)
 		}
 	}
 	for _, id := range actual.SupersededIDs {
@@ -601,13 +605,143 @@ func (c *Client) paperclipRequestWithToken(ctx context.Context, method, path str
 	return c.paperclipRequestWithErrorBody(ctx, method, path, body, result, token, true)
 }
 
+var sensitiveKeyPattern = regexp.MustCompile(`(?i)^(value|token|secret|password|boardapitoken|board_token|apikey|api_key|credential|credentials|authorization|privatekey|private_key)$`)
+var sensitiveRegexPattern = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9\-_\.]+|((?:token|secret|password|key|value)\s*[:=]\s*["']?)[^"'\s,;]+(["']?)`)
+
+func sanitizeJSONValue(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		sanitized := make(map[string]interface{}, len(val))
+		for k, child := range val {
+			if sensitiveKeyPattern.MatchString(k) {
+				sanitized[k] = "[REDACTED]"
+			} else {
+				sanitized[k] = sanitizeJSONValue(child)
+			}
+		}
+		return sanitized
+	case []interface{}:
+		sanitized := make([]interface{}, len(val))
+		for i, child := range val {
+			sanitized[i] = sanitizeJSONValue(child)
+		}
+		return sanitized
+	default:
+		return v
+	}
+}
+
+func sanitizeResponseBody(body []byte, extraSecrets ...string) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var raw interface{}
+	var result string
+	if err := json.Unmarshal(body, &raw); err == nil {
+		sanitized := sanitizeJSONValue(raw)
+		bytesData, _ := json.Marshal(sanitized)
+		result = string(bytesData)
+	} else {
+		result = string(body)
+	}
+
+	result = sensitiveRegexPattern.ReplaceAllStringFunc(result, func(m string) string {
+		lower := strings.ToLower(m)
+		if strings.HasPrefix(lower, "bearer ") {
+			return "Bearer [REDACTED]"
+		}
+		if idx := strings.Index(m, "="); idx != -1 {
+			return m[:idx+1] + "[REDACTED]"
+		}
+		parts := strings.SplitN(m, ":", 2)
+		return parts[0] + ": [REDACTED]"
+	})
+
+	for _, secret := range extraSecrets {
+		trimmed := strings.TrimSpace(secret)
+		if len(trimmed) > 0 && strings.Contains(result, trimmed) {
+			result = strings.ReplaceAll(result, trimmed, "[REDACTED]")
+		}
+	}
+
+	if len(result) > 2048 {
+		result = result[:2048] + "..."
+	}
+	return strings.TrimSpace(result)
+}
+
+func extractCorrelationID(resp *http.Response, body []byte) string {
+	if resp != nil {
+		for _, header := range []string{
+			"X-Correlation-Id",
+			"X-Correlation-ID",
+			"X-Request-Id",
+			"X-Request-ID",
+			"X-Paperclip-Run-Id",
+			"X-Client-Request-Id",
+			"Traceparent",
+		} {
+			if val := strings.TrimSpace(resp.Header.Get(header)); val != "" {
+				return val
+			}
+		}
+	}
+	if len(body) > 0 {
+		var m map[string]interface{}
+		if err := json.Unmarshal(body, &m); err == nil {
+			for _, k := range []string{"correlationId", "correlation_id", "requestId", "request_id"} {
+				if val, ok := m[k].(string); ok && strings.TrimSpace(val) != "" {
+					return strings.TrimSpace(val)
+				}
+			}
+		}
+	}
+	return "none"
+}
+
+func isUnknownRoute(statusCode int, body string) bool {
+	if statusCode != http.StatusNotFound {
+		return false
+	}
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" {
+		return false
+	}
+	lower := strings.ToLower(trimmed)
+	return strings.Contains(lower, "api route not found") ||
+		strings.Contains(lower, "route not found") ||
+		strings.Contains(lower, "cannot get ") ||
+		strings.Contains(lower, "cannot post ") ||
+		strings.Contains(lower, "cannot patch ") ||
+		strings.Contains(lower, "cannot delete ") ||
+		strings.Contains(lower, "cannot put ") ||
+		strings.Contains(lower, "<!doctype html") ||
+		strings.Contains(lower, "<html")
+}
+
 func (c *Client) paperclipRequestWithErrorBody(ctx context.Context, method, path string, body interface{}, result interface{}, token string, includeErrorBody bool) error {
 	reqURL := fmt.Sprintf("%s%s", c.Endpoint, path)
 	var bodyReader io.Reader
+	var sensitiveSecrets []string
+	if c.Token != "" {
+		sensitiveSecrets = append(sensitiveSecrets, c.Token)
+	}
+	if token != "" && token != c.Token {
+		sensitiveSecrets = append(sensitiveSecrets, token)
+	}
+
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
 			return fmt.Errorf("marshal paperclip request: %w", err)
+		}
+		var bodyMap map[string]interface{}
+		if err := json.Unmarshal(data, &bodyMap); err == nil {
+			for _, key := range []string{"value", "token", "password", "secret", "boardApiToken"} {
+				if val, ok := bodyMap[key].(string); ok && val != "" {
+					sensitiveSecrets = append(sensitiveSecrets, val)
+				}
+			}
 		}
 		bodyReader = bytes.NewReader(data)
 	}
@@ -634,17 +768,21 @@ func (c *Client) paperclipRequestWithErrorBody(ctx context.Context, method, path
 		return fmt.Errorf("read paperclip response body: %w", err)
 	}
 
-	if resp.StatusCode == http.StatusNotFound {
-		return ErrNotFound
-	}
-	if resp.StatusCode == http.StatusConflict {
-		return ErrConflict
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		correlationID := extractCorrelationID(resp, respBody)
+		sanitizedBody := sanitizeResponseBody(respBody, sensitiveSecrets...)
 		if !includeErrorBody {
-			return fmt.Errorf("paperclip http %d", resp.StatusCode)
+			sanitizedBody = "[REDACTED]"
 		}
-		return fmt.Errorf("paperclip http %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+		unknownRoute := isUnknownRoute(resp.StatusCode, sanitizedBody)
+		return &APIError{
+			Method:         method,
+			Path:           path,
+			StatusCode:     resp.StatusCode,
+			CorrelationID:  correlationID,
+			Body:           sanitizedBody,
+			IsUnknownRoute: unknownRoute,
+		}
 	}
 
 	if result != nil && len(respBody) > 0 {
@@ -754,23 +892,42 @@ func (c *Client) CreateCompany(ctx context.Context, name, description string, re
 	return &resp, nil
 }
 
-func (c *Client) GetCompany(ctx context.Context, idOrName string) (*PaperclipCompany, error) {
-	var direct PaperclipCompany
-	err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/companies/%s", url.PathEscape(idOrName)), nil, &direct)
-	if err == nil && direct.ID != "" {
-		return &direct, nil
+func (c *Client) GetCompany(ctx context.Context, companyID string) (*PaperclipCompany, error) {
+	if companyID == "" {
+		return nil, ErrNotFound
 	}
+	var direct PaperclipCompany
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/companies/%s", url.PathEscape(companyID)), nil, &direct); err != nil {
+		return nil, err
+	}
+	return &direct, nil
+}
 
+func (c *Client) FindCompanyByName(ctx context.Context, name string) (*PaperclipCompany, error) {
+	if name == "" {
+		return nil, ErrNotFound
+	}
 	companies, err := c.ListCompanies(ctx)
 	if err != nil {
 		return nil, err
 	}
+	var matches []PaperclipCompany
 	for _, comp := range companies {
-		if comp.ID == idOrName || strings.EqualFold(comp.Name, idOrName) {
-			return &comp, nil
+		if strings.EqualFold(comp.Name, name) {
+			matches = append(matches, comp)
 		}
 	}
-	return nil, ErrNotFound
+	if len(matches) == 0 {
+		return nil, ErrNotFound
+	}
+	if len(matches) > 1 {
+		var ids []string
+		for _, m := range matches {
+			ids = append(ids, m.ID)
+		}
+		return nil, fmt.Errorf("multiple companies found with name %q: candidate IDs: %s", name, strings.Join(ids, ", "))
+	}
+	return &matches[0], nil
 }
 
 func (c *Client) UpdateCompany(ctx context.Context, id, name, description string, requireTaskStartConfirmation bool) (*PaperclipCompany, error) {
@@ -912,7 +1069,7 @@ func (c *Client) CreateWorkspace(ctx context.Context, projectID string, ws Paper
 // GetWorkspaceInProject resolves a workspace through Paperclip's project-scoped
 // workspace API.
 func (c *Client) GetWorkspaceInProject(ctx context.Context, projectID, workspaceID string) (*PaperclipWorkspace, error) {
-	if projectID == "" {
+	if projectID == "" || workspaceID == "" {
 		return nil, ErrNotFound
 	}
 	workspaces, err := c.ListWorkspaces(ctx, projectID)
@@ -920,7 +1077,7 @@ func (c *Client) GetWorkspaceInProject(ctx context.Context, projectID, workspace
 		return nil, err
 	}
 	for _, ws := range workspaces {
-		if ws.ID == workspaceID || strings.EqualFold(ws.Name, workspaceID) {
+		if ws.ID == workspaceID {
 			return &ws, nil
 		}
 	}
@@ -995,44 +1152,20 @@ func (c *Client) CreateSkill(ctx context.Context, companyID string, skill Paperc
 }
 
 func (c *Client) GetSkill(ctx context.Context, companyID, skillID string) (*PaperclipSkill, error) {
-	if companyID != "" {
-		var resp PaperclipSkill
-		if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/companies/%s/skills/%s", url.PathEscape(companyID), url.PathEscape(skillID)), nil, &resp); err == nil && resp.ID != "" {
-			if resp.Content == "" && resp.Markdown != "" {
-				resp.Content = resp.Markdown
-			}
-			if resp.CompanyID == "" {
-				resp.CompanyID = companyID
-			}
-			return &resp, nil
-		}
-
-		skills, err := c.ListSkills(ctx, companyID)
-		if err != nil {
-			return nil, err
-		}
-		for _, s := range skills {
-			if s.ID == skillID || s.Slug == skillID || strings.EqualFold(s.Name, skillID) {
-				return &s, nil
-			}
-		}
-	} else {
-		companies, err := c.ListCompanies(ctx)
-		if err != nil {
-			return nil, err
-		}
-		for _, comp := range companies {
-			skills, err := c.ListSkills(ctx, comp.ID)
-			if err == nil {
-				for _, s := range skills {
-					if s.ID == skillID || s.Slug == skillID || strings.EqualFold(s.Name, skillID) {
-						return &s, nil
-					}
-				}
-			}
-		}
+	if companyID == "" || skillID == "" {
+		return nil, ErrNotFound
 	}
-	return nil, ErrNotFound
+	var resp PaperclipSkill
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/companies/%s/skills/%s", url.PathEscape(companyID), url.PathEscape(skillID)), nil, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Content == "" && resp.Markdown != "" {
+		resp.Content = resp.Markdown
+	}
+	if resp.CompanyID == "" {
+		resp.CompanyID = companyID
+	}
+	return &resp, nil
 }
 
 // UpdateSkill converges a skill through the two Paperclip write surfaces: the
@@ -1099,29 +1232,16 @@ func (c *Client) CreateSecret(ctx context.Context, companyID, name, description,
 }
 
 func (c *Client) GetSecret(ctx context.Context, companyID, secretID string) (*PaperclipSecret, error) {
-	if companyID != "" {
-		secrets, err := c.ListSecrets(ctx, companyID)
-		if err != nil {
-			return nil, err
-		}
-		for _, s := range secrets {
-			if s.ID == secretID || strings.EqualFold(s.Name, secretID) {
-				return &s, nil
-			}
-		}
-	} else {
-		companies, err := c.ListCompanies(ctx)
-		if err == nil {
-			for _, comp := range companies {
-				secrets, err := c.ListSecrets(ctx, comp.ID)
-				if err == nil {
-					for _, s := range secrets {
-						if s.ID == secretID || strings.EqualFold(s.Name, secretID) {
-							return &s, nil
-						}
-					}
-				}
-			}
+	if companyID == "" || secretID == "" {
+		return nil, ErrNotFound
+	}
+	secrets, err := c.ListSecrets(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	for _, s := range secrets {
+		if s.ID == secretID {
+			return &s, nil
 		}
 	}
 	return nil, ErrNotFound
@@ -1186,26 +1306,14 @@ func (c *Client) CreateAgent(ctx context.Context, companyID string, agent Paperc
 }
 
 func (c *Client) GetAgent(ctx context.Context, agentID string) (*PaperclipAgent, error) {
-	var resp PaperclipAgent
-	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/agents/%s", url.PathEscape(agentID)), nil, &resp); err == nil && resp.ID != "" {
-		return &resp, nil
+	if agentID == "" {
+		return nil, ErrNotFound
 	}
-
-	companies, err := c.ListCompanies(ctx)
-	if err != nil {
+	var resp PaperclipAgent
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/agents/%s", url.PathEscape(agentID)), nil, &resp); err != nil {
 		return nil, err
 	}
-	for _, comp := range companies {
-		agents, err := c.ListAgents(ctx, comp.ID)
-		if err == nil {
-			for _, a := range agents {
-				if a.ID == agentID || strings.EqualFold(a.Name, agentID) {
-					return &a, nil
-				}
-			}
-		}
-	}
-	return nil, ErrNotFound
+	return &resp, nil
 }
 
 func (c *Client) UpdateAgent(ctx context.Context, agentID string, agent PaperclipAgent) (*PaperclipAgent, error) {
@@ -1316,43 +1424,25 @@ func (c *Client) CreateToolApp(ctx context.Context, companyID string, app Paperc
 }
 
 func (c *Client) GetToolApp(ctx context.Context, appID string) (*PaperclipToolApp, error) {
+	if appID == "" {
+		return nil, ErrNotFound
+	}
 	var resp PaperclipToolApp
-	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/tool-applications/%s", url.PathEscape(appID)), nil, &resp); err == nil && resp.ID != "" {
-		if resp.Type == "" {
-			if listed := c.findToolAppInCompanies(ctx, appID); listed != nil {
-				resp.Type = listed.Type
-			}
-		}
-		return &resp, nil
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/tool-applications/%s", url.PathEscape(appID)), nil, &resp); err != nil {
+		return nil, err
 	}
-
-	if listed := c.findToolAppInCompanies(ctx, appID); listed != nil {
-		return listed, nil
-	}
-	return nil, ErrNotFound
-}
-
-// findToolAppInCompanies resolves an application through the company-scoped
-// list route, which always carries the type field; the direct GET route may
-// omit it.
-func (c *Client) findToolAppInCompanies(ctx context.Context, appID string) *PaperclipToolApp {
-	companies, err := c.ListCompanies(ctx)
-	if err != nil {
-		return nil
-	}
-	for _, comp := range companies {
-		apps, err := c.ListToolApps(ctx, comp.ID)
-		if err != nil {
-			continue
-		}
-		for _, a := range apps {
-			if a.ID == appID || a.ApplicationKey == appID || strings.EqualFold(a.Name, appID) {
-				found := a
-				return &found
+	if resp.Type == "" && resp.CompanyID != "" {
+		apps, err := c.ListToolApps(ctx, resp.CompanyID)
+		if err == nil {
+			for _, a := range apps {
+				if a.ID == appID {
+					resp.Type = a.Type
+					break
+				}
 			}
 		}
 	}
-	return nil
+	return &resp, nil
 }
 
 func (c *Client) UpdateToolApp(ctx context.Context, appID string, app PaperclipToolApp) (*PaperclipToolApp, error) {
@@ -1438,26 +1528,14 @@ func (c *Client) ConnectGalleryApp(ctx context.Context, companyID, galleryKey st
 }
 
 func (c *Client) GetToolConnection(ctx context.Context, connID string) (*PaperclipToolConnection, error) {
-	var resp PaperclipToolConnection
-	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/tool-connections/%s", url.PathEscape(connID)), nil, &resp); err == nil && resp.ID != "" {
-		return &resp, nil
+	if connID == "" {
+		return nil, ErrNotFound
 	}
-
-	companies, err := c.ListCompanies(ctx)
-	if err != nil {
+	var resp PaperclipToolConnection
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/tool-connections/%s", url.PathEscape(connID)), nil, &resp); err != nil {
 		return nil, err
 	}
-	for _, comp := range companies {
-		conns, err := c.ListToolConnections(ctx, comp.ID)
-		if err == nil {
-			for _, conn := range conns {
-				if conn.ID == connID || strings.EqualFold(conn.Name, connID) {
-					return &conn, nil
-				}
-			}
-		}
-	}
-	return nil, ErrNotFound
+	return &resp, nil
 }
 
 func (c *Client) UpdateToolConnection(ctx context.Context, connID string, conn PaperclipToolConnection) (*PaperclipToolConnection, error) {
@@ -1519,12 +1597,15 @@ func (c *Client) CreateStdioTemplate(ctx context.Context, companyID string, tpl 
 }
 
 func (c *Client) GetStdioTemplate(ctx context.Context, companyID, idOrTemplateID string) (*PaperclipStdioTemplate, error) {
+	if companyID == "" || idOrTemplateID == "" {
+		return nil, ErrNotFound
+	}
 	templates, err := c.ListStdioTemplates(ctx, companyID)
 	if err != nil {
 		return nil, err
 	}
 	for _, tpl := range templates {
-		if tpl.ID == idOrTemplateID || tpl.TemplateID == idOrTemplateID || strings.EqualFold(tpl.Name, idOrTemplateID) {
+		if tpl.ID == idOrTemplateID || tpl.TemplateID == idOrTemplateID {
 			return &tpl, nil
 		}
 	}

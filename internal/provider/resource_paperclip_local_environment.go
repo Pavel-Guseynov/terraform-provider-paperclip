@@ -13,6 +13,12 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
+var (
+	_ resource.Resource               = &PaperclipLocalEnvironmentResource{}
+	_ resource.ResourceWithConfigure  = &PaperclipLocalEnvironmentResource{}
+	_ resource.ResourceWithModifyPlan = &PaperclipLocalEnvironmentResource{}
+)
+
 // This resource owns PATH inheritance on an existing producer-owned Local row,
 // not the row's creation, deletion, other bindings, or service runtime PATH.
 type PaperclipLocalEnvironmentResource struct{ client *client.Client }
@@ -62,6 +68,15 @@ func (r *PaperclipLocalEnvironmentResource) ValidateConfig(ctx context.Context, 
 	}
 }
 
+func (r *PaperclipLocalEnvironmentResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if r.client == nil || req.Plan.Raw.IsNull() {
+		return
+	}
+	if err := r.client.CheckCapability(ctx, "enableEnvironments"); err != nil {
+		resp.Diagnostics.AddError("Required capability missing", err.Error())
+	}
+}
+
 func (r *PaperclipLocalEnvironmentResource) apply(ctx context.Context, plan tfsdk.Plan, state *tfsdk.State) error {
 	var model PaperclipLocalEnvironmentModel
 	if diags := plan.Get(ctx, &model); diags.HasError() {
@@ -69,6 +84,9 @@ func (r *PaperclipLocalEnvironmentResource) apply(ctx context.Context, plan tfsd
 	}
 	if !model.InheritServicePath.ValueBool() {
 		return fmt.Errorf("local execution must inherit the service PATH")
+	}
+	if err := r.client.CheckCapability(ctx, "enableEnvironments"); err != nil {
+		return err
 	}
 	if model.ID.IsUnknown() || model.ID.IsNull() {
 		env, err := r.client.FindLocalEnvironment(ctx, model.CompanyID.ValueString())

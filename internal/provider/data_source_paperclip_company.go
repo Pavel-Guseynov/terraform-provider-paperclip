@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -82,18 +83,27 @@ func (d *PaperclipCompanyDataSource) Read(ctx context.Context, req datasource.Re
 		return
 	}
 
-	idOrName := config.ID.ValueString()
-	if idOrName == "" {
-		idOrName = config.Name.ValueString()
-	}
-	if idOrName == "" {
+	var comp *client.PaperclipCompany
+	if config.ID.ValueString() != "" {
+		c, err := d.client.GetCompany(ctx, config.ID.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Error reading Paperclip company", err.Error())
+			return
+		}
+		if config.Name.ValueString() != "" && !strings.EqualFold(c.Name, config.Name.ValueString()) {
+			resp.Diagnostics.AddError("Company Not Found", fmt.Sprintf("Company with id %q has name %q, which does not match requested name %q", c.ID, c.Name, config.Name.ValueString()))
+			return
+		}
+		comp = c
+	} else if config.Name.ValueString() != "" {
+		c, err := d.client.FindCompanyByName(ctx, config.Name.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Error reading Paperclip company", err.Error())
+			return
+		}
+		comp = c
+	} else {
 		resp.Diagnostics.AddError("Invalid Arguments", "Either id or name must be specified")
-		return
-	}
-
-	comp, err := d.client.GetCompany(ctx, idOrName)
-	if err != nil {
-		resp.Diagnostics.AddError("Error reading Paperclip company", err.Error())
 		return
 	}
 

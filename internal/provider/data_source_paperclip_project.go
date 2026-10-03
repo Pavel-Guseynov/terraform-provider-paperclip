@@ -89,60 +89,66 @@ func (d *PaperclipProjectDataSource) Read(ctx context.Context, req datasource.Re
 		return
 	}
 
+	var proj *client.PaperclipProject
 	if config.ID.ValueString() != "" {
-		proj, err := d.client.GetProject(ctx, config.ID.ValueString())
+		p, err := d.client.GetProject(ctx, config.ID.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("Error reading Paperclip project", err.Error())
 			return
 		}
-		config.ID = types.StringValue(proj.ID)
-		if proj.CompanyID != "" {
-			config.CompanyID = types.StringValue(proj.CompanyID)
+		if config.Name.ValueString() != "" && !strings.EqualFold(p.Name, config.Name.ValueString()) {
+			resp.Diagnostics.AddError("Project Not Found", fmt.Sprintf("Project with id %q has name %q, which does not match requested name %q", p.ID, p.Name, config.Name.ValueString()))
+			return
 		}
-		config.Name = types.StringValue(proj.Name)
-		if proj.Description != "" {
-			config.Description = types.StringValue(proj.Description)
-		} else {
-			config.Description = types.StringNull()
+		if config.CompanyID.ValueString() != "" && p.CompanyID != config.CompanyID.ValueString() {
+			resp.Diagnostics.AddError("Project Not Found", fmt.Sprintf("Project with id %q belongs to company %q, not %q", p.ID, p.CompanyID, config.CompanyID.ValueString()))
+			return
 		}
-		if proj.LeadAgentID != "" {
-			config.LeadAgentID = types.StringValue(proj.LeadAgentID)
-		} else {
-			config.LeadAgentID = types.StringNull()
-		}
+		proj = p
 	} else if config.CompanyID.ValueString() != "" && config.Name.ValueString() != "" {
 		projects, err := d.client.ListProjects(ctx, config.CompanyID.ValueString())
 		if err != nil {
 			resp.Diagnostics.AddError("Error listing Paperclip projects", err.Error())
 			return
 		}
-		var found *client.PaperclipProject
+		var matches []client.PaperclipProject
 		for _, p := range projects {
 			if strings.EqualFold(p.Name, config.Name.ValueString()) {
-				found = &p
-				break
+				matches = append(matches, p)
 			}
 		}
-		if found == nil {
+		if len(matches) == 0 {
 			resp.Diagnostics.AddError("Project Not Found", fmt.Sprintf("Project %s in company %s not found", config.Name.ValueString(), config.CompanyID.ValueString()))
 			return
 		}
-		config.ID = types.StringValue(found.ID)
-		config.CompanyID = types.StringValue(found.CompanyID)
-		config.Name = types.StringValue(found.Name)
-		if found.Description != "" {
-			config.Description = types.StringValue(found.Description)
-		} else {
-			config.Description = types.StringNull()
+		if len(matches) > 1 {
+			var ids []string
+			for _, m := range matches {
+				ids = append(ids, m.ID)
+			}
+			resp.Diagnostics.AddError("Ambiguous Project Name", fmt.Sprintf("multiple projects found with name %q in company %s: candidate IDs: %s", config.Name.ValueString(), config.CompanyID.ValueString(), strings.Join(ids, ", ")))
+			return
 		}
-		if found.LeadAgentID != "" {
-			config.LeadAgentID = types.StringValue(found.LeadAgentID)
-		} else {
-			config.LeadAgentID = types.StringNull()
-		}
+		proj = &matches[0]
 	} else {
 		resp.Diagnostics.AddError("Invalid Arguments", "Must specify either 'id' or both 'company_id' and 'name'")
 		return
+	}
+
+	config.ID = types.StringValue(proj.ID)
+	if proj.CompanyID != "" {
+		config.CompanyID = types.StringValue(proj.CompanyID)
+	}
+	config.Name = types.StringValue(proj.Name)
+	if proj.Description != "" {
+		config.Description = types.StringValue(proj.Description)
+	} else {
+		config.Description = types.StringNull()
+	}
+	if proj.LeadAgentID != "" {
+		config.LeadAgentID = types.StringValue(proj.LeadAgentID)
+	} else {
+		config.LeadAgentID = types.StringNull()
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)

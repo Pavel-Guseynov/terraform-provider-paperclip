@@ -23,7 +23,9 @@ func TestLocalEnvironmentResourceLifecycle(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		env := map[string]interface{}{"id": "local-id", "driver": "local", "envVars": bindings}
-		if req.URL.Path == "/api/companies/company/environments" {
+		if req.URL.Path == "/api/instance/settings/experimental" {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"enableEnvironments": true})
+		} else if req.URL.Path == "/api/companies/company/environments" {
 			_ = json.NewEncoder(w).Encode([]interface{}{env})
 		} else if req.URL.Path == "/api/environments/local-id" {
 			if req.Method == http.MethodPatch {
@@ -54,6 +56,26 @@ func TestLocalEnvironmentResourceLifecycle(t *testing.T) {
 	if diags := plan.Set(ctx, &model); diags.HasError() {
 		t.Fatal(diags)
 	}
+	var modifyPlanResp resource.ModifyPlanResponse
+	r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: plan}, &modifyPlanResp)
+	if modifyPlanResp.Diagnostics.HasError() {
+		t.Fatalf("ModifyPlan unexpected error: %v", modifyPlanResp.Diagnostics)
+	}
+
+	nilResource := &PaperclipLocalEnvironmentResource{}
+	var nilClientResp resource.ModifyPlanResponse
+	nilResource.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: plan}, &nilClientResp)
+	if nilClientResp.Diagnostics.HasError() {
+		t.Fatal("expected no error with nil client")
+	}
+
+	nullPlan := tfsdk.Plan{Schema: schema}
+	var nullPlanResp resource.ModifyPlanResponse
+	r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: nullPlan}, &nullPlanResp)
+	if nullPlanResp.Diagnostics.HasError() {
+		t.Fatal("expected no error with null plan")
+	}
+
 	created := resource.CreateResponse{State: tfsdk.State{Schema: schema}}
 	r.Create(ctx, resource.CreateRequest{Plan: plan}, &created)
 	if created.Diagnostics.HasError() || writes != 1 {

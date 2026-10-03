@@ -118,6 +118,14 @@ func (d *PaperclipSkillDataSource) Read(ctx context.Context, req datasource.Read
 			resp.Diagnostics.AddError("Error reading Paperclip skill", err.Error())
 			return
 		}
+		if config.Slug.ValueString() != "" && !strings.EqualFold(s.Slug, config.Slug.ValueString()) {
+			resp.Diagnostics.AddError("Skill Not Found", fmt.Sprintf("Skill with id %q has slug %q, which does not match requested slug %q", s.ID, s.Slug, config.Slug.ValueString()))
+			return
+		}
+		if config.Name.ValueString() != "" && !strings.EqualFold(s.Name, config.Name.ValueString()) {
+			resp.Diagnostics.AddError("Skill Not Found", fmt.Sprintf("Skill with id %q has name %q, which does not match requested name %q", s.ID, s.Name, config.Name.ValueString()))
+			return
+		}
 		skill = s
 	} else if config.Slug.ValueString() != "" || config.Name.ValueString() != "" {
 		skills, err := d.client.ListSkills(ctx, companyID)
@@ -125,17 +133,30 @@ func (d *PaperclipSkillDataSource) Read(ctx context.Context, req datasource.Read
 			resp.Diagnostics.AddError("Error listing Paperclip skills", err.Error())
 			return
 		}
+		var matches []client.PaperclipSkill
 		for _, s := range skills {
 			if (config.Slug.ValueString() != "" && strings.EqualFold(s.Slug, config.Slug.ValueString())) ||
 				(config.Name.ValueString() != "" && strings.EqualFold(s.Name, config.Name.ValueString())) {
-				skill = &s
-				break
+				matches = append(matches, s)
 			}
 		}
-		if skill == nil {
+		if len(matches) == 0 {
 			resp.Diagnostics.AddError("Skill Not Found", fmt.Sprintf("Skill not found in company %s", companyID))
 			return
 		}
+		if len(matches) > 1 {
+			var ids []string
+			for _, m := range matches {
+				ids = append(ids, m.ID)
+			}
+			lookupKey := config.Slug.ValueString()
+			if lookupKey == "" {
+				lookupKey = config.Name.ValueString()
+			}
+			resp.Diagnostics.AddError("Ambiguous Skill Match", fmt.Sprintf("multiple skills found matching %q in company %s: candidate IDs: %s", lookupKey, companyID, strings.Join(ids, ", ")))
+			return
+		}
+		skill = &matches[0]
 	} else {
 		resp.Diagnostics.AddError("Invalid Arguments", "Must specify either 'id', 'slug', or 'name'")
 		return

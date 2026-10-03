@@ -73,9 +73,9 @@ func TestDataSourcesErrorAndEdgeCases(t *testing.T) {
 	// Name provided, company with null description
 	okCompServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode([]map[string]interface{}{{
 			"id": "comp-1", "name": "Acme", "description": "", "requireTaskStartConfirmation": true,
-		})
+		}})
 	}))
 	defer okCompServer.Close()
 	dsCompOk := NewPaperclipCompanyDataSource().(*PaperclipCompanyDataSource)
@@ -527,6 +527,10 @@ func TestLocalEnvironmentMoreEdgeCases(t *testing.T) {
 
 	// 2. Server 500 on FindLocalEnvironment
 	srvErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/instance/settings/experimental" {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"enableEnvironments": true})
+			return
+		}
 		http.Error(w, "server error", http.StatusInternalServerError)
 	}))
 	defer srvErr.Close()
