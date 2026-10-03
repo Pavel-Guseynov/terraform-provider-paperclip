@@ -124,6 +124,10 @@ func TestEphemeralsLifecycle(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"source": "board_key", "keyId": "k-1",
 			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/board-api-keys":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id": "k-1", "name": "bk-1", "token": "board-tok",
+			})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/agents/agent-1/keys":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": "ak-1", "token": "agent-tok",

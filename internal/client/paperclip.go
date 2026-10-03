@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 )
 
 // PaperclipToolSelection carries the registry's names and native approval policy.
@@ -363,18 +364,36 @@ type PaperclipAgentPermissions struct {
 	CanAssignTasks  bool `json:"canAssignTasks"`
 }
 
+type AgentKeyScope struct {
+	Kind                    string   `json:"kind"`
+	ProjectID               string   `json:"projectId,omitempty"`
+	ProjectIDs              []string `json:"projectIds,omitempty"`
+	ParentIssueID           string   `json:"parentIssueId,omitempty"`
+	ParentIssueIDs          []string `json:"parentIssueIds,omitempty"`
+	AllowedAssigneeAgentIDs []string `json:"allowedAssigneeAgentIds,omitempty"`
+	IssueID                 string   `json:"issueId,omitempty"`
+}
+
 type PaperclipAgentKey struct {
-	ID        string `json:"id,omitempty"`
-	AgentID   string `json:"agentId,omitempty"`
-	Name      string `json:"name"`
-	Token     string `json:"token,omitempty"`
-	CreatedAt string `json:"createdAt,omitempty"`
+	ID                string         `json:"id,omitempty"`
+	AgentID           string         `json:"agentId,omitempty"`
+	Name              string         `json:"name"`
+	Token             string         `json:"token,omitempty"`
+	Scope             *AgentKeyScope `json:"scope,omitempty"`
+	ResponsibleUserID string         `json:"responsibleUserId,omitempty"`
+	RevokedAt         *string        `json:"revokedAt,omitempty"`
+	CreatedAt         string         `json:"createdAt,omitempty"`
 }
 
 type PaperclipBoardKey struct {
-	ID    string `json:"id,omitempty"`
-	Name  string `json:"name"`
-	Token string `json:"token,omitempty"`
+	ID                 string     `json:"id,omitempty"`
+	Name               string     `json:"name"`
+	Token              string     `json:"token,omitempty"`
+	CreatedAt          string     `json:"createdAt,omitempty"`
+	LastUsedAt         *string    `json:"lastUsedAt,omitempty"`
+	RevokedAt          *string    `json:"revokedAt,omitempty"`
+	ExpiresAt          *time.Time `json:"expiresAt,omitempty"`
+	RequestedCompanyID string     `json:"requestedCompanyId,omitempty"`
 }
 
 type paperclipCLIAuthChallenge struct {
@@ -835,11 +854,29 @@ func (c *Client) paperclipSecretRequest(ctx context.Context, method, path string
 	return c.paperclipRequestWithErrorBody(ctx, method, path, body, result, c.Token, false)
 }
 
-// CreateBoardKey uses Paperclip's official local CLI authorization flow. Both
-// challenge calls intentionally omit any existing bearer so a stale key cannot
-// shadow the local-trusted board actor. The returned durable board token is
-// verified against /api/cli-auth/me before it leaves the client.
-func (c *Client) CreateBoardKey(ctx context.Context, name string) (*PaperclipBoardKey, error) {
+// CreateBoardKey mints a Paperclip board API key. When authenticated (c.Token != ""),
+// it calls the native POST /api/board-api-keys endpoint with optional expiry and
+// company scope, never attempting to self-approve a CLI challenge. In unauthenticated
+// local_trusted mode, it uses the local CLI auth challenge flow; outside local_trusted,
+// challenge self-approval is rejected.
+func (c *Client) CreateBoardKey(ctx context.Context, name string, expiresAt *time.Time, requestedCompanyID string) (*PaperclipBoardKey, error) {
+	if c.Token != "" {
+		payload := map[string]interface{}{
+			"name": name,
+		}
+		if expiresAt != nil {
+			payload["expiresAt"] = expiresAt.Format(time.RFC3339)
+		}
+		if strings.TrimSpace(requestedCompanyID) != "" {
+			payload["requestedCompanyId"] = strings.TrimSpace(requestedCompanyID)
+		}
+		var resp PaperclipBoardKey
+		if err := c.paperclipRequest(ctx, http.MethodPost, "/api/board-api-keys", payload, &resp); err != nil {
+			return nil, err
+		}
+		return &resp, nil
+	}
+
 	var challenge paperclipCLIAuthChallenge
 	if err := c.paperclipRequestWithToken(ctx, http.MethodPost, "/api/cli-auth/challenges", map[string]interface{}{
 		"command":         "harness paperclip-sync",
@@ -857,7 +894,7 @@ func (c *Client) CreateBoardKey(ctx context.Context, name string) (*PaperclipBoa
 	if err := c.paperclipRequestWithToken(ctx, http.MethodPost, approvalPath, map[string]string{
 		"token": challenge.Token,
 	}, &approval, ""); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("outside local_trusted, board key creation requires authenticated bearer; provider never self-approves CLI challenges: %w", err)
 	}
 	if !approval.Approved || approval.Status != "approved" || approval.KeyID == "" {
 		return nil, errors.New("paperclip CLI auth challenge was not approved")
@@ -875,6 +912,142 @@ func (c *Client) CreateBoardKey(ctx context.Context, name string) (*PaperclipBoa
 		Name:  name,
 		Token: challenge.BoardAPIToken,
 	}, nil
+}
+
+func (c *Client) GetBoardKey(ctx context.Context, keyID string) (*PaperclipBoardKey, error) {
+	keyID = strings.TrimSpace(keyID)
+	if keyID == "" {
+		return nil, errors.New("key ID is required")
+	}
+	var keys []PaperclipBoardKey
+	if err := c.paperclipRequest(ctx, http.MethodGet, "/api/board-api-keys?includeInactive=true", nil, &keys); err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	for _, key := range keys {
+		if key.ID == keyID {
+			if key.RevokedAt != nil && *key.RevokedAt != "" {
+				return nil, ErrNotFound
+			}
+			if key.ExpiresAt != nil && key.ExpiresAt.Before(now) {
+				return nil, ErrNotFound
+			}
+			return &key, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (c *Client) RevokeBoardKey(ctx context.Context, keyID string) error {
+	keyID = strings.TrimSpace(keyID)
+	if keyID == "" {
+		return errors.New("key ID is required")
+	}
+	reqPath := fmt.Sprintf("/api/board-api-keys/%s", url.PathEscape(keyID))
+	err := c.paperclipRequest(ctx, http.MethodDelete, reqPath, nil, nil)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	return nil
+}
+
+func (c *Client) RegisterMintedToken(keyID, token string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	c.mintedTokens[keyID] = token
+}
+
+func (c *Client) GetMintedToken(keyID string) (string, bool) {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	tok, ok := c.mintedTokens[keyID]
+	return tok, ok
+}
+
+func (c *Client) ClearMintedToken(keyID string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	delete(c.mintedTokens, keyID)
+}
+
+func (c *Client) RecordSupersededKey(newKeyID, oldKeyID string, isBoard bool, agentID string) {
+	if oldKeyID == "" || oldKeyID == newKeyID {
+		return
+	}
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	c.supersededKeys[newKeyID] = supersededKeyRecord{
+		oldKeyID: oldKeyID,
+		isBoard:  isBoard,
+		agentID:  agentID,
+	}
+}
+
+func (c *Client) MarkTokenDelivered(keyID string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	c.deliveredTokens[keyID] = true
+}
+
+func (c *Client) MarkTokenDeliveredByValue(token string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	for keyID, tok := range c.mintedTokens {
+		if tok == token {
+			c.deliveredTokens[keyID] = true
+		}
+	}
+}
+
+func (c *Client) IsTokenDelivered(keyID string) bool {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	return c.deliveredTokens[keyID]
+}
+
+func (c *Client) ConfirmDelivery(ctx context.Context, keyID string) error {
+	c.credMu.Lock()
+	c.deliveredTokens[keyID] = true
+	record, hasSuperseded := c.supersededKeys[keyID]
+	delete(c.supersededKeys, keyID)
+	c.credMu.Unlock()
+
+	if hasSuperseded {
+		if record.isBoard {
+			return c.RevokeBoardKey(ctx, record.oldKeyID)
+		}
+		return c.RevokeAgentKey(ctx, record.agentID, record.oldKeyID)
+	}
+	return nil
+}
+
+func (c *Client) ReconcileFailedDelivery(ctx context.Context, keyID string) error {
+	c.credMu.Lock()
+	isDelivered := c.deliveredTokens[keyID]
+	delete(c.supersededKeys, keyID)
+	delete(c.mintedTokens, keyID)
+	c.credMu.Unlock()
+
+	if !isDelivered && keyID != "" {
+		_ = c.RevokeBoardKey(ctx, keyID)
+	}
+	return nil
+}
+
+func (c *Client) ReconcileFailedAgentKeyDelivery(ctx context.Context, agentID, keyID string) error {
+	c.credMu.Lock()
+	isDelivered := c.deliveredTokens[keyID]
+	delete(c.supersededKeys, keyID)
+	delete(c.mintedTokens, keyID)
+	c.credMu.Unlock()
+
+	if !isDelivered && keyID != "" {
+		_ = c.RevokeAgentKey(ctx, agentID, keyID)
+	}
+	return nil
 }
 
 func extractItems(raw interface{}, key string) []map[string]interface{} {
@@ -1262,6 +1435,9 @@ func (c *Client) CreateSecret(ctx context.Context, companyID, name, description,
 		resp.CompanyID = companyID
 	}
 	resp.Value = value
+	if strings.TrimSpace(value) != "" {
+		c.MarkTokenDeliveredByValue(value)
+	}
 	return &resp, nil
 }
 
@@ -1300,6 +1476,9 @@ func (c *Client) RotateSecret(ctx context.Context, secretID, value string) (*Pap
 		return nil, err
 	}
 	resp.Value = value
+	if strings.TrimSpace(value) != "" {
+		c.MarkTokenDeliveredByValue(value)
+	}
 	return &resp, nil
 }
 
@@ -1411,14 +1590,71 @@ func (c *Client) UpdateAgentInstructionsFile(ctx context.Context, agentID, fileP
 }
 
 // Agent Keys
-func (c *Client) CreateAgentKey(ctx context.Context, agentID, name string) (*PaperclipAgentKey, error) {
+func (c *Client) CreateAgentKey(ctx context.Context, agentID, name string, scope *AgentKeyScope) (*PaperclipAgentKey, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent ID is required")
+	}
 	payload := map[string]interface{}{"name": name}
+	if scope != nil {
+		payload["scope"] = scope
+	}
 	var resp PaperclipAgentKey
 	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/agents/%s/keys", url.PathEscape(agentID)), payload, &resp); err != nil {
 		return nil, err
 	}
-	resp.AgentID = agentID
+	if resp.AgentID == "" {
+		resp.AgentID = agentID
+	}
 	return &resp, nil
+}
+
+func (c *Client) GetAgentKey(ctx context.Context, agentID, keyID string) (*PaperclipAgentKey, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent ID is required")
+	}
+	keyID = strings.TrimSpace(keyID)
+	if keyID == "" {
+		return nil, errors.New("key ID is required")
+	}
+	var keys []PaperclipAgentKey
+	reqPath := fmt.Sprintf("/api/agents/%s/keys", url.PathEscape(agentID))
+	if err := c.paperclipRequest(ctx, http.MethodGet, reqPath, nil, &keys); err != nil {
+		return nil, err
+	}
+	for _, key := range keys {
+		if key.ID == keyID {
+			if key.RevokedAt != nil && *key.RevokedAt != "" {
+				return nil, ErrNotFound
+			}
+			if key.AgentID == "" {
+				key.AgentID = agentID
+			}
+			return &key, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (c *Client) RevokeAgentKey(ctx context.Context, agentID, keyID string) error {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return errors.New("agent ID is required")
+	}
+	keyID = strings.TrimSpace(keyID)
+	if keyID == "" {
+		return errors.New("key ID is required")
+	}
+	reqPath := fmt.Sprintf("/api/agents/%s/keys/%s", url.PathEscape(agentID), url.PathEscape(keyID))
+	err := c.paperclipRequest(ctx, http.MethodDelete, reqPath, nil, nil)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // Tool Applications

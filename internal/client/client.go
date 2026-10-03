@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -41,10 +42,21 @@ func (e *APIError) Is(target error) bool {
 	return false
 }
 
+type supersededKeyRecord struct {
+	oldKeyID string
+	isBoard  bool
+	agentID  string
+}
+
 type Client struct {
 	Endpoint   string
 	Token      string
 	HTTPClient *http.Client
+
+	credMu          sync.RWMutex
+	mintedTokens    map[string]string
+	deliveredTokens map[string]bool
+	supersededKeys  map[string]supersededKeyRecord
 }
 
 type HealthResponse struct {
@@ -67,6 +79,9 @@ func NewClient(endpoint, token string) (*Client, error) {
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
+		mintedTokens:    make(map[string]string),
+		deliveredTokens: make(map[string]bool),
+		supersededKeys:  make(map[string]supersededKeyRecord),
 	}, nil
 }
 

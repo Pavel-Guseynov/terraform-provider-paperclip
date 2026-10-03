@@ -504,8 +504,8 @@ func TestCreateBoardKey(t *testing.T) {
 		}))
 		defer server.Close()
 
-		cli, _ := NewClient(server.URL, "stale-token")
-		key, err := cli.CreateBoardKey(context.Background(), "Harness OpenTofu")
+		cli, _ := NewClient(server.URL, "")
+		key, err := cli.CreateBoardKey(context.Background(), "Harness OpenTofu", nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -519,6 +519,7 @@ func TestCreateBoardKey(t *testing.T) {
 		approval  string
 		identity  string
 	}{
+		"challenge failure":     {challenge: "error"},
 		"incomplete challenge": {challenge: `{}`},
 		"rejected approval": {
 			challenge: `{"id":"challenge-1","token":"secret","boardApiToken":"board"}`,
@@ -536,6 +537,10 @@ func TestCreateBoardKey(t *testing.T) {
 				w.Header().Set("Content-Type", "application/json")
 				switch r.URL.Path {
 				case "/api/cli-auth/challenges":
+					if fixture.challenge == "error" {
+						http.Error(w, "server error", 500)
+						return
+					}
 					_, _ = w.Write([]byte(fixture.challenge))
 				case "/api/cli-auth/challenges/challenge-1/approve":
 					_, _ = w.Write([]byte(fixture.approval))
@@ -545,7 +550,7 @@ func TestCreateBoardKey(t *testing.T) {
 			}))
 			defer server.Close()
 			cli, _ := NewClient(server.URL, "")
-			if _, err := cli.CreateBoardKey(context.Background(), "Harness OpenTofu"); err == nil {
+			if _, err := cli.CreateBoardKey(context.Background(), "Harness OpenTofu", nil, ""); err == nil {
 				t.Fatal("expected board key creation failure")
 			}
 		})
@@ -1127,7 +1132,7 @@ func TestPaperclipClientCRUD(t *testing.T) {
 	}
 
 	// 8. Agent Key
-	key, err := cli.CreateAgentKey(ctx, "agent-123", "harness-mcp")
+	key, err := cli.CreateAgentKey(ctx, "agent-123", "harness-mcp", nil)
 	if err != nil || key.ID != "key-123" {
 		t.Fatalf("CreateAgentKey failed: %v", err)
 	}
