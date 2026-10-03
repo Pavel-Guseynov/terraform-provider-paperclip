@@ -1075,29 +1075,25 @@ func TestProviderStructure(t *testing.T) {
 }
 
 func TestPaperclipBoardKeyEphemeralResource(t *testing.T) {
+	t.Setenv("PAPERCLIP_SCRATCH_DIR", t.TempDir())
 	ctx := context.Background()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		switch req.URL.Path {
-		case "/api/cli-auth/challenges":
-			_, _ = w.Write([]byte(`{"id":"challenge-1","token":"challenge","boardApiToken":"pcp_board_value"}`))
-		case "/api/cli-auth/challenges/challenge-1/approve":
-			_, _ = w.Write([]byte(`{"approved":true,"status":"approved","keyId":"key-1"}`))
-		case "/api/cli-auth/me":
-			_, _ = w.Write([]byte(`{"source":"board_key","keyId":"key-1"}`))
-		default:
-			w.WriteHeader(http.StatusNotFound)
+		if strings.HasPrefix(req.URL.Path, "/api/board-api-keys/") && req.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+			return
 		}
+		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
-	cli, _ := client.NewClient(server.URL, "")
+	cli, _ := client.NewClient(server.URL, "test-token")
 
 	r := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
 	var schemaResp ephemeral.SchemaResponse
 	r.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
 	model := PaperclipBoardKeyEphemeralResourceModel{
-		Name: types.StringValue("Harness OpenTofu"), Activation: types.StringValue("apply-activation"),
-		KeyID: types.StringNull(), Token: types.StringNull(),
+		KeyID: types.StringValue("key-1"),
 	}
 	tmpState := tfsdk.State{Schema: schemaResp.Schema}
 	if diags := tmpState.Set(ctx, &model); diags.HasError() {
@@ -1128,6 +1124,17 @@ func TestPaperclipBoardKeyEphemeralResource(t *testing.T) {
 		t.Fatalf("configure failed: %v", configure.Diagnostics)
 	}
 
+	// Unavailable token fails with error diagnostic
+	var unavailableOpen ephemeral.OpenResponse
+	unavailableOpen.Result = tfsdk.EphemeralResultData{Raw: tmpState.Raw, Schema: schemaResp.Schema}
+	r.Open(ctx, request, &unavailableOpen)
+	if !unavailableOpen.Diagnostics.HasError() {
+		t.Fatal("expected unavailable token to fail")
+	}
+
+	// Register minted token
+	cli.RegisterMintedToken("key-1", "pcp_board_value")
+
 	var opened ephemeral.OpenResponse
 	opened.Result = tfsdk.EphemeralResultData{Raw: tmpState.Raw, Schema: schemaResp.Schema}
 	r.Open(ctx, request, &opened)
@@ -1138,23 +1145,47 @@ func TestPaperclipBoardKeyEphemeralResource(t *testing.T) {
 	if diags := opened.Result.Get(ctx, &result); diags.HasError() {
 		t.Fatalf("read result failed: %v", diags)
 	}
-	if result.KeyID.ValueString() != "key-1" || result.Token.ValueString() != "pcp_board_value" || result.Activation.ValueString() != "apply-activation" {
+	if result.KeyID.ValueString() != "key-1" || result.Token.ValueString() != "pcp_board_value" {
 		t.Fatalf("unexpected ephemeral result: %#v", result)
+	}
+
+	// Close confirms delivery
+	var closeResp ephemeral.CloseResponse
+	r.Close(ctx, ephemeral.CloseRequest{}, &closeResp)
+	if closeResp.Diagnostics.HasError() {
+		t.Fatalf("close failed: %v", closeResp.Diagnostics)
+	}
+	if !cli.IsTokenDelivered("key-1") {
+		t.Fatal("expected key-1 marked delivered after close")
+	}
+
+	// Re-opening after delivery returns unknown token without error
+	var deliveredOpen ephemeral.OpenResponse
+	deliveredOpen.Result = tfsdk.EphemeralResultData{Raw: tmpState.Raw, Schema: schemaResp.Schema}
+	r.Open(ctx, request, &deliveredOpen)
+	if deliveredOpen.Diagnostics.HasError() {
+		t.Fatalf("delivered open failed: %v", deliveredOpen.Diagnostics)
+	}
+	var deliveredResult PaperclipBoardKeyEphemeralResourceModel
+	if diags := deliveredOpen.Result.Get(ctx, &deliveredResult); diags.HasError() {
+		t.Fatalf("read delivered result failed: %v", diags)
+	}
+	if !deliveredResult.Token.IsNull() {
+		t.Fatalf("expected null token after delivery, got %v", deliveredResult.Token)
 	}
 }
 
 func TestPaperclipAgentKeyEphemeralResource(t *testing.T) {
+	t.Setenv("PAPERCLIP_SCRATCH_DIR", t.TempDir())
 	ctx := context.Background()
-	responseStatus := http.StatusOK
-	responseBody := `{"id":"key-1","name":"harness-opentofu-runtime","token":"pcp_agent_value"}`
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if req.URL.Path != "/api/agents/agent-1/keys" || req.Method != http.MethodPost {
-			w.WriteHeader(http.StatusNotFound)
+		if strings.HasPrefix(req.URL.Path, "/api/agents/") && req.Method == http.MethodDelete {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
 			return
 		}
-		w.WriteHeader(responseStatus)
-		_, _ = w.Write([]byte(responseBody))
+		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
 	cli, _ := client.NewClient(server.URL, "board-token")
@@ -1163,8 +1194,7 @@ func TestPaperclipAgentKeyEphemeralResource(t *testing.T) {
 	var schemaResp ephemeral.SchemaResponse
 	r.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
 	model := PaperclipAgentKeyEphemeralResourceModel{
-		AgentID: types.StringValue("agent-1"), Name: types.StringValue("harness-opentofu-runtime"),
-		Activation: types.StringValue("apply-activation"), KeyID: types.StringNull(), Token: types.StringNull(),
+		KeyID: types.StringValue("key-1"),
 	}
 	tmpState := tfsdk.State{Schema: schemaResp.Schema}
 	if diags := tmpState.Set(ctx, &model); diags.HasError() {
@@ -1199,6 +1229,16 @@ func TestPaperclipAgentKeyEphemeralResource(t *testing.T) {
 		t.Fatalf("configure failed: %v", configure.Diagnostics)
 	}
 
+	// Unavailable token fails with error diagnostic
+	unavailableOpen := newResponse()
+	r.Open(ctx, request, &unavailableOpen)
+	if !unavailableOpen.Diagnostics.HasError() {
+		t.Fatal("expected unavailable token to fail")
+	}
+
+	// Register minted token
+	cli.RegisterMintedToken("key-1", "pcp_agent_value")
+
 	opened := newResponse()
 	r.Open(ctx, request, &opened)
 	if opened.Diagnostics.HasError() {
@@ -1208,23 +1248,32 @@ func TestPaperclipAgentKeyEphemeralResource(t *testing.T) {
 	if diags := opened.Result.Get(ctx, &result); diags.HasError() {
 		t.Fatalf("read result failed: %v", diags)
 	}
-	if result.KeyID.ValueString() != "key-1" || result.Token.ValueString() != "pcp_agent_value" || result.Activation.ValueString() != "apply-activation" {
+	if result.KeyID.ValueString() != "key-1" || result.Token.ValueString() != "pcp_agent_value" {
 		t.Fatalf("unexpected ephemeral result: %#v", result)
 	}
 
-	responseBody = `{"id":"key-2","name":"harness-opentofu-runtime"}`
-	missingBearer := newResponse()
-	r.Open(ctx, request, &missingBearer)
-	if !missingBearer.Diagnostics.HasError() {
-		t.Fatal("missing bearer token must fail")
+	// Close confirms delivery
+	var closeResp ephemeral.CloseResponse
+	r.Close(ctx, ephemeral.CloseRequest{}, &closeResp)
+	if closeResp.Diagnostics.HasError() {
+		t.Fatalf("close failed: %v", closeResp.Diagnostics)
+	}
+	if !cli.IsTokenDelivered("key-1") {
+		t.Fatal("expected key-1 marked delivered after close")
 	}
 
-	responseStatus = http.StatusInternalServerError
-	responseBody = `{"error":"failed"}`
-	failedCreate := newResponse()
-	r.Open(ctx, request, &failedCreate)
-	if !failedCreate.Diagnostics.HasError() {
-		t.Fatal("agent key API failure must fail")
+	// Re-opening after delivery returns unknown token without error
+	deliveredOpen := newResponse()
+	r.Open(ctx, request, &deliveredOpen)
+	if deliveredOpen.Diagnostics.HasError() {
+		t.Fatalf("delivered open failed: %v", deliveredOpen.Diagnostics)
+	}
+	var deliveredResult PaperclipAgentKeyEphemeralResourceModel
+	if diags := deliveredOpen.Result.Get(ctx, &deliveredResult); diags.HasError() {
+		t.Fatalf("read delivered result failed: %v", diags)
+	}
+	if !deliveredResult.Token.IsNull() {
+		t.Fatalf("expected null token after delivery, got %v", deliveredResult.Token)
 	}
 }
 

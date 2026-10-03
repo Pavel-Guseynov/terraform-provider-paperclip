@@ -57,6 +57,8 @@ type Client struct {
 	mintedTokens    map[string]string
 	deliveredTokens map[string]bool
 	supersededKeys  map[string]supersededKeyRecord
+	openedBoardKeys []string
+	openedAgentKeys []string
 }
 
 type HealthResponse struct {
@@ -73,7 +75,7 @@ func NewClient(endpoint, token string) (*Client, error) {
 	if _, err := url.ParseRequestURI(endpoint); err != nil {
 		return nil, fmt.Errorf("invalid endpoint URL: %w", err)
 	}
-	return &Client{
+	c := &Client{
 		Endpoint: endpoint,
 		Token:    token,
 		HTTPClient: &http.Client{
@@ -82,7 +84,9 @@ func NewClient(endpoint, token string) (*Client, error) {
 		mintedTokens:    make(map[string]string),
 		deliveredTokens: make(map[string]bool),
 		supersededKeys:  make(map[string]supersededKeyRecord),
-	}, nil
+	}
+	c.loadDeliveredTokens()
+	return c, nil
 }
 
 func (c *Client) Health(ctx context.Context) (*HealthResponse, error) {

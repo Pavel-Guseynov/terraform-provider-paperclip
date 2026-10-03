@@ -10,6 +10,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -947,10 +949,18 @@ func (c *Client) RevokeBoardKey(ctx context.Context, keyID string) error {
 	err := c.paperclipRequest(ctx, http.MethodDelete, reqPath, nil, nil)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
+			c.credMu.Lock()
+			delete(c.deliveredTokens, keyID)
+			c.credMu.Unlock()
+			c.persistDeliveredTokens()
 			return nil
 		}
 		return err
 	}
+	c.credMu.Lock()
+	delete(c.deliveredTokens, keyID)
+	c.credMu.Unlock()
+	c.persistDeliveredTokens()
 	return nil
 }
 
@@ -986,20 +996,83 @@ func (c *Client) RecordSupersededKey(newKeyID, oldKeyID string, isBoard bool, ag
 	}
 }
 
-func (c *Client) MarkTokenDelivered(keyID string) {
+func (c *Client) PushOpenedBoardKey(keyID string) {
 	c.credMu.Lock()
 	defer c.credMu.Unlock()
-	c.deliveredTokens[keyID] = true
+	c.openedBoardKeys = append(c.openedBoardKeys, keyID)
 }
 
-func (c *Client) MarkTokenDeliveredByValue(token string) {
+func (c *Client) PopOpenedBoardKey() string {
 	c.credMu.Lock()
 	defer c.credMu.Unlock()
-	for keyID, tok := range c.mintedTokens {
-		if tok == token {
-			c.deliveredTokens[keyID] = true
+	if len(c.openedBoardKeys) == 0 {
+		return ""
+	}
+	keyID := c.openedBoardKeys[len(c.openedBoardKeys)-1]
+	c.openedBoardKeys = c.openedBoardKeys[:len(c.openedBoardKeys)-1]
+	return keyID
+}
+
+func (c *Client) PushOpenedAgentKey(keyID string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	c.openedAgentKeys = append(c.openedAgentKeys, keyID)
+}
+
+func (c *Client) PopOpenedAgentKey() string {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	if len(c.openedAgentKeys) == 0 {
+		return ""
+	}
+	keyID := c.openedAgentKeys[len(c.openedAgentKeys)-1]
+	c.openedAgentKeys = c.openedAgentKeys[:len(c.openedAgentKeys)-1]
+	return keyID
+}
+
+func deliveryStateFilePath() string {
+	if dir := os.Getenv("PAPERCLIP_SCRATCH_DIR"); dir != "" {
+		return filepath.Join(dir, ".paperclip_delivered_keys.json")
+	}
+	return ".paperclip_delivered_keys.json"
+}
+
+func (c *Client) loadDeliveredTokens() {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	data, err := os.ReadFile(deliveryStateFilePath())
+	if err != nil {
+		return
+	}
+	var list []string
+	if err := json.Unmarshal(data, &list); err == nil {
+		for _, id := range list {
+			c.deliveredTokens[id] = true
 		}
 	}
+}
+
+func (c *Client) persistDeliveredTokens() {
+	c.credMu.RLock()
+	var list []string
+	for id, delivered := range c.deliveredTokens {
+		if delivered {
+			list = append(list, id)
+		}
+	}
+	c.credMu.RUnlock()
+
+	data, err := json.Marshal(list)
+	if err == nil {
+		_ = os.WriteFile(deliveryStateFilePath(), data, 0o600)
+	}
+}
+
+func (c *Client) MarkTokenDelivered(keyID string) {
+	c.credMu.Lock()
+	c.deliveredTokens[keyID] = true
+	c.credMu.Unlock()
+	c.persistDeliveredTokens()
 }
 
 func (c *Client) IsTokenDelivered(keyID string) bool {
@@ -1011,9 +1084,11 @@ func (c *Client) IsTokenDelivered(keyID string) bool {
 func (c *Client) ConfirmDelivery(ctx context.Context, keyID string) error {
 	c.credMu.Lock()
 	c.deliveredTokens[keyID] = true
+	delete(c.mintedTokens, keyID)
 	record, hasSuperseded := c.supersededKeys[keyID]
 	delete(c.supersededKeys, keyID)
 	c.credMu.Unlock()
+	c.persistDeliveredTokens()
 
 	if hasSuperseded {
 		if record.isBoard {
@@ -1029,10 +1104,12 @@ func (c *Client) ReconcileFailedDelivery(ctx context.Context, keyID string) erro
 	isDelivered := c.deliveredTokens[keyID]
 	delete(c.supersededKeys, keyID)
 	delete(c.mintedTokens, keyID)
+	delete(c.deliveredTokens, keyID)
 	c.credMu.Unlock()
+	c.persistDeliveredTokens()
 
 	if !isDelivered && keyID != "" {
-		_ = c.RevokeBoardKey(ctx, keyID)
+		return c.RevokeBoardKey(ctx, keyID)
 	}
 	return nil
 }
@@ -1042,10 +1119,12 @@ func (c *Client) ReconcileFailedAgentKeyDelivery(ctx context.Context, agentID, k
 	isDelivered := c.deliveredTokens[keyID]
 	delete(c.supersededKeys, keyID)
 	delete(c.mintedTokens, keyID)
+	delete(c.deliveredTokens, keyID)
 	c.credMu.Unlock()
+	c.persistDeliveredTokens()
 
-	if !isDelivered && keyID != "" {
-		_ = c.RevokeAgentKey(ctx, agentID, keyID)
+	if !isDelivered && keyID != "" && agentID != "" {
+		return c.RevokeAgentKey(ctx, agentID, keyID)
 	}
 	return nil
 }
@@ -1435,9 +1514,6 @@ func (c *Client) CreateSecret(ctx context.Context, companyID, name, description,
 		resp.CompanyID = companyID
 	}
 	resp.Value = value
-	if strings.TrimSpace(value) != "" {
-		c.MarkTokenDeliveredByValue(value)
-	}
 	return &resp, nil
 }
 
@@ -1476,9 +1552,6 @@ func (c *Client) RotateSecret(ctx context.Context, secretID, value string) (*Pap
 		return nil, err
 	}
 	resp.Value = value
-	if strings.TrimSpace(value) != "" {
-		c.MarkTokenDeliveredByValue(value)
-	}
 	return &resp, nil
 }
 
@@ -1650,10 +1723,18 @@ func (c *Client) RevokeAgentKey(ctx context.Context, agentID, keyID string) erro
 	err := c.paperclipRequest(ctx, http.MethodDelete, reqPath, nil, nil)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
+			c.credMu.Lock()
+			delete(c.deliveredTokens, keyID)
+			c.credMu.Unlock()
+			c.persistDeliveredTokens()
 			return nil
 		}
 		return err
 	}
+	c.credMu.Lock()
+	delete(c.deliveredTokens, keyID)
+	c.credMu.Unlock()
+	c.persistDeliveredTokens()
 	return nil
 }
 

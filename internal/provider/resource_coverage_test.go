@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
 func TestProviderInvalidEndpointConfigure(t *testing.T) {
@@ -738,7 +739,7 @@ func TestPolicyAndSecretAndConnectionEdgeCases(t *testing.T) {
 		t.Fatalf("unexpected error on policy update: %v", updPolResp.Diagnostics)
 	}
 
-	// 2. Secret ValidateConfig error (rotation without value)
+	// 2. Secret ValidateConfig error (value without rotation)
 	rSec := NewPaperclipSecretResource().(*PaperclipSecretResource)
 	var secSchemaResp resource.SchemaResponse
 	rSec.Schema(ctx, resource.SchemaRequest{}, &secSchemaResp)
@@ -746,12 +747,90 @@ func TestPolicyAndSecretAndConnectionEdgeCases(t *testing.T) {
 	_ = secPlanBad.Set(ctx, &PaperclipSecretResourceModel{
 		CompanyID: types.StringValue("comp-1"),
 		Name:      types.StringValue("s1"),
-		Rotation:  types.StringValue("rev-1"),
+		Value:     types.StringValue("secret-without-rot"),
 	})
 	var valResp resource.ValidateConfigResponse
 	rSec.ValidateConfig(ctx, resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: secSchemaResp.Schema, Raw: secPlanBad.Raw}}, &valResp)
 	if !valResp.Diagnostics.HasError() {
-		t.Fatal("expected validation error on rotation without value")
+		t.Fatal("expected validation error on value without rotation")
+	}
+
+	// Secret ModifyPlan: destroy
+	var modDestroyResp resource.ModifyPlanResponse
+	rSec.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan: tfsdk.Plan{Schema: secSchemaResp.Schema, Raw: tftypes.NewValue(tftypes.String, nil)},
+	}, &modDestroyResp)
+	if modDestroyResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on secret destroy modify plan: %v", modDestroyResp.Diagnostics)
+	}
+
+	// Secret ModifyPlan: create with rotation without value
+	secPlanRotOnly := tfsdk.Plan{Schema: secSchemaResp.Schema}
+	_ = secPlanRotOnly.Set(ctx, &PaperclipSecretResourceModel{
+		CompanyID: types.StringValue("comp-1"),
+		Name:      types.StringValue("s1"),
+		Rotation:  types.StringValue("rev-1"),
+	})
+	var modCreateResp resource.ModifyPlanResponse
+	rSec.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:   secPlanRotOnly,
+		Config: tfsdk.Config{Schema: secSchemaResp.Schema, Raw: secPlanRotOnly.Raw},
+		State:  tfsdk.State{Schema: secSchemaResp.Schema, Raw: tftypes.NewValue(tftypes.String, nil)},
+	}, &modCreateResp)
+	if !modCreateResp.Diagnostics.HasError() {
+		t.Fatal("expected error on create with rotation without value in ModifyPlan")
+	}
+
+	// Secret ModifyPlan: update with rotation change without value
+	secStateRot1 := tfsdk.State{Schema: secSchemaResp.Schema}
+	_ = secStateRot1.Set(ctx, &PaperclipSecretResourceModel{
+		CompanyID: types.StringValue("comp-1"),
+		Name:      types.StringValue("s1"),
+		Rotation:  types.StringValue("rev-1"),
+	})
+	secPlanRot2 := tfsdk.Plan{Schema: secSchemaResp.Schema}
+	_ = secPlanRot2.Set(ctx, &PaperclipSecretResourceModel{
+		CompanyID: types.StringValue("comp-1"),
+		Name:      types.StringValue("s1"),
+		Rotation:  types.StringValue("rev-2"),
+	})
+	var modUpdRotResp resource.ModifyPlanResponse
+	rSec.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:   secPlanRot2,
+		Config: tfsdk.Config{Schema: secSchemaResp.Schema, Raw: secPlanRot2.Raw},
+		State:  secStateRot1,
+	}, &modUpdRotResp)
+	if !modUpdRotResp.Diagnostics.HasError() {
+		t.Fatal("expected error on update with rotation change without value in ModifyPlan")
+	}
+
+	// Secret ModifyPlan: update with unchanged rotation and null value (delivered ephemeral token)
+	var modUpdSameResp resource.ModifyPlanResponse
+	rSec.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:   secPlanRotOnly,
+		Config: tfsdk.Config{Schema: secSchemaResp.Schema, Raw: secPlanRotOnly.Raw},
+		State:  secStateRot1,
+	}, &modUpdSameResp)
+	if modUpdSameResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on unchanged rotation with null value: %v", modUpdSameResp.Diagnostics)
+	}
+
+	// Secret ModifyPlan: update with unchanged rotation and configured value
+	secPlanRot1WithVal := tfsdk.Plan{Schema: secSchemaResp.Schema}
+	_ = secPlanRot1WithVal.Set(ctx, &PaperclipSecretResourceModel{
+		CompanyID: types.StringValue("comp-1"),
+		Name:      types.StringValue("s1"),
+		Rotation:  types.StringValue("rev-1"),
+		Value:     types.StringValue("new-val"),
+	})
+	var modUpdValResp resource.ModifyPlanResponse
+	rSec.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:   secPlanRot1WithVal,
+		Config: tfsdk.Config{Schema: secSchemaResp.Schema, Raw: secPlanRot1WithVal.Raw},
+		State:  secStateRot1,
+	}, &modUpdValResp)
+	if modUpdValResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on unchanged rotation with value: %v", modUpdValResp.Diagnostics)
 	}
 
 	// Secret Rotate 500 error in Update

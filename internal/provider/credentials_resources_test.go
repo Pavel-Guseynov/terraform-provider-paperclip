@@ -3,8 +3,10 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,7 @@ import (
 )
 
 func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
+	t.Setenv("PAPERCLIP_SCRATCH_DIR", t.TempDir())
 	ctx := context.Background()
 	expFuture := time.Now().Add(24 * time.Hour).Truncate(time.Second)
 
@@ -178,9 +181,25 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	}
 	var createdModel PaperclipBoardKeyResourceModel
 	_ = createResp.State.Get(ctx, &createdModel)
-	if createdModel.ID.ValueString() != "bk-1" || createdModel.DeliveryState.ValueString() != "delivered" {
+	if createdModel.ID.ValueString() != "bk-1" || createdModel.DeliveryState.ValueString() != "pending" {
 		t.Fatalf("unexpected created model: %+v", createdModel)
 	}
+
+	// Read before delivery confirmation: remains pending
+	var preDelReadResp resource.ReadResponse
+	preDelReadResp.State = createResp.State
+	r.Read(ctx, resource.ReadRequest{State: createResp.State}, &preDelReadResp)
+	if preDelReadResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected pre-delivery read error: %v", preDelReadResp.Diagnostics)
+	}
+	var preDelModel PaperclipBoardKeyResourceModel
+	_ = preDelReadResp.State.Get(ctx, &preDelModel)
+	if preDelModel.DeliveryState.ValueString() != "pending" {
+		t.Fatalf("expected delivery_state to be pending before delivery, got %s", preDelModel.DeliveryState.ValueString())
+	}
+
+	// Confirm delivery
+	r.client.MarkTokenDelivered("bk-1")
 
 	// Create - without expires_at
 	noExpModel := PaperclipBoardKeyResourceModel{
@@ -197,13 +216,18 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 		t.Fatalf("create without expires_at failed: %v", noExpResp.Diagnostics)
 	}
 
-	// Read - Success
+	// Read - Success (transitions to delivered)
 	var readResp resource.ReadResponse
 	readResp.State = createResp.State
 	r.Read(ctx, resource.ReadRequest{State: createResp.State}, &readResp)
 	if readResp.Diagnostics.HasError() {
 		t.Fatalf("unexpected read error: %v", readResp.Diagnostics)
 	}
+	_ = readResp.State.Get(ctx, &createdModel)
+	if createdModel.DeliveryState.ValueString() != "delivered" {
+		t.Fatalf("expected delivery_state to transition to delivered, got %s", createdModel.DeliveryState.ValueString())
+	}
+	createResp.State = readResp.State
 
 	// Read - ID only and nil expires_at
 	mockState.keys["bk-no-exp"] = client.PaperclipBoardKey{ID: "bk-no-exp", Name: "No Exp"}
@@ -267,6 +291,21 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 		t.Fatalf("unexpected error on unchanged update: %v", unchangedUpdateResp.Diagnostics)
 	}
 
+	// Update - Unchanged generation when token not delivered
+	undeliveredModel := createdModel
+	undeliveredModel.KeyID = types.StringValue("bk-undelivered")
+	undeliveredModel.ID = types.StringValue("bk-undelivered")
+	undeliveredPlan := tfsdk.Plan{Schema: schema}
+	_ = undeliveredPlan.Set(ctx, &undeliveredModel)
+	var undeliveredState tfsdk.State = tfsdk.State{Schema: schema}
+	_ = undeliveredState.Set(ctx, &undeliveredModel)
+	var undeliveredUpdateResp resource.UpdateResponse
+	undeliveredUpdateResp.State = tfsdk.State{Schema: schema}
+	r.Update(ctx, resource.UpdateRequest{Plan: undeliveredPlan, State: undeliveredState}, &undeliveredUpdateResp)
+	if undeliveredUpdateResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on undelivered update: %v", undeliveredUpdateResp.Diagnostics)
+	}
+
 	// Update - Changed generation: invalid date
 	rotInvalidModel := createdModel
 	rotInvalidModel.Generation = types.Int64Value(2)
@@ -304,8 +343,15 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	}
 	var rotState PaperclipBoardKeyResourceModel
 	_ = rotUpdateResp.State.Get(ctx, &rotState)
-	if rotState.ID.ValueString() != "bk-2" || !mockState.revokedKeys["bk-1"] {
-		t.Fatalf("expected bk-2 active and bk-1 revoked, got %+v (revoked: %v)", rotState, mockState.revokedKeys)
+	if rotState.ID.ValueString() != "bk-2" || mockState.revokedKeys["bk-1"] {
+		t.Fatalf("expected bk-2 active and bk-1 not revoked yet, got %+v (revoked: %v)", rotState, mockState.revokedKeys)
+	}
+	// Simulate ephemeral Close confirming delivery of bk-2
+	if err := r.client.ConfirmDelivery(ctx, "bk-2"); err != nil {
+		t.Fatalf("ConfirmDelivery failed: %v", err)
+	}
+	if !mockState.revokedKeys["bk-1"] {
+		t.Fatal("expected bk-1 revoked after ConfirmDelivery")
 	}
 
 	// Update - Changed generation without expires_at and with KeyID empty in state
@@ -380,6 +426,7 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 }
 
 func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
+	t.Setenv("PAPERCLIP_SCRATCH_DIR", t.TempDir())
 	ctx := context.Background()
 
 	mockState := struct {
@@ -644,9 +691,25 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	}
 	var createdModel PaperclipAgentKeyResourceModel
 	_ = createResp.State.Get(ctx, &createdModel)
-	if createdModel.ID.ValueString() != "ak-1" || createdModel.DeliveryState.ValueString() != "delivered" {
+	if createdModel.ID.ValueString() != "ak-1" || createdModel.DeliveryState.ValueString() != "pending" {
 		t.Fatalf("unexpected created agent key model: %+v", createdModel)
 	}
+
+	// Read before delivery confirmation: remains pending
+	var preDelReadResp resource.ReadResponse
+	preDelReadResp.State = createResp.State
+	r.Read(ctx, resource.ReadRequest{State: createResp.State}, &preDelReadResp)
+	if preDelReadResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected pre-delivery read error: %v", preDelReadResp.Diagnostics)
+	}
+	var preDelModel PaperclipAgentKeyResourceModel
+	_ = preDelReadResp.State.Get(ctx, &preDelModel)
+	if preDelModel.DeliveryState.ValueString() != "pending" {
+		t.Fatalf("expected delivery_state to be pending before delivery, got %s", preDelModel.DeliveryState.ValueString())
+	}
+
+	// Confirm delivery
+	r.client.MarkTokenDelivered("ak-1")
 
 	// Create - without scope
 	noScopeModel := PaperclipAgentKeyResourceModel{
@@ -666,13 +729,18 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 		t.Fatalf("create without scope failed: %v", noScopeResp.Diagnostics)
 	}
 
-	// Read - Success
+	// Read - Success (transitions to delivered)
 	var readResp resource.ReadResponse
 	readResp.State = createResp.State
 	r.Read(ctx, resource.ReadRequest{State: createResp.State}, &readResp)
 	if readResp.Diagnostics.HasError() {
 		t.Fatalf("unexpected read error: %v", readResp.Diagnostics)
 	}
+	_ = readResp.State.Get(ctx, &createdModel)
+	if createdModel.DeliveryState.ValueString() != "delivered" {
+		t.Fatalf("expected delivery_state to transition to delivered, got %s", createdModel.DeliveryState.ValueString())
+	}
+	createResp.State = readResp.State
 
 	// Read - ID only
 	idOnlyAgentState := tfsdk.State{Schema: schema}
@@ -736,6 +804,21 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 		t.Fatalf("unexpected error on unchanged update: %v", unchangedUpdateResp.Diagnostics)
 	}
 
+	// Update - Unchanged generation when token not delivered
+	undeliveredAgentModel := createdModel
+	undeliveredAgentModel.KeyID = types.StringValue("ak-undelivered")
+	undeliveredAgentModel.ID = types.StringValue("ak-undelivered")
+	undeliveredAgentPlan := tfsdk.Plan{Schema: schema}
+	_ = undeliveredAgentPlan.Set(ctx, &undeliveredAgentModel)
+	var undeliveredAgentState tfsdk.State = tfsdk.State{Schema: schema}
+	_ = undeliveredAgentState.Set(ctx, &undeliveredAgentModel)
+	var undeliveredAgentUpdateResp resource.UpdateResponse
+	undeliveredAgentUpdateResp.State = tfsdk.State{Schema: schema}
+	r.Update(ctx, resource.UpdateRequest{Plan: undeliveredAgentPlan, State: undeliveredAgentState}, &undeliveredAgentUpdateResp)
+	if undeliveredAgentUpdateResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on undelivered update: %v", undeliveredAgentUpdateResp.Diagnostics)
+	}
+
 	// Update - Changed generation: invalid scope
 	rotInvModel := createdModel
 	rotInvModel.Generation = types.Int64Value(2)
@@ -775,8 +858,15 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	}
 	var rotState PaperclipAgentKeyResourceModel
 	_ = rotUpdateResp.State.Get(ctx, &rotState)
-	if rotState.ID.ValueString() != "ak-2" || !mockState.revokedKeys["ak-1"] {
-		t.Fatalf("expected ak-2 active and ak-1 revoked, got %+v (revoked: %v)", rotState, mockState.revokedKeys)
+	if rotState.ID.ValueString() != "ak-2" || mockState.revokedKeys["ak-1"] {
+		t.Fatalf("expected ak-2 active and ak-1 not revoked yet, got %+v (revoked: %v)", rotState, mockState.revokedKeys)
+	}
+	// Simulate ephemeral Close confirming delivery of ak-2
+	if err := r.client.ConfirmDelivery(ctx, "ak-2"); err != nil {
+		t.Fatalf("ConfirmDelivery failed: %v", err)
+	}
+	if !mockState.revokedKeys["ak-1"] {
+		t.Fatal("expected ak-1 revoked after ConfirmDelivery")
 	}
 
 	// Update - Changed generation with KeyID empty in state
@@ -869,6 +959,7 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 }
 
 func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
+	t.Setenv("PAPERCLIP_SCRATCH_DIR", t.TempDir())
 	ctx := context.Background()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -888,34 +979,20 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 
 	cli, _ := client.NewClient(server.URL, "test-token")
 
-	t.Run("PaperclipBoardKeyEphemeralResource deferral, missing token, and unconfigured", func(t *testing.T) {
+	t.Run("PaperclipBoardKeyEphemeralResource deferral, missing token, unconfigured, and close", func(t *testing.T) {
 		r := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
 		var schemaResp ephemeral.SchemaResponse
 		r.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
 
-		// DeferralAllowed == true
+		// Unconfigured client
 		model := PaperclipBoardKeyEphemeralResourceModel{
-			Name:       types.StringValue("deferred-key"),
-			Activation: types.StringValue("act-1"),
-			KeyID:      types.StringValue("bk-defer"),
+			KeyID: types.StringValue("bk-defer"),
 		}
 		state := tfsdk.State{Schema: schemaResp.Schema}
 		_ = state.Set(ctx, &model)
 		req := ephemeral.OpenRequest{
 			Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: state.Raw},
-			ClientCapabilities: ephemeral.OpenClientCapabilities{
-				DeferralAllowed: true,
-			},
 		}
-		var openResp ephemeral.OpenResponse
-		openResp.Result = tfsdk.EphemeralResultData{Raw: state.Raw, Schema: schemaResp.Schema}
-		r.Open(ctx, req, &openResp)
-		if openResp.Deferred == nil {
-			t.Fatal("expected deferred response when DeferralAllowed is true")
-		}
-
-		// Unconfigured client
-		req.ClientCapabilities.DeferralAllowed = false
 		var unconfResp ephemeral.OpenResponse
 		unconfResp.Result = tfsdk.EphemeralResultData{Raw: state.Raw, Schema: schemaResp.Schema}
 		r.Open(ctx, req, &unconfResp)
@@ -930,14 +1007,22 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 			t.Fatal(confResp.Diagnostics)
 		}
 
-		// DeferralAllowed == false but token missing from client registry
+		// Configured client, missing token with DeferralAllowed == true -> deferred
+		req.ClientCapabilities.DeferralAllowed = true
+		var openResp ephemeral.OpenResponse
+		openResp.Result = tfsdk.EphemeralResultData{Raw: state.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, req, &openResp)
+		if openResp.Deferred == nil {
+			t.Fatal("expected deferred response when DeferralAllowed is true and token missing")
+		}
+
+		// DeferralAllowed == false but token missing from client registry -> error diagnostic
+		req.ClientCapabilities.DeferralAllowed = false
 		var missingResp ephemeral.OpenResponse
 		missingResp.Result = tfsdk.EphemeralResultData{Raw: state.Raw, Schema: schemaResp.Schema}
 		r.Open(ctx, req, &missingResp)
-		var missingModel PaperclipBoardKeyEphemeralResourceModel
-		_ = missingResp.Result.Get(ctx, &missingModel)
-		if missingModel.Token.ValueString() != "token-already-delivered" {
-			t.Fatalf("expected token to be token-already-delivered, got %s", missingModel.Token.ValueString())
+		if !missingResp.Diagnostics.HasError() {
+			t.Fatal("expected error when token is unavailable")
 		}
 
 		// Token present in client registry
@@ -948,37 +1033,81 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 		if hitResp.Diagnostics.HasError() {
 			t.Fatalf("unexpected error when token present: %v", hitResp.Diagnostics)
 		}
+
+		// Verify Close confirms delivery
+		var closeResp ephemeral.CloseResponse
+		r.Close(ctx, ephemeral.CloseRequest{}, &closeResp)
+		if closeResp.Diagnostics.HasError() {
+			t.Fatalf("unexpected error on close: %v", closeResp.Diagnostics)
+		}
+		if !cli.IsTokenDelivered("bk-defer") {
+			t.Fatal("expected bk-defer to be marked delivered after Close")
+		}
+
+		// Close with empty keyID is no-op
+		emptyRes := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
+		var emptyCloseResp ephemeral.CloseResponse
+		emptyRes.Close(ctx, ephemeral.CloseRequest{}, &emptyCloseResp)
+		if emptyCloseResp.Diagnostics.HasError() {
+			t.Fatal("expected no error on empty close")
+		}
+
+		// Close with error on ConfirmDelivery
+		failServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "server error", http.StatusInternalServerError)
+		}))
+		defer failServer.Close()
+		failCli, _ := client.NewClient(failServer.URL, "test-token")
+		failCli.RecordSupersededKey("bk-fail-new", "bk-fail-old", true, "")
+		failRes := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
+		failRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: failCli}, &confResp)
+		failRes.keyID = "bk-fail-new"
+		var failCloseResp ephemeral.CloseResponse
+		failRes.Close(ctx, ephemeral.CloseRequest{}, &failCloseResp)
+		if !failCloseResp.Diagnostics.HasError() {
+			t.Fatal("expected error diagnostic on failed close confirmation")
+		}
+
+		// KeyID empty / null
+		emptyKeyModel := PaperclipBoardKeyEphemeralResourceModel{
+			KeyID: types.StringNull(),
+		}
+		emptyState := tfsdk.State{Schema: schemaResp.Schema}
+		_ = emptyState.Set(ctx, &emptyKeyModel)
+		emptyReq := ephemeral.OpenRequest{
+			Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: emptyState.Raw},
+		}
+		var emptyKeyResp ephemeral.OpenResponse
+		emptyKeyResp.Result = tfsdk.EphemeralResultData{Raw: emptyState.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, emptyReq, &emptyKeyResp)
+		if !emptyKeyResp.Diagnostics.HasError() {
+			t.Fatal("expected error when key_id is empty")
+		}
+
+		// Empty KeyID with DeferralAllowed
+		emptyReq.ClientCapabilities.DeferralAllowed = true
+		var emptyDefResp ephemeral.OpenResponse
+		emptyDefResp.Result = tfsdk.EphemeralResultData{Raw: emptyState.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, emptyReq, &emptyDefResp)
+		if emptyDefResp.Deferred == nil {
+			t.Fatal("expected deferred response when key_id empty and DeferralAllowed true")
+		}
 	})
 
-	t.Run("PaperclipAgentKeyEphemeralResource deferral, missing token, and unconfigured", func(t *testing.T) {
+	t.Run("PaperclipAgentKeyEphemeralResource deferral, missing token, unconfigured, and close", func(t *testing.T) {
 		r := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
 		var schemaResp ephemeral.SchemaResponse
 		r.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
 
-		// DeferralAllowed == true
+		// Unconfigured client
 		model := PaperclipAgentKeyEphemeralResourceModel{
-			AgentID:    types.StringValue("ag-1"),
-			Name:       types.StringValue("deferred-agent-key"),
-			Activation: types.StringValue("act-1"),
-			KeyID:      types.StringValue("ak-defer"),
+			KeyID: types.StringValue("ak-defer"),
 		}
 		state := tfsdk.State{Schema: schemaResp.Schema}
 		_ = state.Set(ctx, &model)
 		req := ephemeral.OpenRequest{
 			Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: state.Raw},
-			ClientCapabilities: ephemeral.OpenClientCapabilities{
-				DeferralAllowed: true,
-			},
 		}
-		var openResp ephemeral.OpenResponse
-		openResp.Result = tfsdk.EphemeralResultData{Raw: state.Raw, Schema: schemaResp.Schema}
-		r.Open(ctx, req, &openResp)
-		if openResp.Deferred == nil {
-			t.Fatal("expected deferred response when DeferralAllowed is true")
-		}
-
-		// Unconfigured client
-		req.ClientCapabilities.DeferralAllowed = false
 		var unconfResp ephemeral.OpenResponse
 		unconfResp.Result = tfsdk.EphemeralResultData{Raw: state.Raw, Schema: schemaResp.Schema}
 		r.Open(ctx, req, &unconfResp)
@@ -993,14 +1122,22 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 			t.Fatal(confResp.Diagnostics)
 		}
 
-		// DeferralAllowed == false but token missing from client registry
+		// Configured client, missing token with DeferralAllowed == true -> deferred
+		req.ClientCapabilities.DeferralAllowed = true
+		var openResp ephemeral.OpenResponse
+		openResp.Result = tfsdk.EphemeralResultData{Raw: state.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, req, &openResp)
+		if openResp.Deferred == nil {
+			t.Fatal("expected deferred response when DeferralAllowed is true and token missing")
+		}
+
+		// DeferralAllowed == false but token missing from client registry -> error diagnostic
+		req.ClientCapabilities.DeferralAllowed = false
 		var missingResp ephemeral.OpenResponse
 		missingResp.Result = tfsdk.EphemeralResultData{Raw: state.Raw, Schema: schemaResp.Schema}
 		r.Open(ctx, req, &missingResp)
-		var missingModel PaperclipAgentKeyEphemeralResourceModel
-		_ = missingResp.Result.Get(ctx, &missingModel)
-		if missingModel.Token.ValueString() != "token-already-delivered" {
-			t.Fatalf("expected token to be token-already-delivered, got %s", missingModel.Token.ValueString())
+		if !missingResp.Diagnostics.HasError() {
+			t.Fatal("expected error when agent token is unavailable")
 		}
 
 		// Token present in client registry
@@ -1012,9 +1149,43 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 			t.Fatalf("unexpected error when agent token present: %v", hitResp.Diagnostics)
 		}
 
-		// KeyID is empty, missing agent_id
+		// Verify Close confirms delivery
+		var closeResp ephemeral.CloseResponse
+		r.Close(ctx, ephemeral.CloseRequest{}, &closeResp)
+		if closeResp.Diagnostics.HasError() {
+			t.Fatalf("unexpected error on close: %v", closeResp.Diagnostics)
+		}
+		if !cli.IsTokenDelivered("ak-defer") {
+			t.Fatal("expected ak-defer to be marked delivered after Close")
+		}
+
+		// Close with empty keyID is no-op
+		emptyRes := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
+		var emptyCloseResp ephemeral.CloseResponse
+		emptyRes.Close(ctx, ephemeral.CloseRequest{}, &emptyCloseResp)
+		if emptyCloseResp.Diagnostics.HasError() {
+			t.Fatal("expected no error on empty close")
+		}
+
+		// Close with error on ConfirmDelivery
+		failServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "server error", http.StatusInternalServerError)
+		}))
+		defer failServer.Close()
+		failCli, _ := client.NewClient(failServer.URL, "test-token")
+		failCli.RecordSupersededKey("ak-fail-new", "ak-fail-old", false, "agent-fail")
+		failRes := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
+		failRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: failCli}, &confResp)
+		failRes.keyID = "ak-fail-new"
+		var failCloseResp ephemeral.CloseResponse
+		failRes.Close(ctx, ephemeral.CloseRequest{}, &failCloseResp)
+		if !failCloseResp.Diagnostics.HasError() {
+			t.Fatal("expected error diagnostic on failed close confirmation")
+		}
+
+		// KeyID is empty / null
 		emptyKeyModel := PaperclipAgentKeyEphemeralResourceModel{
-			Name: types.StringValue("no-agent"),
+			KeyID: types.StringNull(),
 		}
 		emptyState := tfsdk.State{Schema: schemaResp.Schema}
 		_ = emptyState.Set(ctx, &emptyKeyModel)
@@ -1025,12 +1196,22 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 		emptyKeyResp.Result = tfsdk.EphemeralResultData{Raw: emptyState.Raw, Schema: schemaResp.Schema}
 		r.Open(ctx, emptyReq, &emptyKeyResp)
 		if !emptyKeyResp.Diagnostics.HasError() {
-			t.Fatal("expected error when agent_id is missing and key_id is empty")
+			t.Fatal("expected error when key_id is empty")
+		}
+
+		// Empty KeyID with DeferralAllowed
+		emptyReq.ClientCapabilities.DeferralAllowed = true
+		var emptyDefResp ephemeral.OpenResponse
+		emptyDefResp.Result = tfsdk.EphemeralResultData{Raw: emptyState.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, emptyReq, &emptyDefResp)
+		if emptyDefResp.Deferred == nil {
+			t.Fatal("expected deferred response when key_id empty and DeferralAllowed true")
 		}
 	})
 }
 
 func TestCredentialsResourcesModifyPlan(t *testing.T) {
+	t.Setenv("PAPERCLIP_SCRATCH_DIR", t.TempDir())
 	ctx := context.Background()
 
 	t.Run("board_key_modify_plan", func(t *testing.T) {
@@ -1095,6 +1276,27 @@ func TestCredentialsResourcesModifyPlan(t *testing.T) {
 			t.Fatal("expected key_id to remain known when generation unchanged")
 		}
 
+		// KeyID empty falls back to ID
+		mFallback := PaperclipBoardKeyResourceModel{
+			ID:         types.StringValue("bk-fallback"),
+			KeyID:      types.StringValue(""),
+			Name:       types.StringValue("bk"),
+			Generation: types.Int64Value(1),
+		}
+		var planFallback tfsdk.Plan = tfsdk.Plan{Schema: schema}
+		_ = planFallback.Set(ctx, &mFallback)
+		var stateFallback tfsdk.State = tfsdk.State{Schema: schema}
+		_ = stateFallback.Set(ctx, &mFallback)
+		var respFallback resource.ModifyPlanResponse
+		respFallback.Plan = planFallback
+		r.ModifyPlan(ctx, resource.ModifyPlanRequest{
+			Plan:  planFallback,
+			State: stateFallback,
+		}, &respFallback)
+		if respFallback.Diagnostics.HasError() {
+			t.Fatal(respFallback.Diagnostics)
+		}
+
 		// Changed generation
 		mChangedPlan := PaperclipBoardKeyResourceModel{
 			ID:         types.StringValue("bk-1"),
@@ -1117,6 +1319,76 @@ func TestCredentialsResourcesModifyPlan(t *testing.T) {
 		_ = respChanged.Plan.Get(ctx, &outChanged)
 		if !outChanged.KeyID.IsUnknown() || !outChanged.ID.IsUnknown() || !outChanged.DeliveryState.IsUnknown() {
 			t.Fatal("expected key_id, id, and delivery_state to be unknown when generation changed")
+		}
+
+		// Pending delivery state reconciliation
+		revokedBoardKeys := []string{}
+		reconcileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodDelete && r.URL.Path == "/api/board-api-keys/bk-pending" {
+				revokedBoardKeys = append(revokedBoardKeys, "bk-pending")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+			if r.Method == http.MethodDelete && r.URL.Path == "/api/board-api-keys/bk-err" {
+				http.Error(w, "server error", http.StatusInternalServerError)
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer reconcileServer.Close()
+
+		reconcileCli, _ := client.NewClient(reconcileServer.URL, "test-token")
+		r.client = reconcileCli
+
+		mPendingState := PaperclipBoardKeyResourceModel{
+			ID:            types.StringValue("bk-pending"),
+			KeyID:         types.StringValue("bk-pending"),
+			Name:          types.StringValue("bk"),
+			Generation:    types.Int64Value(1),
+			DeliveryState: types.StringValue("pending"),
+		}
+		var statePending tfsdk.State = tfsdk.State{Schema: schema}
+		_ = statePending.Set(ctx, &mPendingState)
+		var planPending tfsdk.Plan = tfsdk.Plan{Schema: schema}
+		_ = planPending.Set(ctx, &mPendingState)
+		var respPending resource.ModifyPlanResponse
+		respPending.Plan = planPending
+		r.ModifyPlan(ctx, resource.ModifyPlanRequest{
+			Plan:  planPending,
+			State: statePending,
+		}, &respPending)
+		if respPending.Diagnostics.HasError() {
+			t.Fatalf("unexpected error on pending modify plan: %v", respPending.Diagnostics)
+		}
+		var outPending PaperclipBoardKeyResourceModel
+		_ = respPending.Plan.Get(ctx, &outPending)
+		if !outPending.KeyID.IsUnknown() || !outPending.ID.IsUnknown() || !outPending.DeliveryState.IsUnknown() {
+			t.Fatal("expected key_id, id, and delivery_state unknown when pending delivery is unconfirmed")
+		}
+		if len(revokedBoardKeys) != 1 || revokedBoardKeys[0] != "bk-pending" {
+			t.Fatalf("expected bk-pending revoked, got %v", revokedBoardKeys)
+		}
+
+		// Reconcile failure error diagnostic
+		mErrState := PaperclipBoardKeyResourceModel{
+			ID:            types.StringValue("bk-err"),
+			KeyID:         types.StringValue("bk-err"),
+			Name:          types.StringValue("bk"),
+			Generation:    types.Int64Value(1),
+			DeliveryState: types.StringValue("pending"),
+		}
+		var stateErr tfsdk.State = tfsdk.State{Schema: schema}
+		_ = stateErr.Set(ctx, &mErrState)
+		var respErr resource.ModifyPlanResponse
+		respErr.Plan = planPending
+		r.ModifyPlan(ctx, resource.ModifyPlanRequest{
+			Plan:  planPending,
+			State: stateErr,
+		}, &respErr)
+		if !respErr.Diagnostics.HasError() {
+			t.Fatal("expected error diagnostic on failed reconcile")
 		}
 	})
 
@@ -1207,6 +1479,265 @@ func TestCredentialsResourcesModifyPlan(t *testing.T) {
 		if !outChanged.KeyID.IsUnknown() || !outChanged.ID.IsUnknown() || !outChanged.DeliveryState.IsUnknown() {
 			t.Fatal("expected key_id, id, and delivery_state to be unknown when generation changed")
 		}
+
+		// KeyID empty falls back to ID
+		mAgentFallback := PaperclipAgentKeyResourceModel{
+			ID:         types.StringValue("ak-fallback"),
+			KeyID:      types.StringValue(""),
+			AgentID:    types.StringValue("ag-1"),
+			Name:       types.StringValue("ak"),
+			Generation: types.Int64Value(1),
+		}
+		var planAgentFallback tfsdk.Plan = tfsdk.Plan{Schema: schema}
+		_ = planAgentFallback.Set(ctx, &mAgentFallback)
+		var stateAgentFallback tfsdk.State = tfsdk.State{Schema: schema}
+		_ = stateAgentFallback.Set(ctx, &mAgentFallback)
+		var respAgentFallback resource.ModifyPlanResponse
+		respAgentFallback.Plan = planAgentFallback
+		r.ModifyPlan(ctx, resource.ModifyPlanRequest{
+			Plan:  planAgentFallback,
+			State: stateAgentFallback,
+		}, &respAgentFallback)
+		if respAgentFallback.Diagnostics.HasError() {
+			t.Fatal(respAgentFallback.Diagnostics)
+		}
+
+		// Pending delivery state reconciliation
+		revokedAgentKeys := []string{}
+		reconcileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodDelete && r.URL.Path == "/api/agents/ag-1/keys/ak-pending" {
+				revokedAgentKeys = append(revokedAgentKeys, "ak-pending")
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+			if r.Method == http.MethodDelete && r.URL.Path == "/api/agents/ag-1/keys/ak-err" {
+				http.Error(w, "server error", http.StatusInternalServerError)
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer reconcileServer.Close()
+
+		reconcileCli, _ := client.NewClient(reconcileServer.URL, "test-token")
+		r.client = reconcileCli
+
+		mPendingState := PaperclipAgentKeyResourceModel{
+			ID:            types.StringValue("ak-pending"),
+			KeyID:         types.StringValue("ak-pending"),
+			AgentID:       types.StringValue("ag-1"),
+			Name:          types.StringValue("ak"),
+			Generation:    types.Int64Value(1),
+			DeliveryState: types.StringValue("pending"),
+		}
+		var statePending tfsdk.State = tfsdk.State{Schema: schema}
+		_ = statePending.Set(ctx, &mPendingState)
+		var planPending tfsdk.Plan = tfsdk.Plan{Schema: schema}
+		_ = planPending.Set(ctx, &mPendingState)
+		var respPending resource.ModifyPlanResponse
+		respPending.Plan = planPending
+		r.ModifyPlan(ctx, resource.ModifyPlanRequest{
+			Plan:  planPending,
+			State: statePending,
+		}, &respPending)
+		if respPending.Diagnostics.HasError() {
+			t.Fatalf("unexpected error on pending modify plan: %v", respPending.Diagnostics)
+		}
+		var outPending PaperclipAgentKeyResourceModel
+		_ = respPending.Plan.Get(ctx, &outPending)
+		if !outPending.KeyID.IsUnknown() || !outPending.ID.IsUnknown() || !outPending.DeliveryState.IsUnknown() {
+			t.Fatal("expected key_id, id, and delivery_state unknown when pending delivery is unconfirmed")
+		}
+		if len(revokedAgentKeys) != 1 || revokedAgentKeys[0] != "ak-pending" {
+			t.Fatalf("expected ak-pending revoked, got %v", revokedAgentKeys)
+		}
+
+		// Reconcile failure error diagnostic
+		mErrState := PaperclipAgentKeyResourceModel{
+			ID:            types.StringValue("ak-err"),
+			KeyID:         types.StringValue("ak-err"),
+			AgentID:       types.StringValue("ag-1"),
+			Name:          types.StringValue("ak"),
+			Generation:    types.Int64Value(1),
+			DeliveryState: types.StringValue("pending"),
+		}
+		var stateErr tfsdk.State = tfsdk.State{Schema: schema}
+		_ = stateErr.Set(ctx, &mErrState)
+		var respErr resource.ModifyPlanResponse
+		respErr.Plan = planPending
+		r.ModifyPlan(ctx, resource.ModifyPlanRequest{
+			Plan:  planPending,
+			State: stateErr,
+		}, &respErr)
+		if !respErr.Diagnostics.HasError() {
+			t.Fatal("expected error diagnostic on failed reconcile")
+		}
 	})
+}
+
+func TestFailedDeliveryReconciliation(t *testing.T) {
+	t.Setenv("PAPERCLIP_SCRATCH_DIR", t.TempDir())
+	ctx := context.Background()
+
+	var activeKeys = make(map[string]bool)
+	var revokedKeys = make(map[string]bool)
+	var createdCount int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/board-api-keys":
+			createdCount++
+			keyID := fmt.Sprintf("bk-attempt-%d", createdCount)
+			activeKeys[keyID] = true
+			bk := client.PaperclipBoardKey{
+				ID:    keyID,
+				Name:  "delivery-reconcile-board-key",
+				Token: fmt.Sprintf("secret-token-%s", keyID),
+			}
+			_ = json.NewEncoder(w).Encode(bk)
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/board-api-keys/"):
+			id := r.URL.Path[len("/api/board-api-keys/"):]
+			delete(activeKeys, id)
+			revokedKeys[id] = true
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/board-api-keys":
+			var list []client.PaperclipBoardKey
+			for id := range activeKeys {
+				list = append(list, client.PaperclipBoardKey{
+					ID:   id,
+					Name: "delivery-reconcile-board-key",
+				})
+			}
+			_ = json.NewEncoder(w).Encode(list)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	// 1. Initial Create: mints key bk-attempt-1, state delivery_state = pending
+	bkRes := NewPaperclipBoardKeyResource().(*PaperclipBoardKeyResource)
+	schema := configureTestResource(t, server.URL, bkRes)
+
+	model := PaperclipBoardKeyResourceModel{
+		Name:       types.StringValue("delivery-reconcile-board-key"),
+		Generation: types.Int64Value(1),
+	}
+	var plan tfsdk.Plan = tfsdk.Plan{Schema: schema}
+	_ = plan.Set(ctx, &model)
+	var createResp resource.CreateResponse
+	createResp.State = tfsdk.State{Schema: schema}
+	bkRes.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("create failed: %v", createResp.Diagnostics)
+	}
+
+	var stateModel PaperclipBoardKeyResourceModel
+	_ = createResp.State.Get(ctx, &stateModel)
+	if stateModel.KeyID.ValueString() != "bk-attempt-1" || stateModel.DeliveryState.ValueString() != "pending" {
+		t.Fatalf("unexpected state after create: %+v", stateModel)
+	}
+	if !activeKeys["bk-attempt-1"] {
+		t.Fatal("expected bk-attempt-1 active on server")
+	}
+
+	// 2. Simulated consumer failure!
+	// Downstream consumer fails to write token. Ephemeral resource is NOT closed/confirmed.
+	// The client registry still has the minted token, but it was never delivered.
+
+	// 3. Next execution / retry with same generation:
+	// ModifyPlan detects delivery_state == pending and unconfirmed token -> reconciles by revoking bk-attempt-1 and setting plan unknown.
+	var nextPlan tfsdk.Plan = tfsdk.Plan{Schema: schema}
+	_ = nextPlan.Set(ctx, &model)
+	var modifyResp resource.ModifyPlanResponse
+	modifyResp.Plan = nextPlan
+	bkRes.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:  nextPlan,
+		State: createResp.State,
+	}, &modifyResp)
+	if modifyResp.Diagnostics.HasError() {
+		t.Fatalf("modify plan failed: %v", modifyResp.Diagnostics)
+	}
+
+	var planAfterModify PaperclipBoardKeyResourceModel
+	_ = modifyResp.Plan.Get(ctx, &planAfterModify)
+	if !planAfterModify.KeyID.IsUnknown() || !planAfterModify.ID.IsUnknown() || !planAfterModify.DeliveryState.IsUnknown() {
+		t.Fatal("expected key_id and delivery_state unknown after failed delivery reconciliation")
+	}
+
+	// Verify unconfirmed key was revoked on the server (leaving 0 orphaned keys)
+	if !revokedKeys["bk-attempt-1"] || activeKeys["bk-attempt-1"] {
+		t.Fatal("expected unconfirmed bk-attempt-1 to be revoked during reconciliation")
+	}
+
+	// 4. Update is called to apply the plan -> mints replacement key bk-attempt-2
+	var updateResp resource.UpdateResponse
+	updateResp.State = tfsdk.State{Schema: schema}
+	bkRes.Update(ctx, resource.UpdateRequest{
+		Plan:  modifyResp.Plan,
+		State: createResp.State,
+	}, &updateResp)
+	if updateResp.Diagnostics.HasError() {
+		t.Fatalf("update failed: %v", updateResp.Diagnostics)
+	}
+
+	var stateAfterUpdate PaperclipBoardKeyResourceModel
+	_ = updateResp.State.Get(ctx, &stateAfterUpdate)
+	if stateAfterUpdate.KeyID.ValueString() != "bk-attempt-2" || stateAfterUpdate.DeliveryState.ValueString() != "pending" {
+		t.Fatalf("unexpected state after update: %+v", stateAfterUpdate)
+	}
+	if !activeKeys["bk-attempt-2"] {
+		t.Fatal("expected bk-attempt-2 active on server")
+	}
+
+	// 5. Downstream consumer succeeds: ephemeral Open and Close execute
+	ephRes := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
+	var ephSchemaResp ephemeral.SchemaResponse
+	ephRes.Schema(ctx, ephemeral.SchemaRequest{}, &ephSchemaResp)
+	ephSchema := ephSchemaResp.Schema
+	var ephConfResp ephemeral.ConfigureResponse
+	ephRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: bkRes.client}, &ephConfResp)
+
+	ephModel := PaperclipBoardKeyEphemeralResourceModel{
+		KeyID: types.StringValue("bk-attempt-2"),
+	}
+	var ephState tfsdk.State = tfsdk.State{Schema: ephSchema}
+	_ = ephState.Set(ctx, &ephModel)
+	ephReq := ephemeral.OpenRequest{
+		Config: tfsdk.Config{Schema: ephSchema, Raw: ephState.Raw},
+	}
+	var ephOpenResp ephemeral.OpenResponse
+	ephOpenResp.Result = tfsdk.EphemeralResultData{Raw: ephState.Raw, Schema: ephSchema}
+	ephRes.Open(ctx, ephReq, &ephOpenResp)
+	if ephOpenResp.Diagnostics.HasError() {
+		t.Fatalf("eph Open failed: %v", ephOpenResp.Diagnostics)
+	}
+
+	var ephCloseResp ephemeral.CloseResponse
+	ephRes.Close(ctx, ephemeral.CloseRequest{}, &ephCloseResp)
+	if ephCloseResp.Diagnostics.HasError() {
+		t.Fatalf("eph Close failed: %v", ephCloseResp.Diagnostics)
+	}
+
+	// 6. Read verifies delivery_state is transitioned to "delivered"
+	var readResp resource.ReadResponse
+	readResp.State = updateResp.State
+	bkRes.Read(ctx, resource.ReadRequest{State: updateResp.State}, &readResp)
+	if readResp.Diagnostics.HasError() {
+		t.Fatalf("read failed: %v", readResp.Diagnostics)
+	}
+	var finalModel PaperclipBoardKeyResourceModel
+	_ = readResp.State.Get(ctx, &finalModel)
+	if finalModel.DeliveryState.ValueString() != "delivered" {
+		t.Fatalf("expected delivery_state to be delivered after confirmed delivery, got %s", finalModel.DeliveryState.ValueString())
+	}
+
+	// 7. Verify no orphaned keys: only bk-attempt-2 is active, bk-attempt-1 was revoked
+	if len(activeKeys) != 1 || !activeKeys["bk-attempt-2"] {
+		t.Fatalf("unexpected active keys on server: %v", activeKeys)
+	}
 }
 

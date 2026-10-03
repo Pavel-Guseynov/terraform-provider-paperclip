@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -350,13 +352,12 @@ func TestClientCredentialRegistry(t *testing.T) {
 		t.Fatalf("expected token-secret-1, got %s (ok=%v)", tok, ok)
 	}
 
-	// MarkTokenDeliveredByValue
-	cli.MarkTokenDeliveredByValue("token-secret-1")
+	// MarkTokenDelivered directly
+	cli.MarkTokenDelivered("bk-1")
 	if !cli.IsTokenDelivered("bk-1") {
 		t.Fatal("expected bk-1 to be marked delivered")
 	}
 
-	// MarkTokenDelivered directly
 	cli.MarkTokenDelivered("bk-2")
 	if !cli.IsTokenDelivered("bk-2") {
 		t.Fatal("expected bk-2 to be marked delivered")
@@ -446,5 +447,67 @@ func TestClientCredentialRegistry(t *testing.T) {
 	// ReconcileFailedAgentKeyDelivery: empty keyID does nothing
 	if err := cli.ReconcileFailedAgentKeyDelivery(ctx, "ag-1", ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Test deliveryStateFilePath with empty PAPERCLIP_SCRATCH_DIR
+	origScratch := os.Getenv("PAPERCLIP_SCRATCH_DIR")
+	defer func() {
+		if origScratch != "" {
+			_ = os.Setenv("PAPERCLIP_SCRATCH_DIR", origScratch)
+		} else {
+			_ = os.Unsetenv("PAPERCLIP_SCRATCH_DIR")
+		}
+	}()
+	_ = os.Unsetenv("PAPERCLIP_SCRATCH_DIR")
+	if p := deliveryStateFilePath(); p != ".paperclip_delivered_keys.json" {
+		t.Fatalf("expected .paperclip_delivered_keys.json, got %s", p)
+	}
+
+	// loadDeliveredTokens with nonexistent file
+	scratchDir := t.TempDir()
+	_ = os.Setenv("PAPERCLIP_SCRATCH_DIR", scratchDir)
+	cliNoFile, _ := NewClient(server.URL, "tok")
+	if len(cliNoFile.deliveredTokens) != 0 {
+		t.Fatalf("expected empty deliveredTokens, got %v", cliNoFile.deliveredTokens)
+	}
+
+	// loadDeliveredTokens with corrupt json file
+	corruptFile := filepath.Join(scratchDir, ".paperclip_delivered_keys.json")
+	_ = os.WriteFile(corruptFile, []byte("{not-a-list}"), 0o600)
+	cliCorrupt, _ := NewClient(server.URL, "tok")
+	if len(cliCorrupt.deliveredTokens) != 0 {
+		t.Fatalf("expected empty deliveredTokens on corrupt file, got %v", cliCorrupt.deliveredTokens)
+	}
+
+	// loadDeliveredTokens with valid json file
+	_ = os.WriteFile(corruptFile, []byte(`["loaded-key-1"]`), 0o600)
+	cliValid, _ := NewClient(server.URL, "tok")
+	if !cliValid.IsTokenDelivered("loaded-key-1") {
+		t.Fatal("expected loaded-key-1 delivered from file")
+	}
+
+	// Push and Pop opened keys
+	cliValid.PushOpenedBoardKey("bk-push-1")
+	cliValid.PushOpenedBoardKey("bk-push-2")
+	if k := cliValid.PopOpenedBoardKey(); k != "bk-push-2" {
+		t.Fatalf("expected bk-push-2, got %s", k)
+	}
+	if k := cliValid.PopOpenedBoardKey(); k != "bk-push-1" {
+		t.Fatalf("expected bk-push-1, got %s", k)
+	}
+	if k := cliValid.PopOpenedBoardKey(); k != "" {
+		t.Fatalf("expected empty string when queue empty, got %s", k)
+	}
+
+	cliValid.PushOpenedAgentKey("ak-push-1")
+	cliValid.PushOpenedAgentKey("ak-push-2")
+	if k := cliValid.PopOpenedAgentKey(); k != "ak-push-2" {
+		t.Fatalf("expected ak-push-2, got %s", k)
+	}
+	if k := cliValid.PopOpenedAgentKey(); k != "ak-push-1" {
+		t.Fatalf("expected ak-push-1, got %s", k)
+	}
+	if k := cliValid.PopOpenedAgentKey(); k != "" {
+		t.Fatalf("expected empty string when agent queue empty, got %s", k)
 	}
 }

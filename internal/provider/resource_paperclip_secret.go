@@ -16,10 +16,11 @@ import (
 )
 
 var (
-	_ resource.Resource                   = &PaperclipSecretResource{}
-	_ resource.ResourceWithConfigure      = &PaperclipSecretResource{}
-	_ resource.ResourceWithImportState    = &PaperclipSecretResource{}
-	_ resource.ResourceWithValidateConfig = &PaperclipSecretResource{}
+	_ resource.Resource                     = &PaperclipSecretResource{}
+	_ resource.ResourceWithConfigure        = &PaperclipSecretResource{}
+	_ resource.ResourceWithImportState      = &PaperclipSecretResource{}
+	_ resource.ResourceWithModifyPlan       = &PaperclipSecretResource{}
+	_ resource.ResourceWithValidateConfig   = &PaperclipSecretResource{}
 )
 
 func NewPaperclipSecretResource() resource.Resource {
@@ -143,8 +144,33 @@ func (r *PaperclipSecretResource) ValidateConfig(ctx context.Context, req resour
 		return
 	}
 
-	for _, validationError := range validateSecretRotation(config) {
-		resp.Diagnostics.AddAttributeError(path.Root(validationError.attribute), validationError.summary, validationError.detail)
+	if !config.Value.IsNull() && config.Rotation.IsNull() {
+		resp.Diagnostics.AddAttributeError(path.Root("rotation"), "Incomplete secret rotation declaration", "value and rotation must either both be configured or both be omitted")
+	}
+}
+
+func (r *PaperclipSecretResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || req.Plan.Schema == nil || req.Config.Schema == nil {
+		return
+	}
+
+	var plan PaperclipSecretResourceModel
+	var config PaperclipSecretResourceModel
+	_ = req.Plan.Get(ctx, &plan)
+	_ = req.Config.Get(ctx, &config)
+
+	isCreate := req.State.Raw.IsNull() || req.State.Schema == nil
+	rotationChanging := false
+	if !isCreate {
+		var state PaperclipSecretResourceModel
+		_ = req.State.Get(ctx, &state)
+		rotationChanging = !plan.Rotation.Equal(state.Rotation)
+	}
+
+	if isCreate || rotationChanging || configuredString(config.Value) {
+		for _, validationError := range validateSecretRotation(config) {
+			resp.Diagnostics.AddAttributeError(path.Root(validationError.attribute), validationError.summary, validationError.detail)
+		}
 	}
 }
 

@@ -13,19 +13,17 @@ import (
 var (
 	_ ephemeral.EphemeralResource              = &PaperclipAgentKeyEphemeralResource{}
 	_ ephemeral.EphemeralResourceWithConfigure = &PaperclipAgentKeyEphemeralResource{}
+	_ ephemeral.EphemeralResourceWithClose     = &PaperclipAgentKeyEphemeralResource{}
 )
 
 type PaperclipAgentKeyEphemeralResource struct {
 	client *client.Client
+	keyID  string
 }
 
 type PaperclipAgentKeyEphemeralResourceModel struct {
-	AgentID    types.String `tfsdk:"agent_id"`
-	Name       types.String `tfsdk:"name"`
-	Activation types.String `tfsdk:"activation"`
-	Generation types.Int64  `tfsdk:"generation"`
-	KeyID      types.String `tfsdk:"key_id"`
-	Token      types.String `tfsdk:"token"`
+	KeyID types.String `tfsdk:"key_id"`
+	Token types.String `tfsdk:"token"`
 }
 
 func NewPaperclipAgentKeyEphemeralResource() ephemeral.EphemeralResource {
@@ -40,26 +38,9 @@ func (r *PaperclipAgentKeyEphemeralResource) Schema(ctx context.Context, req eph
 	resp.Schema = schema.Schema{
 		Description: "Produces a Paperclip agent key token only during apply for ephemeral or write-only delivery.",
 		Attributes: map[string]schema.Attribute{
-			"agent_id": schema.StringAttribute{
-				Description: "Paperclip agent identifier. Required when minting directly without a managed key_id.",
-				Optional:    true,
-			},
-			"name": schema.StringAttribute{
-				Description: "Name recorded for the agent key.",
-				Optional:    true,
-			},
-			"activation": schema.StringAttribute{
-				Description: "Deprecated: use declared generation and managed key_id.",
-				Optional:    true,
-			},
-			"generation": schema.Int64Attribute{
-				Description: "Declared generation trigger.",
-				Optional:    true,
-			},
 			"key_id": schema.StringAttribute{
 				Description: "Managed Paperclip agent key ID.",
-				Optional:    true,
-				Computed:    true,
+				Required:    true,
 			},
 			"token": schema.StringAttribute{
 				Description: "Ephemeral bearer token delivered only to an ephemeral or write-only consumer.",
@@ -86,13 +67,6 @@ func (r *PaperclipAgentKeyEphemeralResource) Configure(ctx context.Context, req 
 }
 
 func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephemeral.OpenRequest, resp *ephemeral.OpenResponse) {
-	if req.ClientCapabilities.DeferralAllowed {
-		resp.Deferred = &ephemeral.Deferred{
-			Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
-		}
-		return
-	}
-
 	var data PaperclipAgentKeyEphemeralResourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
@@ -103,44 +77,56 @@ func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephem
 		return
 	}
 
-	if !data.KeyID.IsNull() && !data.KeyID.IsUnknown() && data.KeyID.ValueString() != "" {
-		keyID := data.KeyID.ValueString()
-		token, ok := r.client.GetMintedToken(keyID)
-		if !ok {
-			data.Token = types.StringValue("token-already-delivered")
+	if data.KeyID.IsNull() || data.KeyID.IsUnknown() || data.KeyID.ValueString() == "" {
+		if req.ClientCapabilities.DeferralAllowed {
+			resp.Deferred = &ephemeral.Deferred{
+				Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
+			}
+			return
+		}
+		resp.Diagnostics.AddError("Missing key_id", "A valid managed key_id is required to deliver the ephemeral agent key token.")
+		return
+	}
+
+	keyID := data.KeyID.ValueString()
+	token, ok := r.client.GetMintedToken(keyID)
+	if !ok {
+		if r.client.IsTokenDelivered(keyID) {
+			data.Token = types.StringNull()
 			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 			return
 		}
-		data.Token = types.StringValue(token)
-		r.client.MarkTokenDelivered(keyID)
-		resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+		if req.ClientCapabilities.DeferralAllowed {
+			resp.Deferred = &ephemeral.Deferred{
+				Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
+			}
+			return
+		}
+		resp.Diagnostics.AddError(
+			"Token Unavailable",
+			fmt.Sprintf("The bearer token for agent key %q is unavailable. Tokens are only delivered during the initial apply or generation rotation in which they are minted.", keyID),
+		)
 		return
 	}
 
-	if data.AgentID.IsNull() || data.AgentID.ValueString() == "" {
-		resp.Diagnostics.AddError("Missing agent_id", "agent_id is required when key_id is not specified")
-		return
-	}
-	name := "agent-key"
-	if !data.Name.IsNull() && data.Name.ValueString() != "" {
-		name = data.Name.ValueString()
-	}
+	data.Token = types.StringValue(token)
+	r.keyID = keyID
+	r.client.PushOpenedAgentKey(keyID)
 
-	key, err := r.client.CreateAgentKey(ctx, data.AgentID.ValueString(), name, nil)
-	if err != nil {
-		resp.Diagnostics.AddError("Error creating Paperclip agent key", err.Error())
-		return
-	}
-	if key.ID == "" || key.Token == "" {
-		resp.Diagnostics.AddError("Invalid Paperclip agent key", "Paperclip did not return both a key identifier and bearer token.")
-		return
-	}
-
-	data.KeyID = types.StringValue(key.ID)
-	data.Token = types.StringValue(key.Token)
-	r.client.RegisterMintedToken(key.ID, key.Token)
-	r.client.MarkTokenDelivered(key.ID)
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 }
 
-
+func (r *PaperclipAgentKeyEphemeralResource) Close(ctx context.Context, req ephemeral.CloseRequest, resp *ephemeral.CloseResponse) {
+	if r.client == nil {
+		return
+	}
+	keyID := r.client.PopOpenedAgentKey()
+	if keyID == "" {
+		keyID = r.keyID
+	}
+	if keyID != "" {
+		if err := r.client.ConfirmDelivery(ctx, keyID); err != nil {
+			resp.Diagnostics.AddError("Error confirming agent key delivery", err.Error())
+		}
+	}
+}

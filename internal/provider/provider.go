@@ -22,6 +22,7 @@ var (
 	_ provider.ProviderWithEphemeralResources  = &PaperclipProvider{}
 	_ ephemeral.EphemeralResource              = &PaperclipBoardKeyEphemeralResource{}
 	_ ephemeral.EphemeralResourceWithConfigure = &PaperclipBoardKeyEphemeralResource{}
+	_ ephemeral.EphemeralResourceWithClose     = &PaperclipBoardKeyEphemeralResource{}
 )
 
 type PaperclipProvider struct {
@@ -151,21 +152,14 @@ func (p *PaperclipProvider) Configure(ctx context.Context, req provider.Configur
 	resp.ResourceData = c
 }
 
-var (
-	_ ephemeral.EphemeralResource              = &PaperclipBoardKeyEphemeralResource{}
-	_ ephemeral.EphemeralResourceWithConfigure = &PaperclipBoardKeyEphemeralResource{}
-)
-
 type PaperclipBoardKeyEphemeralResource struct {
 	client *client.Client
+	keyID  string
 }
 
 type PaperclipBoardKeyEphemeralResourceModel struct {
-	Name       types.String `tfsdk:"name"`
-	Activation types.String `tfsdk:"activation"`
-	Generation types.Int64  `tfsdk:"generation"`
-	KeyID      types.String `tfsdk:"key_id"`
-	Token      types.String `tfsdk:"token"`
+	KeyID types.String `tfsdk:"key_id"`
+	Token types.String `tfsdk:"token"`
 }
 
 func NewPaperclipBoardKeyEphemeralResource() ephemeral.EphemeralResource {
@@ -180,22 +174,9 @@ func (r *PaperclipBoardKeyEphemeralResource) Schema(ctx context.Context, req eph
 	resp.Schema = ephemeralschema.Schema{
 		Description: "Produces a Paperclip board key token only during apply for ephemeral or write-only delivery.",
 		Attributes: map[string]ephemeralschema.Attribute{
-			"name": ephemeralschema.StringAttribute{
-				Description: "Label identifying the board key.",
-				Optional:    true,
-			},
-			"activation": ephemeralschema.StringAttribute{
-				Description: "Deprecated: use declared generation and managed key_id.",
-				Optional:    true,
-			},
-			"generation": ephemeralschema.Int64Attribute{
-				Description: "Declared generation trigger.",
-				Optional:    true,
-			},
 			"key_id": ephemeralschema.StringAttribute{
 				Description: "Managed Paperclip board key ID.",
-				Optional:    true,
-				Computed:    true,
+				Required:    true,
 			},
 			"token": ephemeralschema.StringAttribute{
 				Description: "Ephemeral bearer token delivered only to an ephemeral or write-only consumer.",
@@ -222,13 +203,6 @@ func (r *PaperclipBoardKeyEphemeralResource) Configure(ctx context.Context, req 
 }
 
 func (r *PaperclipBoardKeyEphemeralResource) Open(ctx context.Context, req ephemeral.OpenRequest, resp *ephemeral.OpenResponse) {
-	if req.ClientCapabilities.DeferralAllowed {
-		resp.Deferred = &ephemeral.Deferred{
-			Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
-		}
-		return
-	}
-
 	var data PaperclipBoardKeyEphemeralResourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 	if resp.Diagnostics.HasError() {
@@ -239,34 +213,58 @@ func (r *PaperclipBoardKeyEphemeralResource) Open(ctx context.Context, req ephem
 		return
 	}
 
-	if !data.KeyID.IsNull() && !data.KeyID.IsUnknown() && data.KeyID.ValueString() != "" {
-		keyID := data.KeyID.ValueString()
-		token, ok := r.client.GetMintedToken(keyID)
-		if !ok {
-			data.Token = types.StringValue("token-already-delivered")
-			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+	if data.KeyID.IsNull() || data.KeyID.IsUnknown() || data.KeyID.ValueString() == "" {
+		if req.ClientCapabilities.DeferralAllowed {
+			resp.Deferred = &ephemeral.Deferred{
+				Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
+			}
 			return
 		}
-		data.Token = types.StringValue(token)
-		r.client.MarkTokenDelivered(keyID)
-		resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+		resp.Diagnostics.AddError("Missing key_id", "A valid managed key_id is required to deliver the ephemeral board key token.")
 		return
 	}
 
-	name := "paperclip-board-key"
-	if !data.Name.IsNull() && data.Name.ValueString() != "" {
-		name = data.Name.ValueString()
-	}
-	key, err := r.client.CreateBoardKey(ctx, name, nil, "")
-	if err != nil {
-		resp.Diagnostics.AddError("Error creating Paperclip board key", err.Error())
+	keyID := data.KeyID.ValueString()
+	token, ok := r.client.GetMintedToken(keyID)
+	if !ok {
+		if r.client.IsTokenDelivered(keyID) {
+			data.Token = types.StringNull()
+			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+			return
+		}
+		if req.ClientCapabilities.DeferralAllowed {
+			resp.Deferred = &ephemeral.Deferred{
+				Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
+			}
+			return
+		}
+		resp.Diagnostics.AddError(
+			"Token Unavailable",
+			fmt.Sprintf("The bearer token for board key %q is unavailable. Tokens are only delivered during the initial apply or generation rotation in which they are minted.", keyID),
+		)
 		return
 	}
-	data.KeyID = types.StringValue(key.ID)
-	data.Token = types.StringValue(key.Token)
-	r.client.RegisterMintedToken(key.ID, key.Token)
-	r.client.MarkTokenDelivered(key.ID)
+
+	data.Token = types.StringValue(token)
+	r.keyID = keyID
+	r.client.PushOpenedBoardKey(keyID)
+
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+}
+
+func (r *PaperclipBoardKeyEphemeralResource) Close(ctx context.Context, req ephemeral.CloseRequest, resp *ephemeral.CloseResponse) {
+	if r.client == nil {
+		return
+	}
+	keyID := r.client.PopOpenedBoardKey()
+	if keyID == "" {
+		keyID = r.keyID
+	}
+	if keyID != "" {
+		if err := r.client.ConfirmDelivery(ctx, keyID); err != nil {
+			resp.Diagnostics.AddError("Error confirming board key delivery", err.Error())
+		}
+	}
 }
 
 
