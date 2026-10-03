@@ -337,7 +337,14 @@ func (r *PaperclipAgentResource) Read(ctx context.Context, req resource.ReadRequ
 	state.CanAssignTasks, state.CanCreateAgents = permissionState(agent.Permissions)
 
 	instructions, err := r.client.GetAgentInstructionsFile(ctx, state.ID.ValueString(), "AGENTS.md")
-	if err == nil && instructions != "" {
+	if err != nil {
+		if errors.Is(err, client.ErrNotFound) {
+			state.Instructions = types.StringNull()
+		} else {
+			resp.Diagnostics.AddError("Error reading Paperclip agent instructions", err.Error())
+			return
+		}
+	} else if instructions != "" {
 		state.Instructions = types.StringValue(instructions)
 	} else {
 		state.Instructions = types.StringNull()
@@ -605,9 +612,7 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 	plan.AdapterConfig = refreshAgentAdapterConfig(plan.AdapterConfig, updated.AdapterConfig)
 	plan.Metadata = refreshManagedJSONState(plan.Metadata, updated.Metadata)
 	plan.CanAssignTasks, plan.CanCreateAgents = permissionState(updated.Permissions)
-	if !plan.Instructions.IsNull() && !plan.Instructions.IsUnknown() && plan.Instructions.ValueString() != "" {
-		plan.Instructions = plan.Instructions
-	} else {
+	if plan.Instructions.IsNull() || plan.Instructions.IsUnknown() || plan.Instructions.ValueString() == "" {
 		plan.Instructions = types.StringNull()
 	}
 
