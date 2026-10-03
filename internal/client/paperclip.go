@@ -345,8 +345,9 @@ type PaperclipAgent struct {
 	AdapterType   string                 `json:"adapterType,omitempty"`
 	Status        string                 `json:"status,omitempty"`
 	RuntimeConfig map[string]interface{} `json:"runtimeConfig,omitempty"`
-	AdapterConfig map[string]interface{} `json:"adapterConfig,omitempty"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	AdapterConfig        map[string]interface{} `json:"adapterConfig,omitempty"`
+	ReplaceAdapterConfig bool                   `json:"replaceAdapterConfig,omitempty"`
+	Metadata             map[string]interface{} `json:"metadata,omitempty"`
 	// Permissions is board-reported on a single-agent read and never sent back
 	// on an agent write; the permissions route owns it.
 	Permissions *PaperclipAgentPermissions `json:"permissions,omitempty"`

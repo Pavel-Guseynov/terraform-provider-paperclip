@@ -279,7 +279,7 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 		plan.RuntimeConfig = jsonStringOrNull(created.RuntimeConfig)
 	}
 	if plan.AdapterConfig.IsUnknown() {
-		plan.AdapterConfig = jsonStringOrNull(created.AdapterConfig)
+		plan.AdapterConfig = refreshAgentAdapterConfig(types.StringNull(), created.AdapterConfig)
 	}
 	if plan.Metadata.IsUnknown() {
 		plan.Metadata = jsonStringOrNull(created.Metadata)
@@ -331,7 +331,7 @@ func (r *PaperclipAgentResource) Read(ctx context.Context, req resource.ReadRequ
 	state.Status = stringOrNull(agent.Status)
 
 	state.RuntimeConfig = refreshManagedJSONState(state.RuntimeConfig, agent.RuntimeConfig)
-	state.AdapterConfig = refreshManagedJSONState(state.AdapterConfig, agent.AdapterConfig)
+	state.AdapterConfig = refreshAgentAdapterConfig(state.AdapterConfig, agent.AdapterConfig)
 	state.Metadata = refreshManagedJSONState(state.Metadata, agent.Metadata)
 	state.CanAssignTasks, state.CanCreateAgents = permissionState(agent.Permissions)
 
@@ -341,6 +341,126 @@ func (r *PaperclipAgentResource) Read(ctx context.Context, req resource.ReadRequ
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+var paperclipManagedAdapterConfigKeys = []string{
+	"instructionsFilePath",
+	"instructionsRootPath",
+	"instructionsEntryFile",
+	"instructionsBundleMode",
+	"agentsMdPath",
+}
+
+func isSecretRefBinding(val interface{}) bool {
+	m, ok := val.(map[string]interface{})
+	if !ok {
+		return false
+	}
+	t, ok := m["type"].(string)
+	return ok && (t == "secret_ref" || t == "user_secret_ref")
+}
+
+func filterPaperclipManagedAdapterConfig(remote map[string]interface{}, managed map[string]interface{}) map[string]interface{} {
+	if remote == nil {
+		return nil
+	}
+	filtered := make(map[string]interface{}, len(remote))
+	for k, v := range remote {
+		filtered[k] = v
+	}
+
+	for _, key := range paperclipManagedAdapterConfigKeys {
+		if managed == nil {
+			delete(filtered, key)
+		} else if _, declared := managed[key]; !declared {
+			delete(filtered, key)
+		}
+	}
+
+	if remoteEnv, ok := filtered["env"].(map[string]interface{}); ok {
+		var managedEnv map[string]interface{}
+		managedHasEnv := false
+		if managed != nil {
+			managedEnv, managedHasEnv = managed["env"].(map[string]interface{})
+		}
+
+		filteredEnv := make(map[string]interface{}, len(remoteEnv))
+		for k, v := range remoteEnv {
+			if managedHasEnv {
+				if _, declared := managedEnv[k]; declared {
+					filteredEnv[k] = v
+					continue
+				}
+			}
+			if isSecretRefBinding(v) {
+				continue
+			}
+			filteredEnv[k] = v
+		}
+
+		if len(filteredEnv) > 0 {
+			filtered["env"] = filteredEnv
+		} else if !managedHasEnv {
+			delete(filtered, "env")
+		} else {
+			filtered["env"] = filteredEnv
+		}
+	}
+
+	return filtered
+}
+
+func preservePaperclipManagedAdapterConfig(existing, target map[string]interface{}) {
+	if existing == nil || target == nil {
+		return
+	}
+	for _, key := range paperclipManagedAdapterConfigKeys {
+		if val, ok := existing[key]; ok {
+			if _, declared := target[key]; !declared {
+				target[key] = val
+			}
+		}
+	}
+	if existingEnv, ok := existing["env"].(map[string]interface{}); ok {
+		targetEnv, ok := target["env"].(map[string]interface{})
+		if !ok {
+			targetEnv = make(map[string]interface{})
+		}
+		for k, v := range existingEnv {
+			if isSecretRefBinding(v) {
+				if _, declared := targetEnv[k]; !declared {
+					targetEnv[k] = v
+				}
+			}
+		}
+		if len(targetEnv) > 0 {
+			target["env"] = targetEnv
+		}
+	}
+}
+
+func refreshAgentAdapterConfig(current types.String, remote map[string]interface{}) types.String {
+	if remote == nil {
+		return types.StringNull()
+	}
+	if current.IsNull() || current.IsUnknown() {
+		filtered := filterPaperclipManagedAdapterConfig(remote, nil)
+		if len(filtered) == 0 && current.IsNull() {
+			return types.StringNull()
+		}
+		return jsonStringOrNull(filtered)
+	}
+
+	var managed map[string]interface{}
+	if err := json.Unmarshal([]byte(current.ValueString()), &managed); err != nil {
+		return jsonStringOrNull(remote)
+	}
+
+	filtered := filterPaperclipManagedAdapterConfig(remote, managed)
+	if jsonContains(filtered, managed) && jsonContains(managed, filtered) {
+		return current
+	}
+	return jsonStringOrNull(filtered)
 }
 
 func refreshManagedJSONState(current types.String, remote map[string]interface{}) types.String {
@@ -386,8 +506,18 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 	if !plan.RuntimeConfig.IsNull() && !plan.RuntimeConfig.IsUnknown() && plan.RuntimeConfig.ValueString() != "" {
 		_ = json.Unmarshal([]byte(plan.RuntimeConfig.ValueString()), &runtimeMap)
 	}
+	var replaceAdapterConfig bool
 	if !plan.AdapterConfig.IsNull() && !plan.AdapterConfig.IsUnknown() && plan.AdapterConfig.ValueString() != "" {
 		_ = json.Unmarshal([]byte(plan.AdapterConfig.ValueString()), &adapterMap)
+		if adapterMap != nil {
+			current, err := r.client.GetAgent(ctx, state.ID.ValueString())
+			if err != nil {
+				resp.Diagnostics.AddError("Error reading Paperclip agent before update", err.Error())
+				return
+			}
+			preservePaperclipManagedAdapterConfig(current.AdapterConfig, adapterMap)
+			replaceAdapterConfig = true
+		}
 	}
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
 		_ = json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap)
@@ -403,14 +533,15 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 	}
 
 	agent := client.PaperclipAgent{
-		CompanyID:     state.CompanyID.ValueString(),
-		Name:          plan.Name.ValueString(),
-		Role:          role,
-		Title:         plan.Title.ValueString(),
-		AdapterType:   adapterType,
-		RuntimeConfig: runtimeMap,
-		AdapterConfig: adapterMap,
-		Metadata:      metaMap,
+		CompanyID:            state.CompanyID.ValueString(),
+		Name:                 plan.Name.ValueString(),
+		Role:                 role,
+		Title:                plan.Title.ValueString(),
+		AdapterType:          adapterType,
+		RuntimeConfig:        runtimeMap,
+		AdapterConfig:        adapterMap,
+		ReplaceAdapterConfig: replaceAdapterConfig,
+		Metadata:             metaMap,
 	}
 
 	updated, err := r.client.UpdateAgent(ctx, state.ID.ValueString(), agent)
