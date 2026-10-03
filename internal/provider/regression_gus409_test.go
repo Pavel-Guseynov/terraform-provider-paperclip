@@ -8,9 +8,11 @@ import (
 	"testing"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 )
 
 // 1. Skill rename sends name and slug in PATCH metadata
@@ -468,206 +470,117 @@ func TestRegressionResourceReadRemovesStateOn404NotFound(t *testing.T) {
 // 9. Backward compatibility: verify that state written by prior provider versions plans without replacement across all resources
 func TestBackwardCompatibilityExistingStatePlansWithoutReplacementAcrossResources(t *testing.T) {
 	ctx := context.Background()
+	server := providerserver.NewProtocol6(New("test")())()
+	schemas, err := server.GetProviderSchema(ctx, &tfprotov6.GetProviderSchemaRequest{})
+	if err != nil || len(schemas.Diagnostics) != 0 {
+		t.Fatalf("failed to get provider schema: %v, %v", err, schemas)
+	}
 
-	// Verify that each resource schema accepts existing state models without schema migration or replacement
-	resources := []struct {
-		name string
-		r    resource.Resource
-		val  interface{}
+	testCases := []struct {
+		typeName string
+		rawJSON  string
 	}{
 		{
-			name: "paperclip_company",
-			r:    NewPaperclipCompanyResource(),
-			val: &PaperclipCompanyResourceModel{
-				ID:                           types.StringValue("comp-1"),
-				Name:                         types.StringValue("Acme"),
-				Description:                  types.StringValue("Corp"),
-				RequireTaskStartConfirmation: types.BoolValue(false),
-			},
+			typeName: "paperclip_company",
+			rawJSON:  `{"id":"comp-1","name":"Acme","description":"Corp","require_task_start_confirmation":false}`,
 		},
 		{
-			name: "paperclip_project",
-			r:    NewPaperclipProjectResource(),
-			val: &PaperclipProjectResourceModel{
-				ID:          types.StringValue("proj-1"),
-				CompanyID:   types.StringValue("comp-1"),
-				Name:        types.StringValue("Test Project"),
-				Description: types.StringValue("Desc"),
-			},
+			typeName: "paperclip_project",
+			rawJSON:  `{"id":"proj-1","company_id":"comp-1","name":"Test Project","description":"Desc","execution_workspace_policy":null}`,
 		},
 		{
-			name: "paperclip_project_lead",
-			r:    NewPaperclipProjectLeadResource(),
-			val: &PaperclipProjectLeadModel{
-				ID:        types.StringValue("comp-1/proj-1"),
-				ProjectID: types.StringValue("proj-1"),
-				AgentID:   types.StringValue("agent-1"),
-			},
+			typeName: "paperclip_project_lead",
+			rawJSON:  `{"id":"comp-1/proj-1","project_id":"proj-1","agent_id":"agent-1"}`,
 		},
 		{
-			name: "paperclip_workspace",
-			r:    NewPaperclipWorkspaceResource(),
-			val: &PaperclipWorkspaceResourceModel{
-				ID:         types.StringValue("ws-1"),
-				ProjectID:  types.StringValue("proj-1"),
-				Name:       types.StringValue("Default"),
-				Branch:     types.StringValue("main"),
-				IsPrimary:  types.BoolValue(true),
-				SourceType: types.StringValue("git"),
-			},
+			typeName: "paperclip_workspace",
+			rawJSON:  `{"id":"ws-1","project_id":"proj-1","name":"Default","branch":"develop","is_primary":true,"repo_url":"https://git.guseynov.org/guseynov/paperclip.git","source_type":"git_repo"}`,
 		},
 		{
-			name: "paperclip_local_environment",
-			r:    NewPaperclipLocalEnvironmentResource(),
-			val: &PaperclipLocalEnvironmentModel{
-				ID:                 types.StringValue("env-1"),
-				CompanyID:          types.StringValue("comp-1"),
-				InheritServicePath: types.BoolValue(true),
-			},
+			typeName: "paperclip_local_environment",
+			rawJSON:  `{"id":"env-1","company_id":"comp-1","inherit_service_path":true}`,
 		},
 		{
-			name: "paperclip_skill",
-			r:    NewPaperclipSkillResource(),
-			val: &PaperclipSkillResourceModel{
-				ID:            types.StringValue("skill-1"),
-				CompanyID:     types.StringValue("comp-1"),
-				Name:          types.StringValue("test-skill"),
-				Slug:          types.StringValue("test-skill"),
-				Description:   types.StringValue("Skill description"),
-				Content:       types.StringValue("# Skill"),
-				SchemaVersion: types.Int64Value(1),
-			},
+			typeName: "paperclip_skill",
+			rawJSON:  `{"id":"skill-1","company_id":"comp-1","name":"test-skill","slug":"test-skill","description":"Skill description","content":"# Skill","schema_version":1,"metadata":null}`,
 		},
 		{
-			name: "paperclip_secret",
-			r:    NewPaperclipSecretResource(),
-			val: &PaperclipSecretResourceModel{
-				ID:          types.StringValue("sec-1"),
-				CompanyID:   types.StringValue("comp-1"),
-				Name:        types.StringValue("db-pass"),
-				Description: types.StringValue("Pass"),
-				Value:       types.StringValue("val"),
-				Rotation:    types.StringValue("rev-1"),
-			},
+			typeName: "paperclip_secret",
+			rawJSON:  `{"id":"sec-1","company_id":"comp-1","name":"db-pass","description":"Pass","rotation":"rev-1"}`,
 		},
 		{
-			name: "paperclip_agent",
-			r:    NewPaperclipAgentResource(),
-			val: &PaperclipAgentResourceModel{
-				ID:              types.StringValue("agent-1"),
-				CompanyID:       types.StringValue("comp-1"),
-				Name:            types.StringValue("agent-1"),
-				Role:            types.StringValue("engineer"),
-				AdapterType:     types.StringValue("hermes_local"),
-				CanAssignTasks:  types.BoolValue(true),
-				CanCreateAgents: types.BoolValue(false),
-			},
+			typeName: "paperclip_agent",
+			rawJSON:  `{"id":"agent-1","company_id":"comp-1","name":"agent-1","role":"engineer","title":"Senior Eng","adapter_type":"hermes_local","status":null,"runtime_config":null,"adapter_config":null,"metadata":null,"instructions":null,"can_assign_tasks":true,"can_create_agents":false}`,
 		},
 		{
-			name: "paperclip_app",
-			r:    NewPaperclipAppResource(),
-			val: &PaperclipAppResourceModel{
-				ID:          types.StringValue("app-1"),
-				CompanyID:   types.StringValue("comp-1"),
-				Name:        types.StringValue("github"),
-				Type:        types.StringValue("custom"),
-				Description: types.StringValue("GitHub App"),
-			},
+			typeName: "paperclip_app",
+			rawJSON:  `{"id":"app-1","company_id":"comp-1","name":"github","type":"mcp_http","application_key":null,"description":"GitHub App","metadata":null}`,
 		},
 		{
-			name: "paperclip_connection",
-			r:    NewPaperclipConnectionResource(),
-			val: &PaperclipConnectionResourceModel{
-				ID:        types.StringValue("conn-1"),
-				CompanyID: types.StringValue("comp-1"),
-				AppID:     types.StringValue("app-1"),
-				Name:      types.StringValue("prod-github"),
-			},
+			typeName: "paperclip_connection",
+			rawJSON:  `{"id":"conn-1","company_id":"comp-1","app_id":"app-1","name":"prod-github","gallery_key":null,"transport":"local_stdio","auth_kind":"basic","config":"{\"command\":\"oo\"}","credential_refs":null,"credential_policy":"shared","credential_grant_ready":true}`,
 		},
 		{
-			name: "paperclip_policy",
-			r:    NewPaperclipPolicyResource(),
-			val: &PaperclipPolicyResourceModel{
-				ID:         types.StringValue("pol-1"),
-				CompanyID:  types.StringValue("comp-1"),
-				Name:       types.StringValue("require-approval"),
-				PolicyType: types.StringValue("tool_execution"),
-				Rules:      types.StringValue(`{"allow":true}`),
-			},
+			typeName: "paperclip_policy",
+			rawJSON:  `{"id":"pol-1","company_id":"comp-1","name":"require-approval","policy_type":"allow","rules":"{\"allow\":true}","metadata":null}`,
 		},
 		{
-			name: "paperclip_stdio_template",
-			r:    NewPaperclipStdioTemplateResource(),
-			val: &PaperclipStdioTemplateResourceModel{
-				ID:          types.StringValue("tmpl-1"),
-				CompanyID:   types.StringValue("comp-1"),
-				Name:        types.StringValue("bash-template"),
-				Description: types.StringValue("Desc"),
-				Command:     types.StringValue("bash"),
-				Args:        types.ListNull(types.StringType),
-				EnvKeys:     types.ListNull(types.StringType),
-			},
+			typeName: "paperclip_stdio_template",
+			rawJSON:  `{"id":"tmpl-1","company_id":"comp-1","template_id":"tmpl-1","name":"bash-template","description":"Desc","command":"bash","args":null,"env_keys":null}`,
 		},
 		{
-			name: "paperclip_connection_install",
-			r:    NewPaperclipConnectionInstallResource(),
-			val: &PaperclipConnectionInstallResourceModel{
-				ID:           types.StringValue("conn-1"),
-				ConnectionID: types.StringValue("conn-1"),
-				TargetType:   types.StringValue("agent"),
-				AgentIDs:     types.ListNull(types.StringType),
-			},
+			typeName: "paperclip_connection_install",
+			rawJSON:  `{"id":"conn-1","connection_id":"conn-1","agent_ids":["agent-1"],"target_type":"agent","company_id":null}`,
 		},
 		{
-			name: "paperclip_app_permission",
-			r:    NewPaperclipAppPermissionResource(),
-			val: &PaperclipAppPermissionResourceModel{
-				ID:                      types.StringValue("comp-1/conn-1/agent/agent-1"),
-				CompanyID:               types.StringValue("comp-1"),
-				ConnectionID:            types.StringValue("conn-1"),
-				AccessType:              types.StringValue("agent"),
-				ToolSelection:           types.StringValue(`{"mode":"all"}`),
-				EnabledCatalogEntryIDs:  types.ListNull(types.StringType),
-				AskFirstCatalogEntryIDs: types.ListNull(types.StringType),
-				ReviewedCatalogEntryIDs: types.ListNull(types.StringType),
-				AgentIDs:                types.ListNull(types.StringType),
-			},
+			typeName: "paperclip_app_permission",
+			rawJSON:  `{"id":"comp-1/conn-1","company_id":"comp-1","connection_id":"conn-1","tool_selection":"{\"approval_mode\":\"writes\",\"enabled_tools\":[]}","enabled_catalog_entry_ids":[],"ask_first_catalog_entry_ids":[],"reviewed_catalog_entry_ids":[],"agent_ids":["agent-1"],"access_type":"agents"}`,
 		},
 	}
 
-	for _, tc := range resources {
-		t.Run(tc.name, func(t *testing.T) {
-			var sResp resource.SchemaResponse
-			tc.r.Schema(ctx, resource.SchemaRequest{}, &sResp)
-			if sResp.Diagnostics.HasError() {
-				t.Fatalf("schema error: %v", sResp.Diagnostics)
+	for _, tc := range testCases {
+		t.Run(tc.typeName, func(t *testing.T) {
+			resSchema, ok := schemas.ResourceSchemas[tc.typeName]
+			if !ok {
+				t.Fatalf("resource schema not found for %s", tc.typeName)
 			}
 
-			// Validate state serialization and deserialization
-			state := tfsdk.State{Schema: sResp.Schema}
-			diags := state.Set(ctx, tc.val)
-			if diags.HasError() {
-				t.Fatalf("failed to set prior state: %v", diags)
+			val, err := (&tfprotov6.RawState{JSON: []byte(tc.rawJSON)}).Unmarshal(resSchema.ValueType())
+			if err != nil {
+				t.Fatalf("failed to unmarshal raw JSON for %s: %v", tc.typeName, err)
 			}
 
-			// Validate plan against state (zero-change plan)
-			plan := tfsdk.Plan{Schema: sResp.Schema}
-			diags = plan.Set(ctx, tc.val)
-			if diags.HasError() {
-				t.Fatalf("failed to set plan from state: %v", diags)
+			dynVal, err := tfprotov6.NewDynamicValue(resSchema.ValueType(), val)
+			if err != nil {
+				t.Fatalf("failed to create DynamicValue for %s: %v", tc.typeName, err)
 			}
 
-			// If resource supports ModifyPlan, call it
-			if rm, ok := tc.r.(resource.ResourceWithModifyPlan); ok {
-				var modResp resource.ModifyPlanResponse
-				modResp.Plan = plan
-				rm.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: plan, State: state}, &modResp)
-				if modResp.Diagnostics.HasError() {
-					t.Fatalf("ModifyPlan reported error: %v", modResp.Diagnostics)
+			req := &tfprotov6.PlanResourceChangeRequest{
+				TypeName:         tc.typeName,
+				PriorState:       &dynVal,
+				ProposedNewState: &dynVal,
+				Config:           &dynVal,
+			}
+
+			resp, err := server.PlanResourceChange(ctx, req)
+			if err != nil {
+				t.Fatalf("PlanResourceChange error for %s: %v", tc.typeName, err)
+			}
+			for _, d := range resp.Diagnostics {
+				if d.Severity == tfprotov6.DiagnosticSeverityError {
+					t.Fatalf("PlanResourceChange error diag for %s: %s (%s)", tc.typeName, d.Summary, d.Detail)
 				}
-				if len(modResp.RequiresReplace) > 0 {
-					t.Fatalf("unexpected replacement required for existing state: %v", modResp.RequiresReplace)
-				}
+			}
+			if len(resp.RequiresReplace) > 0 {
+				t.Fatalf("unexpected RequiresReplace for %s: %v", tc.typeName, resp.RequiresReplace)
+			}
+
+			plannedVal, err := resp.PlannedState.Unmarshal(resSchema.ValueType())
+			if err != nil {
+				t.Fatalf("failed to unmarshal PlannedState for %s: %v", tc.typeName, err)
+			}
+			if !plannedVal.Equal(val) {
+				t.Fatalf("planned state introduces diff for %s: got %v, want %v", tc.typeName, plannedVal, val)
 			}
 		})
 	}

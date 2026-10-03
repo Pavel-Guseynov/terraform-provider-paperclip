@@ -58,10 +58,6 @@ func (r *PaperclipCompanyResource) Schema(ctx context.Context, req resource.Sche
 			"description": schema.StringAttribute{
 				Description: "Optional company description.",
 				Optional:    true,
-				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"require_task_start_confirmation": schema.BoolAttribute{
 				Description: "Whether newly runnable tasks require start confirmation in Decisions.",

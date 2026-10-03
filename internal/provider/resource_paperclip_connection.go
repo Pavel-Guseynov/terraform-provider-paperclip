@@ -103,32 +103,24 @@ func (r *PaperclipConnectionResource) Schema(ctx context.Context, req resource.S
 			"auth_kind": schema.StringAttribute{
 				Description: "Optional authentication type.",
 				Optional:    true,
-				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"config": schema.StringAttribute{
 				Description: "JSON connection configuration (command, args, env, url).",
 				Optional:    true,
-				Computed:    true,
 				Validators: []validator.String{
 					JSONAttributeValidator(),
 				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
 					SemanticJSONPlanModifier(),
 				},
 			},
 			"credential_refs": schema.StringAttribute{
 				Description: "Optional JSON array of Paperclip credential references.",
 				Optional:    true,
-				Computed:    true,
 				Validators: []validator.String{
 					JSONAttributeValidator(),
 				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
 					SemanticJSONPlanModifier(),
 				},
 			},
@@ -247,11 +239,9 @@ func (r *PaperclipConnectionResource) Create(ctx context.Context, req resource.C
 	plan.Transport = stringOrNull(created.Transport)
 	plan.AuthKind = stringOrNull(created.AuthKind)
 	plan.CredentialPolicy = knownCredentialPolicy(plan.CredentialPolicy, created.CredentialPolicy)
-	// A computed reference list must be known after apply: record what Paperclip
-	// echoes, or the empty list a credential-less connection reads back later.
 	if created.CredentialRefs != nil {
 		plan.CredentialRefs = refreshSemanticJSON(plan.CredentialRefs, created.CredentialRefs)
-	} else if plan.CredentialRefs.IsUnknown() || plan.CredentialRefs.IsNull() {
+	} else if plan.CredentialRefs.IsUnknown() {
 		plan.CredentialRefs = types.StringValue("[]")
 	}
 	// Retain the remote identity even if the following grant transaction fails.

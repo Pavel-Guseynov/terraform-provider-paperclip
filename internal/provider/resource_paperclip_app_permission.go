@@ -87,7 +87,7 @@ func (r *PaperclipAppPermissionResource) Configure(ctx context.Context, req reso
 }
 
 func (r *PaperclipAppPermissionResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.Plan.Raw.IsNull() {
+	if r.client == nil || req.Plan.Raw.IsNull() {
 		return
 	}
 	var plan PaperclipAppPermissionResourceModel

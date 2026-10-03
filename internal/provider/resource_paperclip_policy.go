@@ -76,24 +76,20 @@ func (r *PaperclipPolicyResource) Schema(ctx context.Context, req resource.Schem
 			"rules": schema.StringAttribute{
 				Description: "Optional JSON rules object.",
 				Optional:    true,
-				Computed:    true,
 				Validators: []validator.String{
 					JSONAttributeValidator(),
 				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
 					SemanticJSONPlanModifier(),
 				},
 			},
 			"metadata": schema.StringAttribute{
 				Description: "Optional JSON metadata object for the policy.",
 				Optional:    true,
-				Computed:    true,
 				Validators: []validator.String{
 					JSONAttributeValidator(),
 				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
 					SemanticJSONPlanModifier(),
 				},
 			},

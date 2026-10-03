@@ -1353,13 +1353,22 @@ func TestAgentSchemaIdentityAttributes(t *testing.T) {
 		t.Fatalf("name must be required: %+v", nameAttr)
 	}
 
-	for _, field := range []string{"role", "adapter_type", "title", "runtime_config", "adapter_config", "metadata", "instructions"} {
+	for _, field := range []string{"role", "adapter_type", "adapter_config"} {
 		attr, ok := resp.Schema.Attributes[field].(schema.StringAttribute)
 		if !ok {
 			t.Fatalf("%s attribute missing or not a string attribute", field)
 		}
 		if attr.Required || !attr.Optional || !attr.Computed {
 			t.Fatalf("%s must be optional and computed to allow identity-only declarations: %+v", field, attr)
+		}
+	}
+	for _, field := range []string{"title", "runtime_config", "metadata", "instructions"} {
+		attr, ok := resp.Schema.Attributes[field].(schema.StringAttribute)
+		if !ok {
+			t.Fatalf("%s attribute missing or not a string attribute", field)
+		}
+		if attr.Required || !attr.Optional || attr.Computed {
+			t.Fatalf("%s must be optional and non-computed to allow explicit clearing: %+v", field, attr)
 		}
 	}
 

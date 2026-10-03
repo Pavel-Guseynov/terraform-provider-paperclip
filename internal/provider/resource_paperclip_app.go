@@ -189,20 +189,14 @@ func (r *PaperclipAppResource) Schema(ctx context.Context, req resource.SchemaRe
 			"description": schema.StringAttribute{
 				Description: "Optional application description.",
 				Optional:    true,
-				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"metadata": schema.StringAttribute{
 				Description: "Optional JSON metadata object for the application.",
 				Optional:    true,
-				Computed:    true,
 				Validators: []validator.String{
 					JSONAttributeValidator(),
 				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
 					SemanticJSONPlanModifier(),
 				},
 			},

@@ -85,10 +85,6 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 			"title": schema.StringAttribute{
 				Description: "Optional human-readable title.",
 				Optional:    true,
-				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"adapter_type": schema.StringAttribute{
 				Description: "Execution adapter type (e.g. antigravity_local).",
@@ -105,12 +101,10 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 			"runtime_config": schema.StringAttribute{
 				Description: "Optional JSON runtime configuration string.",
 				Optional:    true,
-				Computed:    true,
 				Validators: []validator.String{
 					JSONAttributeValidator(),
 				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
 					SemanticJSONPlanModifier(),
 				},
 			},
@@ -129,22 +123,16 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 			"metadata": schema.StringAttribute{
 				Description: "Optional JSON metadata object for the agent.",
 				Optional:    true,
-				Computed:    true,
 				Validators: []validator.String{
 					JSONAttributeValidator(),
 				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
 					SemanticJSONPlanModifier(),
 				},
 			},
 			"instructions": schema.StringAttribute{
 				Description: "Managed AGENTS.md bundle instructions for this agent.",
 				Optional:    true,
-				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"can_assign_tasks": schema.BoolAttribute{
 				Description: "Whether the agent holds the task-assignment permission. The protected project assignment policy gates assignment through the tasks:assign grant that can_assign_tasks mints, but it does not deny an agent key from creating an unassigned issue; a filing made inside a heartbeat run is detected after the fact by the paperclip-fleet-health finding issue_filed_from_heartbeat_run. Harness declares the value for every managed agent, reconciles it after each write, and reads it back from the board.",
@@ -351,6 +339,8 @@ func (r *PaperclipAgentResource) Read(ctx context.Context, req resource.ReadRequ
 	instructions, err := r.client.GetAgentInstructionsFile(ctx, state.ID.ValueString(), "AGENTS.md")
 	if err == nil && instructions != "" {
 		state.Instructions = types.StringValue(instructions)
+	} else {
+		state.Instructions = types.StringNull()
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -589,6 +579,11 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 			resp.Diagnostics.AddError("Error updating Paperclip agent instructions", err.Error())
 			return
 		}
+	} else if (plan.Instructions.IsNull() || plan.Instructions.ValueString() == "") && (!state.Instructions.IsNull() && state.Instructions.ValueString() != "") {
+		if err := r.client.UpdateAgentInstructionsFile(ctx, state.ID.ValueString(), "AGENTS.md", ""); err != nil {
+			resp.Diagnostics.AddError("Error clearing Paperclip agent instructions", err.Error())
+			return
+		}
 	}
 
 	if err := r.reconcilePermissions(ctx, state.ID.ValueString(), plan.CanAssignTasks.ValueBool(), plan.CanCreateAgents.ValueBool()); err != nil {
@@ -610,7 +605,9 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 	plan.AdapterConfig = refreshAgentAdapterConfig(plan.AdapterConfig, updated.AdapterConfig)
 	plan.Metadata = refreshManagedJSONState(plan.Metadata, updated.Metadata)
 	plan.CanAssignTasks, plan.CanCreateAgents = permissionState(updated.Permissions)
-	if plan.Instructions.IsUnknown() {
+	if !plan.Instructions.IsNull() && !plan.Instructions.IsUnknown() && plan.Instructions.ValueString() != "" {
+		plan.Instructions = plan.Instructions
+	} else {
 		plan.Instructions = types.StringNull()
 	}
 

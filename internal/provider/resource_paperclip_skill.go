@@ -74,10 +74,6 @@ func (r *PaperclipSkillResource) Schema(ctx context.Context, req resource.Schema
 			"description": schema.StringAttribute{
 				Description: "Optional skill description.",
 				Optional:    true,
-				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"content": schema.StringAttribute{
 				Description: "Markdown instructions and skill content.",
@@ -209,7 +205,10 @@ func (r *PaperclipSkillResource) Update(ctx context.Context, req resource.Update
 
 	var metaMap map[string]interface{}
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap)
+		if err := json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap); err != nil {
+			resp.Diagnostics.AddError("Invalid Metadata JSON", fmt.Sprintf("Failed to parse metadata JSON: %s", err))
+			return
+		}
 	}
 
 	skill := client.PaperclipSkill{

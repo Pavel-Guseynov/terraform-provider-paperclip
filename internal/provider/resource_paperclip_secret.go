@@ -77,10 +77,6 @@ func (r *PaperclipSecretResource) Schema(ctx context.Context, req resource.Schem
 			"description": schema.StringAttribute{
 				Description: "Optional secret description.",
 				Optional:    true,
-				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"value": schema.StringAttribute{
 				Description: "Optional write-only secret plaintext value. It must be supplied together with rotation and is never persisted in plan or state.",

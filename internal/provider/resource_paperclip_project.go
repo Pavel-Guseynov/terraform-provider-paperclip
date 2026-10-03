@@ -70,20 +70,14 @@ func (r *PaperclipProjectResource) Schema(ctx context.Context, req resource.Sche
 			"description": schema.StringAttribute{
 				Description: "Optional project description.",
 				Optional:    true,
-				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"execution_workspace_policy": schema.StringAttribute{
 				Description: "Project-owned Paperclip execution workspace policy as a JSON object.",
 				Optional:    true,
-				Computed:    true,
 				Validators: []validator.String{
 					JSONAttributeValidator(),
 				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
 					SemanticJSONPlanModifier(),
 				},
 			},

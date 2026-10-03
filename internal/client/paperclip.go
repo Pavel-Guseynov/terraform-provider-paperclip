@@ -1203,15 +1203,15 @@ func (c *Client) GetSkill(ctx context.Context, companyID, skillID string) (*Pape
 // that Paperclip mirrors into the record's markdown.
 func (c *Client) UpdateSkill(ctx context.Context, companyID, skillID string, skill PaperclipSkill) (*PaperclipSkill, error) {
 	skillPath := fmt.Sprintf("/api/companies/%s/skills/%s", url.PathEscape(companyID), url.PathEscape(skillID))
-	metadata := map[string]interface{}{"description": skill.Description}
+	metadata := map[string]interface{}{
+		"description": skill.Description,
+		"metadata":    skill.Metadata,
+	}
 	if skill.Name != "" {
 		metadata["name"] = skill.Name
 	}
 	if skill.Slug != "" {
 		metadata["slug"] = skill.Slug
-	}
-	if skill.Metadata != nil {
-		metadata["metadata"] = skill.Metadata
 	}
 	if err := c.paperclipRequest(ctx, http.MethodPatch, skillPath, metadata, nil); err != nil {
 		return nil, err
