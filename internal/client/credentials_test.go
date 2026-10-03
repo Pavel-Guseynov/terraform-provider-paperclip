@@ -5,8 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -318,6 +317,7 @@ func TestClientCredentialRegistry(t *testing.T) {
 	revokedBoardKeys := []string{}
 	revokedAgentKeys := []string{}
 
+	stringPtr := func(s string) *string { return &s }
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
 			if len(r.URL.Path) > len("/api/board-api-keys/") && r.URL.Path[:len("/api/board-api-keys/")] == "/api/board-api-keys/" {
@@ -334,6 +334,25 @@ func TestClientCredentialRegistry(t *testing.T) {
 				_, _ = w.Write([]byte(`{}`))
 				return
 			}
+		}
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/board-api-keys") {
+			w.Header().Set("Content-Type", "application/json")
+			past := time.Now().Add(-1 * time.Hour)
+			_ = json.NewEncoder(w).Encode([]PaperclipBoardKey{
+				{ID: "active-bk-find", Name: "my-board-key"},
+				{ID: "expired-bk-find", Name: "my-expired-key", ExpiresAt: &past},
+				{ID: "revoked-bk-find", Name: "my-revoked-key", RevokedAt: stringPtr("2026-01-01T00:00:00Z")},
+			})
+			return
+		}
+		if r.Method == http.MethodGet && (r.URL.Path == "/api/agents/ag-1/keys" || r.URL.Path == "/api/agents/_/keys") {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode([]PaperclipAgentKey{
+				{ID: "active-ak-find", Name: "my-agent-key", AgentID: "ag-1"},
+				{ID: "empty-agent-id-key", Name: "my-empty-agent-id-key", AgentID: ""},
+				{ID: "revoked-ak-find", Name: "my-revoked-key", RevokedAt: stringPtr("2026-01-01T00:00:00Z")},
+			})
+			return
 		}
 		http.NotFound(w, r)
 	}))
@@ -352,21 +371,55 @@ func TestClientCredentialRegistry(t *testing.T) {
 		t.Fatalf("expected token-secret-1, got %s (ok=%v)", tok, ok)
 	}
 
+	// RegisterMintedAgentKey and GetAgentIDForKey
+	cli.RegisterMintedAgentKey("ag-1", "ak-1", "agent-token-1")
+	tok, ok = cli.GetMintedToken("ak-1")
+	if !ok || tok != "agent-token-1" {
+		t.Fatalf("expected agent-token-1, got %s", tok)
+	}
+	agID, ok := cli.GetAgentIDForKey("ak-1")
+	if !ok || agID != "ag-1" {
+		t.Fatalf("expected ag-1, got %s (ok=%v)", agID, ok)
+	}
+
+	// RecordTokenDeliverySuccess and Failure
+	cli.RecordTokenDeliverySuccess("")
+	cli.RecordTokenDeliverySuccess("non-existent-token")
+	cli.RecordTokenDeliverySuccess("token-secret-1")
+	if !cli.IsDeliveryConfirmed("bk-1") {
+		t.Fatal("expected bk-1 delivery confirmed")
+	}
+
+	cli.RecordTokenDeliveryFailure("")
+	cli.RecordTokenDeliveryFailure("non-existent-token")
+	cli.RecordTokenDeliveryFailure("agent-token-1")
+	if !cli.IsDeliveryFailed("ak-1") {
+		t.Fatal("expected ak-1 delivery failed")
+	}
+
 	// MarkTokenDelivered directly
 	cli.MarkTokenDelivered("bk-1")
 	if !cli.IsTokenDelivered("bk-1") {
 		t.Fatal("expected bk-1 to be marked delivered")
 	}
 
-	cli.MarkTokenDelivered("bk-2")
-	if !cli.IsTokenDelivered("bk-2") {
-		t.Fatal("expected bk-2 to be marked delivered")
+	// GetSupersededKey
+	cli.RecordSupersededKey("new-1", "old-1", true, "")
+	if old, ok := cli.GetSupersededKey("new-1"); !ok || old != "old-1" {
+		t.Fatalf("expected old-1, got %s (ok=%v)", old, ok)
+	}
+	if _, ok := cli.GetSupersededKey("non-existent"); ok {
+		t.Fatal("expected false for nonexistent superseded key")
 	}
 
 	// ClearMintedToken
 	cli.ClearMintedToken("bk-1")
 	if _, ok := cli.GetMintedToken("bk-1"); ok {
 		t.Fatal("expected bk-1 to be cleared")
+	}
+	cli.ClearMintedToken("ak-1")
+	if _, ok := cli.GetAgentIDForKey("ak-1"); ok {
+		t.Fatal("expected ak-1 agentID to be cleared")
 	}
 
 	// ConfirmDelivery with superseded board key
@@ -380,7 +433,7 @@ func TestClientCredentialRegistry(t *testing.T) {
 	}
 
 	// ConfirmDelivery with superseded agent key
-	cli.RegisterMintedToken("ak-new", "agent-token-new")
+	cli.RegisterMintedAgentKey("ag-1", "ak-new", "agent-token-new")
 	cli.RecordSupersededKey("ak-new", "ak-old", false, "ag-1")
 	if err := cli.ConfirmDelivery(ctx, "ak-new"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -394,7 +447,7 @@ func TestClientCredentialRegistry(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// ReconcileFailedDelivery: undelivered revokes
+	// ReconcileFailedDelivery: revokes keyID
 	revokedBoardKeys = nil
 	cli.RegisterMintedToken("failed-bk", "token-failed")
 	if err := cli.ReconcileFailedDelivery(ctx, "failed-bk"); err != nil {
@@ -407,25 +460,14 @@ func TestClientCredentialRegistry(t *testing.T) {
 		t.Fatal("expected failed-bk cleared from mintedTokens")
 	}
 
-	// ReconcileFailedDelivery: delivered does NOT revoke
-	revokedBoardKeys = nil
-	cli.RegisterMintedToken("delivered-bk", "token-delivered")
-	cli.MarkTokenDelivered("delivered-bk")
-	if err := cli.ReconcileFailedDelivery(ctx, "delivered-bk"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(revokedBoardKeys) != 0 {
-		t.Fatalf("expected no revocation for delivered key, got %v", revokedBoardKeys)
-	}
-
 	// ReconcileFailedDelivery: empty keyID does nothing
 	if err := cli.ReconcileFailedDelivery(ctx, ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// ReconcileFailedAgentKeyDelivery: undelivered revokes
+	// ReconcileFailedAgentKeyDelivery: revokes agent key
 	revokedAgentKeys = nil
-	cli.RegisterMintedToken("failed-ak", "token-failed-agent")
+	cli.RegisterMintedAgentKey("ag-1", "failed-ak", "token-failed-agent")
 	if err := cli.ReconcileFailedAgentKeyDelivery(ctx, "ag-1", "failed-ak"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -433,81 +475,103 @@ func TestClientCredentialRegistry(t *testing.T) {
 		t.Fatalf("expected failed-ak revoked, got %v", revokedAgentKeys)
 	}
 
-	// ReconcileFailedAgentKeyDelivery: delivered does NOT revoke
-	revokedAgentKeys = nil
-	cli.RegisterMintedToken("delivered-ak", "token-del-agent")
-	cli.MarkTokenDelivered("delivered-ak")
-	if err := cli.ReconcileFailedAgentKeyDelivery(ctx, "ag-1", "delivered-ak"); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(revokedAgentKeys) != 0 {
-		t.Fatalf("expected no revocation for delivered agent key, got %v", revokedAgentKeys)
-	}
-
-	// ReconcileFailedAgentKeyDelivery: empty keyID does nothing
+	// ReconcileFailedAgentKeyDelivery: empty keyID or agentID does nothing
 	if err := cli.ReconcileFailedAgentKeyDelivery(ctx, "ag-1", ""); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
-	// Test deliveryStateFilePath with empty PAPERCLIP_SCRATCH_DIR
-	origScratch := os.Getenv("PAPERCLIP_SCRATCH_DIR")
-	defer func() {
-		if origScratch != "" {
-			_ = os.Setenv("PAPERCLIP_SCRATCH_DIR", origScratch)
-		} else {
-			_ = os.Unsetenv("PAPERCLIP_SCRATCH_DIR")
-		}
-	}()
-	_ = os.Unsetenv("PAPERCLIP_SCRATCH_DIR")
-	if p := deliveryStateFilePath(); p != ".paperclip_delivered_keys.json" {
-		t.Fatalf("expected .paperclip_delivered_keys.json, got %s", p)
+	if err := cli.ReconcileFailedAgentKeyDelivery(ctx, "", "failed-ak"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// loadDeliveredTokens with nonexistent file
-	scratchDir := t.TempDir()
-	_ = os.Setenv("PAPERCLIP_SCRATCH_DIR", scratchDir)
-	cliNoFile, _ := NewClient(server.URL, "tok")
-	if len(cliNoFile.deliveredTokens) != 0 {
-		t.Fatalf("expected empty deliveredTokens, got %v", cliNoFile.deliveredTokens)
+	// ReconcileTokenDeliveryFailure: empty or non-existent token does nothing
+	cli.ReconcileTokenDeliveryFailure(ctx, "")
+	cli.ReconcileTokenDeliveryFailure(ctx, "non-existent")
+
+	// ReconcileTokenDeliveryFailure: board key token revokes board key
+	revokedBoardKeys = nil
+	cli.RegisterMintedToken("reconcile-bk", "token-reconcile-bk")
+	cli.ReconcileTokenDeliveryFailure(ctx, "token-reconcile-bk")
+	if len(revokedBoardKeys) != 1 || revokedBoardKeys[0] != "reconcile-bk" {
+		t.Fatalf("expected reconcile-bk revoked, got %v", revokedBoardKeys)
 	}
 
-	// loadDeliveredTokens with corrupt json file
-	corruptFile := filepath.Join(scratchDir, ".paperclip_delivered_keys.json")
-	_ = os.WriteFile(corruptFile, []byte("{not-a-list}"), 0o600)
-	cliCorrupt, _ := NewClient(server.URL, "tok")
-	if len(cliCorrupt.deliveredTokens) != 0 {
-		t.Fatalf("expected empty deliveredTokens on corrupt file, got %v", cliCorrupt.deliveredTokens)
+	// ReconcileTokenDeliveryFailure: agent key token revokes agent key
+	revokedAgentKeys = nil
+	cli.RegisterMintedAgentKey("ag-1", "reconcile-ak", "token-reconcile-ak")
+	cli.ReconcileTokenDeliveryFailure(ctx, "token-reconcile-ak")
+	if len(revokedAgentKeys) != 1 || revokedAgentKeys[0] != "reconcile-ak" {
+		t.Fatalf("expected reconcile-ak revoked, got %v", revokedAgentKeys)
 	}
 
-	// loadDeliveredTokens with valid json file
-	_ = os.WriteFile(corruptFile, []byte(`["loaded-key-1"]`), 0o600)
-	cliValid, _ := NewClient(server.URL, "tok")
-	if !cliValid.IsTokenDelivered("loaded-key-1") {
-		t.Fatal("expected loaded-key-1 delivered from file")
+	// FindActiveBoardKeyByName
+	if _, err := cli.FindActiveBoardKeyByName(ctx, ""); err == nil {
+		t.Fatal("expected error for empty name in FindActiveBoardKeyByName")
+	}
+	activeBK, err := cli.FindActiveBoardKeyByName(ctx, "my-board-key")
+	if err != nil || activeBK.ID != "active-bk-find" {
+		t.Fatalf("unexpected result: %v, err=%v", activeBK, err)
+	}
+	if _, err := cli.FindActiveBoardKeyByName(ctx, "my-expired-key"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound for expired key, got %v", err)
+	}
+	if _, err := cli.FindActiveBoardKeyByName(ctx, "my-revoked-key"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound for revoked key, got %v", err)
+	}
+	if _, err := cli.FindActiveBoardKeyByName(ctx, "non-existent"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound for nonexistent key, got %v", err)
 	}
 
-	// Push and Pop opened keys
-	cliValid.PushOpenedBoardKey("bk-push-1")
-	cliValid.PushOpenedBoardKey("bk-push-2")
-	if k := cliValid.PopOpenedBoardKey(); k != "bk-push-2" {
-		t.Fatalf("expected bk-push-2, got %s", k)
+	// FindActiveAgentKeyByName
+	if _, err := cli.FindActiveAgentKeyByName(ctx, "", "my-agent-key"); err == nil {
+		t.Fatal("expected error for empty agentID in FindActiveAgentKeyByName")
 	}
-	if k := cliValid.PopOpenedBoardKey(); k != "bk-push-1" {
-		t.Fatalf("expected bk-push-1, got %s", k)
+	if _, err := cli.FindActiveAgentKeyByName(ctx, "ag-1", ""); err == nil {
+		t.Fatal("expected error for empty name in FindActiveAgentKeyByName")
 	}
-	if k := cliValid.PopOpenedBoardKey(); k != "" {
-		t.Fatalf("expected empty string when queue empty, got %s", k)
+	activeAK, err := cli.FindActiveAgentKeyByName(ctx, "ag-1", "my-agent-key")
+	if err != nil || activeAK.ID != "active-ak-find" {
+		t.Fatalf("unexpected result: %v, err=%v", activeAK, err)
+	}
+	emptyAK, err := cli.FindActiveAgentKeyByName(ctx, "ag-1", "my-empty-agent-id-key")
+	if err != nil || emptyAK.AgentID != "ag-1" {
+		t.Fatalf("expected empty-agent-id-key to have agentID set to ag-1, got %v, err=%v", emptyAK, err)
+	}
+	if _, err := cli.FindActiveAgentKeyByName(ctx, "ag-1", "my-revoked-key"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound for revoked agent key, got %v", err)
+	}
+	if _, err := cli.FindActiveAgentKeyByName(ctx, "ag-1", "non-existent"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound for nonexistent agent key, got %v", err)
 	}
 
-	cliValid.PushOpenedAgentKey("ak-push-1")
-	cliValid.PushOpenedAgentKey("ak-push-2")
-	if k := cliValid.PopOpenedAgentKey(); k != "ak-push-2" {
-		t.Fatalf("expected ak-push-2, got %s", k)
+	// Connection failure branches for FindActive*
+	failCli, _ := NewClient("http://127.0.0.1:1", "test-token")
+	if _, err := failCli.FindActiveBoardKeyByName(ctx, "my-board-key"); err == nil {
+		t.Fatal("expected error on connection failure in FindActiveBoardKeyByName")
 	}
-	if k := cliValid.PopOpenedAgentKey(); k != "ak-push-1" {
-		t.Fatalf("expected ak-push-1, got %s", k)
+	if _, err := failCli.FindActiveAgentKeyByName(ctx, "ag-1", "my-agent-key"); err == nil {
+		t.Fatal("expected error on connection failure in FindActiveAgentKeyByName")
 	}
-	if k := cliValid.PopOpenedAgentKey(); k != "" {
-		t.Fatalf("expected empty string when agent queue empty, got %s", k)
+
+	// FindAgentKeyByID
+	if _, err := cli.FindAgentKeyByID(ctx, ""); err == nil {
+		t.Fatal("expected error for empty keyID in FindAgentKeyByID")
+	}
+	if _, err := cli.FindAgentKeyByID(ctx, "non-existent"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound for nonexistent agent key in FindAgentKeyByID, got %v", err)
+	}
+	if _, err := cli.FindAgentKeyByID(ctx, "revoked-ak-find"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound for revoked key in FindAgentKeyByID, got %v", err)
+	}
+	foundAK, err := cli.FindAgentKeyByID(ctx, "active-ak-find")
+	if err != nil || foundAK.ID != "active-ak-find" {
+		t.Fatalf("unexpected result from FindAgentKeyByID: %v, err=%v", foundAK, err)
+	}
+	// Second call hits cache (agentKeyAgents)
+	cachedAK, err := cli.FindAgentKeyByID(ctx, "active-ak-find")
+	if err != nil || cachedAK.ID != "active-ak-find" {
+		t.Fatalf("unexpected cached result from FindAgentKeyByID: %v, err=%v", cachedAK, err)
+	}
+	if _, err := failCli.FindAgentKeyByID(ctx, "active-ak-find"); err != ErrNotFound {
+		t.Fatalf("expected ErrNotFound on connection failure in FindAgentKeyByID, got %v", err)
 	}
 }

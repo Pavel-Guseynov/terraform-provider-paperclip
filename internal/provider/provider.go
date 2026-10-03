@@ -232,6 +232,12 @@ func (r *PaperclipBoardKeyEphemeralResource) Open(ctx context.Context, req ephem
 			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 			return
 		}
+		if key, err := r.client.GetBoardKey(ctx, keyID); err == nil && key != nil {
+			r.client.MarkTokenDelivered(keyID)
+			data.Token = types.StringNull()
+			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+			return
+		}
 		if req.ClientCapabilities.DeferralAllowed {
 			resp.Deferred = &ephemeral.Deferred{
 				Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
@@ -247,7 +253,14 @@ func (r *PaperclipBoardKeyEphemeralResource) Open(ctx context.Context, req ephem
 
 	data.Token = types.StringValue(token)
 	r.keyID = keyID
-	r.client.PushOpenedBoardKey(keyID)
+	if resp.Private != nil {
+		keyBytes, _ := json.Marshal(keyID)
+		resp.Diagnostics.Append(resp.Private.SetKey(ctx, "key_id", keyBytes)...)
+		if superID, ok := r.client.GetSupersededKey(keyID); ok && superID != "" {
+			superBytes, _ := json.Marshal(superID)
+			resp.Diagnostics.Append(resp.Private.SetKey(ctx, "superseded_key_id", superBytes)...)
+		}
+	}
 
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 }
@@ -256,13 +269,28 @@ func (r *PaperclipBoardKeyEphemeralResource) Close(ctx context.Context, req ephe
 	if r.client == nil {
 		return
 	}
-	keyID := r.client.PopOpenedBoardKey()
+	var keyID string
+	if req.Private != nil {
+		keyIDBytes, diags := req.Private.GetKey(ctx, "key_id")
+		resp.Diagnostics.Append(diags...)
+		if len(keyIDBytes) > 0 {
+			_ = json.Unmarshal(keyIDBytes, &keyID)
+		}
+	}
 	if keyID == "" {
 		keyID = r.keyID
 	}
-	if keyID != "" {
+	if keyID == "" {
+		return
+	}
+
+	if r.client.IsDeliveryConfirmed(keyID) {
 		if err := r.client.ConfirmDelivery(ctx, keyID); err != nil {
 			resp.Diagnostics.AddError("Error confirming board key delivery", err.Error())
+		}
+	} else {
+		if err := r.client.ReconcileFailedDelivery(ctx, keyID); err != nil {
+			resp.Diagnostics.AddError("Error reconciling failed board key delivery", err.Error())
 		}
 	}
 }

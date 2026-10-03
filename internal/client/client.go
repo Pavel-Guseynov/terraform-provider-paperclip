@@ -53,12 +53,13 @@ type Client struct {
 	Token      string
 	HTTPClient *http.Client
 
-	credMu          sync.RWMutex
-	mintedTokens    map[string]string
-	deliveredTokens map[string]bool
-	supersededKeys  map[string]supersededKeyRecord
-	openedBoardKeys []string
-	openedAgentKeys []string
+	credMu           sync.RWMutex
+	mintedTokens     map[string]string // keyID -> token
+	pendingTokens    map[string]string // token -> keyID
+	deliveredTokens  map[string]bool   // keyID -> true (delivery confirmed)
+	failedDeliveries map[string]bool   // keyID -> true (delivery failed)
+	supersededKeys   map[string]supersededKeyRecord
+	agentKeyAgents   map[string]string // keyID -> agentID
 }
 
 type HealthResponse struct {
@@ -81,11 +82,13 @@ func NewClient(endpoint, token string) (*Client, error) {
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		mintedTokens:    make(map[string]string),
-		deliveredTokens: make(map[string]bool),
-		supersededKeys:  make(map[string]supersededKeyRecord),
+		mintedTokens:     make(map[string]string),
+		pendingTokens:    make(map[string]string),
+		deliveredTokens:  make(map[string]bool),
+		failedDeliveries: make(map[string]bool),
+		supersededKeys:   make(map[string]supersededKeyRecord),
+		agentKeyAgents:   make(map[string]string),
 	}
-	c.loadDeliveredTokens()
 	return c, nil
 }
 

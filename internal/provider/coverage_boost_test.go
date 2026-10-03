@@ -196,6 +196,7 @@ func TestEphemeralsLifecycle(t *testing.T) {
 	}
 
 	// close confirms delivery
+	cli.RecordTokenDeliverySuccess("tok-boost")
 	var bkCloseResp ephemeral.CloseResponse
 	bk.Close(ctx, ephemeral.CloseRequest{}, &bkCloseResp)
 	if bkCloseResp.Diagnostics.HasError() {
@@ -259,6 +260,7 @@ func TestEphemeralsLifecycle(t *testing.T) {
 	}
 
 	// close confirms delivery
+	cli.RecordTokenDeliverySuccess("ak-tok-boost")
 	var akCloseResp ephemeral.CloseResponse
 	ak.Close(ctx, ephemeral.CloseRequest{}, &akCloseResp)
 	if akCloseResp.Diagnostics.HasError() {

@@ -10,8 +10,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
@@ -952,7 +950,6 @@ func (c *Client) RevokeBoardKey(ctx context.Context, keyID string) error {
 			c.credMu.Lock()
 			delete(c.deliveredTokens, keyID)
 			c.credMu.Unlock()
-			c.persistDeliveredTokens()
 			return nil
 		}
 		return err
@@ -960,7 +957,6 @@ func (c *Client) RevokeBoardKey(ctx context.Context, keyID string) error {
 	c.credMu.Lock()
 	delete(c.deliveredTokens, keyID)
 	c.credMu.Unlock()
-	c.persistDeliveredTokens()
 	return nil
 }
 
@@ -968,6 +964,28 @@ func (c *Client) RegisterMintedToken(keyID, token string) {
 	c.credMu.Lock()
 	defer c.credMu.Unlock()
 	c.mintedTokens[keyID] = token
+	c.pendingTokens[token] = keyID
+	delete(c.deliveredTokens, keyID)
+	delete(c.failedDeliveries, keyID)
+}
+
+func (c *Client) RegisterMintedAgentKey(agentID, keyID, token string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	if token != "" {
+		c.mintedTokens[keyID] = token
+		c.pendingTokens[token] = keyID
+	}
+	c.agentKeyAgents[keyID] = agentID
+	delete(c.deliveredTokens, keyID)
+	delete(c.failedDeliveries, keyID)
+}
+
+func (c *Client) GetAgentIDForKey(keyID string) (string, bool) {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	agentID, ok := c.agentKeyAgents[keyID]
+	return agentID, ok
 }
 
 func (c *Client) GetMintedToken(keyID string) (string, bool) {
@@ -980,7 +998,12 @@ func (c *Client) GetMintedToken(keyID string) (string, bool) {
 func (c *Client) ClearMintedToken(keyID string) {
 	c.credMu.Lock()
 	defer c.credMu.Unlock()
+	if tok, ok := c.mintedTokens[keyID]; ok {
+		delete(c.pendingTokens, tok)
+	}
 	delete(c.mintedTokens, keyID)
+	delete(c.supersededKeys, keyID)
+	delete(c.agentKeyAgents, keyID)
 }
 
 func (c *Client) RecordSupersededKey(newKeyID, oldKeyID string, isBoard bool, agentID string) {
@@ -996,83 +1019,67 @@ func (c *Client) RecordSupersededKey(newKeyID, oldKeyID string, isBoard bool, ag
 	}
 }
 
-func (c *Client) PushOpenedBoardKey(keyID string) {
-	c.credMu.Lock()
-	defer c.credMu.Unlock()
-	c.openedBoardKeys = append(c.openedBoardKeys, keyID)
-}
-
-func (c *Client) PopOpenedBoardKey() string {
-	c.credMu.Lock()
-	defer c.credMu.Unlock()
-	if len(c.openedBoardKeys) == 0 {
-		return ""
+func (c *Client) GetSupersededKey(keyID string) (string, bool) {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	rec, ok := c.supersededKeys[keyID]
+	if !ok {
+		return "", false
 	}
-	keyID := c.openedBoardKeys[len(c.openedBoardKeys)-1]
-	c.openedBoardKeys = c.openedBoardKeys[:len(c.openedBoardKeys)-1]
-	return keyID
+	return rec.oldKeyID, true
 }
 
-func (c *Client) PushOpenedAgentKey(keyID string) {
-	c.credMu.Lock()
-	defer c.credMu.Unlock()
-	c.openedAgentKeys = append(c.openedAgentKeys, keyID)
-}
-
-func (c *Client) PopOpenedAgentKey() string {
-	c.credMu.Lock()
-	defer c.credMu.Unlock()
-	if len(c.openedAgentKeys) == 0 {
-		return ""
-	}
-	keyID := c.openedAgentKeys[len(c.openedAgentKeys)-1]
-	c.openedAgentKeys = c.openedAgentKeys[:len(c.openedAgentKeys)-1]
-	return keyID
-}
-
-func deliveryStateFilePath() string {
-	if dir := os.Getenv("PAPERCLIP_SCRATCH_DIR"); dir != "" {
-		return filepath.Join(dir, ".paperclip_delivered_keys.json")
-	}
-	return ".paperclip_delivered_keys.json"
-}
-
-func (c *Client) loadDeliveredTokens() {
-	c.credMu.Lock()
-	defer c.credMu.Unlock()
-	data, err := os.ReadFile(deliveryStateFilePath())
-	if err != nil {
+func (c *Client) RecordTokenDeliverySuccess(token string) {
+	if token == "" {
 		return
 	}
-	var list []string
-	if err := json.Unmarshal(data, &list); err == nil {
-		for _, id := range list {
-			c.deliveredTokens[id] = true
-		}
-	}
-}
-
-func (c *Client) persistDeliveredTokens() {
-	c.credMu.RLock()
-	var list []string
-	for id, delivered := range c.deliveredTokens {
-		if delivered {
-			list = append(list, id)
-		}
-	}
-	c.credMu.RUnlock()
-
-	data, err := json.Marshal(list)
-	if err == nil {
-		_ = os.WriteFile(deliveryStateFilePath(), data, 0o600)
-	}
-}
-
-func (c *Client) MarkTokenDelivered(keyID string) {
 	c.credMu.Lock()
-	c.deliveredTokens[keyID] = true
-	c.credMu.Unlock()
-	c.persistDeliveredTokens()
+	defer c.credMu.Unlock()
+	if keyID, ok := c.pendingTokens[token]; ok {
+		c.deliveredTokens[keyID] = true
+	}
+}
+
+func (c *Client) RecordTokenDeliveryFailure(token string) {
+	if token == "" {
+		return
+	}
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	if keyID, ok := c.pendingTokens[token]; ok {
+		c.failedDeliveries[keyID] = true
+	}
+}
+
+func (c *Client) ReconcileTokenDeliveryFailure(ctx context.Context, token string) {
+	if token == "" {
+		return
+	}
+	c.credMu.RLock()
+	keyID, ok := c.pendingTokens[token]
+	agentID, isAgent := c.agentKeyAgents[keyID]
+	c.credMu.RUnlock()
+	if !ok {
+		return
+	}
+
+	if isAgent && agentID != "" {
+		_ = c.ReconcileFailedAgentKeyDelivery(ctx, agentID, keyID)
+	} else {
+		_ = c.ReconcileFailedDelivery(ctx, keyID)
+	}
+}
+
+func (c *Client) IsDeliveryConfirmed(keyID string) bool {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	return c.deliveredTokens[keyID]
+}
+
+func (c *Client) IsDeliveryFailed(keyID string) bool {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	return c.failedDeliveries[keyID]
 }
 
 func (c *Client) IsTokenDelivered(keyID string) bool {
@@ -1081,14 +1088,23 @@ func (c *Client) IsTokenDelivered(keyID string) bool {
 	return c.deliveredTokens[keyID]
 }
 
+func (c *Client) MarkTokenDelivered(keyID string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	c.deliveredTokens[keyID] = true
+}
+
 func (c *Client) ConfirmDelivery(ctx context.Context, keyID string) error {
 	c.credMu.Lock()
 	c.deliveredTokens[keyID] = true
+	if tok, ok := c.mintedTokens[keyID]; ok {
+		delete(c.pendingTokens, tok)
+	}
 	delete(c.mintedTokens, keyID)
 	record, hasSuperseded := c.supersededKeys[keyID]
 	delete(c.supersededKeys, keyID)
+	delete(c.agentKeyAgents, keyID)
 	c.credMu.Unlock()
-	c.persistDeliveredTokens()
 
 	if hasSuperseded {
 		if record.isBoard {
@@ -1101,14 +1117,17 @@ func (c *Client) ConfirmDelivery(ctx context.Context, keyID string) error {
 
 func (c *Client) ReconcileFailedDelivery(ctx context.Context, keyID string) error {
 	c.credMu.Lock()
-	isDelivered := c.deliveredTokens[keyID]
+	if tok, ok := c.mintedTokens[keyID]; ok {
+		delete(c.pendingTokens, tok)
+	}
 	delete(c.supersededKeys, keyID)
 	delete(c.mintedTokens, keyID)
 	delete(c.deliveredTokens, keyID)
+	delete(c.agentKeyAgents, keyID)
+	c.failedDeliveries[keyID] = true
 	c.credMu.Unlock()
-	c.persistDeliveredTokens()
 
-	if !isDelivered && keyID != "" {
+	if keyID != "" {
 		return c.RevokeBoardKey(ctx, keyID)
 	}
 	return nil
@@ -1116,17 +1135,72 @@ func (c *Client) ReconcileFailedDelivery(ctx context.Context, keyID string) erro
 
 func (c *Client) ReconcileFailedAgentKeyDelivery(ctx context.Context, agentID, keyID string) error {
 	c.credMu.Lock()
-	isDelivered := c.deliveredTokens[keyID]
+	if tok, ok := c.mintedTokens[keyID]; ok {
+		delete(c.pendingTokens, tok)
+	}
 	delete(c.supersededKeys, keyID)
 	delete(c.mintedTokens, keyID)
 	delete(c.deliveredTokens, keyID)
+	delete(c.agentKeyAgents, keyID)
+	c.failedDeliveries[keyID] = true
 	c.credMu.Unlock()
-	c.persistDeliveredTokens()
 
-	if !isDelivered && keyID != "" && agentID != "" {
+	if keyID != "" && agentID != "" {
 		return c.RevokeAgentKey(ctx, agentID, keyID)
 	}
 	return nil
+}
+
+func (c *Client) FindActiveBoardKeyByName(ctx context.Context, name string) (*PaperclipBoardKey, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("name is required")
+	}
+	var keys []PaperclipBoardKey
+	if err := c.paperclipRequest(ctx, http.MethodGet, "/api/board-api-keys?includeInactive=true", nil, &keys); err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	for _, key := range keys {
+		if key.Name == name {
+			if key.RevokedAt != nil && *key.RevokedAt != "" {
+				continue
+			}
+			if key.ExpiresAt != nil && key.ExpiresAt.Before(now) {
+				continue
+			}
+			return &key, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (c *Client) FindActiveAgentKeyByName(ctx context.Context, agentID, name string) (*PaperclipAgentKey, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent ID is required")
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, errors.New("name is required")
+	}
+	var keys []PaperclipAgentKey
+	reqPath := fmt.Sprintf("/api/agents/%s/keys", url.PathEscape(agentID))
+	if err := c.paperclipRequest(ctx, http.MethodGet, reqPath, nil, &keys); err != nil {
+		return nil, err
+	}
+	for _, key := range keys {
+		if key.Name == name {
+			if key.RevokedAt != nil && *key.RevokedAt != "" {
+				continue
+			}
+			if key.AgentID == "" {
+				key.AgentID = agentID
+			}
+			return &key, nil
+		}
+	}
+	return nil, ErrNotFound
 }
 
 func extractItems(raw interface{}, key string) []map[string]interface{} {
@@ -1508,8 +1582,11 @@ func (c *Client) CreateSecret(ctx context.Context, companyID, name, description,
 	}
 	var resp PaperclipSecret
 	if err := c.paperclipSecretRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/secrets", url.PathEscape(companyID)), payload, &resp); err != nil {
+		c.RecordTokenDeliveryFailure(value)
+		c.ReconcileTokenDeliveryFailure(ctx, value)
 		return nil, err
 	}
+	c.RecordTokenDeliverySuccess(value)
 	if resp.CompanyID == "" {
 		resp.CompanyID = companyID
 	}
@@ -1549,8 +1626,11 @@ func (c *Client) RotateSecret(ctx context.Context, secretID, value string) (*Pap
 	payload := map[string]interface{}{"value": value}
 	var resp PaperclipSecret
 	if err := c.paperclipSecretRequest(ctx, http.MethodPost, fmt.Sprintf("/api/secrets/%s/rotate", url.PathEscape(secretID)), payload, &resp); err != nil {
+		c.RecordTokenDeliveryFailure(value)
+		c.ReconcileTokenDeliveryFailure(ctx, value)
 		return nil, err
 	}
+	c.RecordTokenDeliverySuccess(value)
 	resp.Value = value
 	return &resp, nil
 }
@@ -1710,6 +1790,37 @@ func (c *Client) GetAgentKey(ctx context.Context, agentID, keyID string) (*Paper
 	return nil, ErrNotFound
 }
 
+func (c *Client) FindAgentKeyByID(ctx context.Context, keyID string) (*PaperclipAgentKey, error) {
+	keyID = strings.TrimSpace(keyID)
+	if keyID == "" {
+		return nil, errors.New("key ID is required")
+	}
+	c.credMu.RLock()
+	agentID, ok := c.agentKeyAgents[keyID]
+	c.credMu.RUnlock()
+	if ok && agentID != "" {
+		return c.GetAgentKey(ctx, agentID, keyID)
+	}
+
+	var keys []PaperclipAgentKey
+	if err := c.paperclipRequest(ctx, http.MethodGet, "/api/agents/_/keys", nil, &keys); err == nil {
+		for _, key := range keys {
+			if key.ID == keyID {
+				if key.RevokedAt != nil && *key.RevokedAt != "" {
+					return nil, ErrNotFound
+				}
+				if key.AgentID != "" {
+					c.credMu.Lock()
+					c.agentKeyAgents[keyID] = key.AgentID
+					c.credMu.Unlock()
+				}
+				return &key, nil
+			}
+		}
+	}
+	return nil, ErrNotFound
+}
+
 func (c *Client) RevokeAgentKey(ctx context.Context, agentID, keyID string) error {
 	agentID = strings.TrimSpace(agentID)
 	if agentID == "" {
@@ -1726,7 +1837,6 @@ func (c *Client) RevokeAgentKey(ctx context.Context, agentID, keyID string) erro
 			c.credMu.Lock()
 			delete(c.deliveredTokens, keyID)
 			c.credMu.Unlock()
-			c.persistDeliveredTokens()
 			return nil
 		}
 		return err
@@ -1734,7 +1844,6 @@ func (c *Client) RevokeAgentKey(ctx context.Context, agentID, keyID string) erro
 	c.credMu.Lock()
 	delete(c.deliveredTokens, keyID)
 	c.credMu.Unlock()
-	c.persistDeliveredTokens()
 	return nil
 }
 

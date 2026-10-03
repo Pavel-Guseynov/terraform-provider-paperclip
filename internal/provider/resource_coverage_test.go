@@ -833,6 +833,29 @@ func TestPolicyAndSecretAndConnectionEdgeCases(t *testing.T) {
 		t.Fatalf("unexpected error on unchanged rotation with value: %v", modUpdValResp.Diagnostics)
 	}
 
+	// Secret ModifyPlan: plan/config Get error
+	badPlanRaw := tfsdk.Plan{Schema: secSchemaResp.Schema, Raw: tftypes.NewValue(tftypes.String, "invalid")}
+	var modBadPlanResp resource.ModifyPlanResponse
+	rSec.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:   badPlanRaw,
+		Config: tfsdk.Config{Schema: secSchemaResp.Schema, Raw: badPlanRaw.Raw},
+	}, &modBadPlanResp)
+	if !modBadPlanResp.Diagnostics.HasError() {
+		t.Fatal("expected error on invalid plan in secret ModifyPlan")
+	}
+
+	// Secret ModifyPlan: state Get error
+	badStateRaw := tfsdk.State{Schema: secSchemaResp.Schema, Raw: tftypes.NewValue(tftypes.String, "invalid")}
+	var modBadStateResp resource.ModifyPlanResponse
+	rSec.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:   secPlanRotOnly,
+		Config: tfsdk.Config{Schema: secSchemaResp.Schema, Raw: secPlanRotOnly.Raw},
+		State:  badStateRaw,
+	}, &modBadStateResp)
+	if !modBadStateResp.Diagnostics.HasError() {
+		t.Fatal("expected error on invalid state in secret ModifyPlan")
+	}
+
 	// Secret Rotate 500 error in Update
 	rSecErr := NewPaperclipSecretResource().(*PaperclipSecretResource)
 	configureTestResource(t, srvErr.URL, rSecErr)

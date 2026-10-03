@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
@@ -96,6 +97,12 @@ func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephem
 			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 			return
 		}
+		if key, err := r.client.FindAgentKeyByID(ctx, keyID); err == nil && key != nil {
+			r.client.MarkTokenDelivered(keyID)
+			data.Token = types.StringNull()
+			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+			return
+		}
 		if req.ClientCapabilities.DeferralAllowed {
 			resp.Deferred = &ephemeral.Deferred{
 				Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
@@ -111,7 +118,18 @@ func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephem
 
 	data.Token = types.StringValue(token)
 	r.keyID = keyID
-	r.client.PushOpenedAgentKey(keyID)
+	if resp.Private != nil {
+		keyBytes, _ := json.Marshal(keyID)
+		resp.Diagnostics.Append(resp.Private.SetKey(ctx, "key_id", keyBytes)...)
+		if agentID, ok := r.client.GetAgentIDForKey(keyID); ok && agentID != "" {
+			agentBytes, _ := json.Marshal(agentID)
+			resp.Diagnostics.Append(resp.Private.SetKey(ctx, "agent_id", agentBytes)...)
+		}
+		if superID, ok := r.client.GetSupersededKey(keyID); ok && superID != "" {
+			superBytes, _ := json.Marshal(superID)
+			resp.Diagnostics.Append(resp.Private.SetKey(ctx, "superseded_key_id", superBytes)...)
+		}
+	}
 
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 }
@@ -120,13 +138,40 @@ func (r *PaperclipAgentKeyEphemeralResource) Close(ctx context.Context, req ephe
 	if r.client == nil {
 		return
 	}
-	keyID := r.client.PopOpenedAgentKey()
+	var keyID string
+	var agentID string
+	if req.Private != nil {
+		keyIDBytes, diags := req.Private.GetKey(ctx, "key_id")
+		resp.Diagnostics.Append(diags...)
+		if len(keyIDBytes) > 0 {
+			_ = json.Unmarshal(keyIDBytes, &keyID)
+		}
+
+		agentIDBytes, diags := req.Private.GetKey(ctx, "agent_id")
+		resp.Diagnostics.Append(diags...)
+		if len(agentIDBytes) > 0 {
+			_ = json.Unmarshal(agentIDBytes, &agentID)
+		}
+	}
 	if keyID == "" {
 		keyID = r.keyID
 	}
-	if keyID != "" {
+	if keyID == "" {
+		return
+	}
+	if agentID == "" {
+		if id, ok := r.client.GetAgentIDForKey(keyID); ok {
+			agentID = id
+		}
+	}
+
+	if r.client.IsDeliveryConfirmed(keyID) {
 		if err := r.client.ConfirmDelivery(ctx, keyID); err != nil {
 			resp.Diagnostics.AddError("Error confirming agent key delivery", err.Error())
+		}
+	} else {
+		if err := r.client.ReconcileFailedAgentKeyDelivery(ctx, agentID, keyID); err != nil {
+			resp.Diagnostics.AddError("Error reconciling failed agent key delivery", err.Error())
 		}
 	}
 }

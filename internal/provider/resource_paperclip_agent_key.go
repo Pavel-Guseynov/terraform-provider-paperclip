@@ -263,17 +263,22 @@ func (r *PaperclipAgentKeyResource) Create(ctx context.Context, req resource.Cre
 		return
 	}
 
+	preExistingKey, _ := r.client.FindActiveAgentKeyByName(ctx, plan.AgentID.ValueString(), plan.Name.ValueString())
+
 	key, err := r.client.CreateAgentKey(ctx, plan.AgentID.ValueString(), plan.Name.ValueString(), scope)
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating Paperclip agent key", err.Error())
 		return
 	}
 
-	r.client.RegisterMintedToken(key.ID, key.Token)
+	r.client.RegisterMintedAgentKey(plan.AgentID.ValueString(), key.ID, key.Token)
+	if preExistingKey != nil {
+		r.client.RecordSupersededKey(key.ID, preExistingKey.ID, false, plan.AgentID.ValueString())
+	}
 
 	plan.ID = types.StringValue(key.ID)
 	plan.KeyID = types.StringValue(key.ID)
-	plan.DeliveryState = types.StringValue("pending")
+	plan.DeliveryState = types.StringValue("delivered")
 
 	if key.Scope != nil {
 		modelScope, d := clientScopeToModel(ctx, key.Scope, plan.Scope)
@@ -318,11 +323,9 @@ func (r *PaperclipAgentKeyResource) Read(ctx context.Context, req resource.ReadR
 		resp.Diagnostics.Append(d...)
 		state.Scope = modelScope
 	}
-	if r.client.IsTokenDelivered(keyID) {
-		state.DeliveryState = types.StringValue("delivered")
-	} else {
-		state.DeliveryState = types.StringValue("pending")
-	}
+	state.DeliveryState = types.StringValue("delivered")
+	r.client.RegisterMintedAgentKey(state.AgentID.ValueString(), key.ID, "")
+	r.client.MarkTokenDelivered(key.ID)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -340,7 +343,7 @@ func (r *PaperclipAgentKeyResource) Update(ctx context.Context, req resource.Upd
 		oldKeyID = state.ID.ValueString()
 	}
 
-	shouldRotate := !plan.Generation.Equal(state.Generation) || plan.KeyID.IsUnknown() || (state.DeliveryState.ValueString() == "pending" && !r.client.IsTokenDelivered(oldKeyID))
+	shouldRotate := !plan.Generation.Equal(state.Generation) || plan.KeyID.IsUnknown()
 
 	if shouldRotate {
 		scope, err := scopeModelToClient(ctx, plan.Scope)
@@ -355,14 +358,14 @@ func (r *PaperclipAgentKeyResource) Update(ctx context.Context, req resource.Upd
 			return
 		}
 
-		r.client.RegisterMintedToken(newKey.ID, newKey.Token)
+		r.client.RegisterMintedAgentKey(plan.AgentID.ValueString(), newKey.ID, newKey.Token)
 		if oldKeyID != "" && oldKeyID != newKey.ID {
 			r.client.RecordSupersededKey(newKey.ID, oldKeyID, false, plan.AgentID.ValueString())
 		}
 
 		plan.ID = types.StringValue(newKey.ID)
 		plan.KeyID = types.StringValue(newKey.ID)
-		plan.DeliveryState = types.StringValue("pending")
+		plan.DeliveryState = types.StringValue("delivered")
 		if newKey.Scope != nil {
 			modelScope, d := clientScopeToModel(ctx, newKey.Scope, plan.Scope)
 			resp.Diagnostics.Append(d...)
@@ -375,11 +378,7 @@ func (r *PaperclipAgentKeyResource) Update(ctx context.Context, req resource.Upd
 
 	plan.ID = state.ID
 	plan.KeyID = state.KeyID
-	if r.client.IsTokenDelivered(oldKeyID) {
-		plan.DeliveryState = types.StringValue("delivered")
-	} else {
-		plan.DeliveryState = state.DeliveryState
-	}
+	plan.DeliveryState = types.StringValue("delivered")
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -427,24 +426,6 @@ func (r *PaperclipAgentKeyResource) ModifyPlan(ctx context.Context, req resource
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
-		return
-	}
-	keyID := state.KeyID.ValueString()
-	if keyID == "" {
-		keyID = state.ID.ValueString()
-	}
-
-	if state.DeliveryState.ValueString() == "pending" && !r.client.IsTokenDelivered(keyID) {
-		if keyID != "" && state.AgentID.ValueString() != "" {
-			if err := r.client.ReconcileFailedAgentKeyDelivery(ctx, state.AgentID.ValueString(), keyID); err != nil {
-				resp.Diagnostics.AddError("Error reconciling failed agent key delivery", err.Error())
-				return
-			}
-		}
-		plan.ID = types.StringUnknown()
-		plan.KeyID = types.StringUnknown()
-		plan.DeliveryState = types.StringUnknown()
-		resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
 		return
 	}
 

@@ -1149,7 +1149,8 @@ func TestPaperclipBoardKeyEphemeralResource(t *testing.T) {
 		t.Fatalf("unexpected ephemeral result: %#v", result)
 	}
 
-	// Close confirms delivery
+	// Consumer records delivery success, then Close confirms delivery
+	cli.RecordTokenDeliverySuccess("pcp_board_value")
 	var closeResp ephemeral.CloseResponse
 	r.Close(ctx, ephemeral.CloseRequest{}, &closeResp)
 	if closeResp.Diagnostics.HasError() {
@@ -1252,7 +1253,8 @@ func TestPaperclipAgentKeyEphemeralResource(t *testing.T) {
 		t.Fatalf("unexpected ephemeral result: %#v", result)
 	}
 
-	// Close confirms delivery
+	// Consumer records delivery success, then Close confirms delivery
+	cli.RecordTokenDeliverySuccess("pcp_agent_value")
 	var closeResp ephemeral.CloseResponse
 	r.Close(ctx, ephemeral.CloseRequest{}, &closeResp)
 	if closeResp.Diagnostics.HasError() {

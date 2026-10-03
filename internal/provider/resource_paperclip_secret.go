@@ -137,6 +137,11 @@ func validateSecretRotation(config PaperclipSecretResourceModel) []secretRotatio
 	return errors
 }
 
+// ValidateConfig statically validates configuration syntax where state is unavailable.
+// If a non-null value is provided without a rotation identifier, report an error immediately.
+// Full validation of rotation semantics with ephemeral tokens (which evaluate to null in steady-state
+// after delivery while the rotation attribute remains configured) is performed in ModifyPlan where
+// prior state is accessible.
 func (r *PaperclipSecretResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
 	var config PaperclipSecretResourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
@@ -149,6 +154,13 @@ func (r *PaperclipSecretResource) ValidateConfig(ctx context.Context, req resour
 	}
 }
 
+// ModifyPlan validates secret rotation semantics using plan, config, and prior state.
+// Rationale: In steady-state after an initial apply or rotation, an ephemeral credential token
+// (e.g. ephemeral.paperclip_board_key.token) evaluates to null while the declared rotation identifier
+// remains in configuration. Statically requiring value whenever rotation is present in ValidateConfig
+// would break subsequent convergent applies. ModifyPlan has access to prior state, allowing it to
+// distinguish active rotations (where rotation changed or state is empty) requiring a value from
+// steady-state configurations where rotation is unchanged and the delivered token is null.
 func (r *PaperclipSecretResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() || req.Plan.Schema == nil || req.Config.Schema == nil {
 		return
@@ -156,14 +168,20 @@ func (r *PaperclipSecretResource) ModifyPlan(ctx context.Context, req resource.M
 
 	var plan PaperclipSecretResourceModel
 	var config PaperclipSecretResourceModel
-	_ = req.Plan.Get(ctx, &plan)
-	_ = req.Config.Get(ctx, &config)
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	isCreate := req.State.Raw.IsNull() || req.State.Schema == nil
 	rotationChanging := false
 	if !isCreate {
 		var state PaperclipSecretResourceModel
-		_ = req.State.Get(ctx, &state)
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
 		rotationChanging = !plan.Rotation.Equal(state.Rotation)
 	}
 
