@@ -240,8 +240,6 @@ func TestAllClientMethodsFailures(t *testing.T) {
 	_, _ = cli.CreateToolApp(ctx, "comp-1", PaperclipToolApp{Name: "app"})
 	_, _ = cli.GetToolApp(ctx, "app-1")
 	_, _ = cli.FindCompanyByName(ctx, "app-1")
-	_, _ = cli.GetExperimentalSettings(ctx)
-	_ = cli.CheckCapability(ctx, "enableEnvironments")
 	_, _ = cli.UpdateToolApp(ctx, "app-1", PaperclipToolApp{Name: "app"})
 	_ = cli.ArchiveToolApp(ctx, "app-1")
 	_, _ = cli.ListToolApps(ctx, "comp-1")

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 )
 
 // Environment bindings are used transiently to preserve unmanaged keys. They
@@ -81,7 +80,7 @@ func (c *Client) CheckEnvironmentCapability(ctx context.Context, companyID strin
 	if err != nil {
 		var apiErr *APIError
 		if errors.As(err, &apiErr) {
-			if apiErr.IsUnknownRoute || (apiErr.StatusCode == http.StatusNotFound && strings.Contains(strings.ToLower(apiErr.Body), "route")) {
+			if apiErr.IsUnknownRoute {
 				return fmt.Errorf("target Paperclip installation lacks required capability %q (route not found)", "environments")
 			}
 			if apiErr.StatusCode == http.StatusNotFound {

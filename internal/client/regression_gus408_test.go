@@ -211,12 +211,6 @@ func TestFullCoverageClientRemaining(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/instance/settings/experimental":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"enableEnvironments": true,
-				"customFeature":      true,
-				"enableDisabled":     false,
-			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies":
 			_ = json.NewEncoder(w).Encode([]PaperclipCompany{
 				{ID: "c1", Name: "DuplicateCorp"},
@@ -255,34 +249,6 @@ func TestFullCoverageClientRemaining(t *testing.T) {
 	defer srv.Close()
 
 	cliMock, _ := NewClient(srv.URL, "tok")
-
-	// Test GetExperimentalSettings caching
-	settings1, err := cliMock.GetExperimentalSettings(ctx)
-	if err != nil {
-		t.Fatalf("first GetExperimentalSettings failed: %v", err)
-	}
-	settings2, err := cliMock.GetExperimentalSettings(ctx)
-	if err != nil || settings2["enableEnvironments"] != true {
-		t.Fatalf("cached GetExperimentalSettings failed: %v", err)
-	}
-	_ = settings1
-
-	// Test CheckCapability
-	if err := cliMock.CheckCapability(ctx, "enableEnvironments"); err != nil {
-		t.Fatalf("expected CheckCapability enableEnvironments to succeed: %v", err)
-	}
-	if err := cliMock.CheckCapability(ctx, "environments"); err != nil {
-		t.Fatalf("expected CheckCapability environments to succeed: %v", err)
-	}
-	if err := cliMock.CheckCapability(ctx, "customFeature"); err != nil {
-		t.Fatalf("expected CheckCapability customFeature to succeed: %v", err)
-	}
-	if err := cliMock.CheckCapability(ctx, "enableDisabled"); err == nil {
-		t.Fatal("expected CheckCapability enableDisabled to fail")
-	}
-	if err := cliMock.CheckCapability(ctx, "nonExistentCapability"); err == nil {
-		t.Fatal("expected CheckCapability nonExistentCapability to fail")
-	}
 
 	// Test CheckEnvironmentCapability branches
 	if err := cliMock.CheckEnvironmentCapability(ctx, "comp-test"); err != nil {
@@ -327,28 +293,6 @@ func TestFullCoverageClientRemaining(t *testing.T) {
 	cancel()
 	if err := cliMock.CheckEnvironmentCapability(canceledCtx, "comp-test"); err == nil || !strings.Contains(err.Error(), "failed to verify capability") {
 		t.Fatalf("expected non-APIError to fail CheckEnvironmentCapability, got: %v", err)
-	}
-
-	// Test CheckCapability when route is 404
-	srv404 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error":"API route not found"}`))
-	}))
-	defer srv404.Close()
-	cli404, _ := NewClient(srv404.URL, "tok")
-	if err := cli404.CheckCapability(ctx, "enableEnvironments"); err == nil || !strings.Contains(err.Error(), "route not found") {
-		t.Fatalf("expected route not found error, got: %v", err)
-	}
-
-	// Test CheckCapability when server returns 500
-	srv500 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = w.Write([]byte(`{"error":"internal error"}`))
-	}))
-	defer srv500.Close()
-	cli500, _ := NewClient(srv500.URL, "tok")
-	if err := cli500.CheckCapability(ctx, "enableEnvironments"); err == nil || !strings.Contains(err.Error(), "failed to verify capability") {
-		t.Fatalf("expected failed to verify capability error, got: %v", err)
 	}
 
 	// Test FindCompanyByName multiple matches error
