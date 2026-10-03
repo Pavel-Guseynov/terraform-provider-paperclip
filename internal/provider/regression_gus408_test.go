@@ -285,17 +285,16 @@ func TestRegressionDataSourceIDLookupsMismatchValidations(t *testing.T) {
 	}
 }
 
-func TestRegressionLocalEnvironmentApplyCapabilityFailure(t *testing.T) {
+func TestRegressionLocalEnvironmentModifyPlanCapabilityMissing(t *testing.T) {
 	ctx := context.Background()
+	var writeCalls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/api/instance/settings/experimental" {
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"enableEnvironments": false,
-			})
-			return
+		if r.Method == http.MethodPatch || r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodDelete {
+			writeCalls++
 		}
-		http.NotFound(w, r)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message": "API route not found"}`))
 	}))
 	defer server.Close()
 
@@ -307,11 +306,27 @@ func TestRegressionLocalEnvironmentApplyCapabilityFailure(t *testing.T) {
 		CompanyID:          types.StringValue("comp-1"),
 		InheritServicePath: types.BoolValue(true),
 	})
-	var createResp resource.CreateResponse
-	createResp.State = tfsdk.State{Schema: schema}
-	r.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
-	if !createResp.Diagnostics.HasError() {
-		t.Fatal("expected error on Create when capability is disabled")
+
+	var modifyPlanResp resource.ModifyPlanResponse
+	r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: plan}, &modifyPlanResp)
+
+	if !modifyPlanResp.Diagnostics.HasError() {
+		t.Fatal("expected ModifyPlan to fail when target installation lacks environments capability")
+	}
+
+	foundCapabilityError := false
+	for _, diag := range modifyPlanResp.Diagnostics.Errors() {
+		if strings.Contains(diag.Detail(), "environments") && strings.Contains(diag.Detail(), "route not found") {
+			foundCapabilityError = true
+			break
+		}
+	}
+	if !foundCapabilityError {
+		t.Fatalf("expected capability diagnostic naming environments and route not found, got: %v", modifyPlanResp.Diagnostics.Errors())
+	}
+
+	if writeCalls != 0 {
+		t.Fatalf("expected zero writes when capability check fails at plan time, got %d writes", writeCalls)
 	}
 }
 

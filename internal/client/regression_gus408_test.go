@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -243,6 +244,10 @@ func TestFullCoverageClientRemaining(t *testing.T) {
 			_ = json.NewEncoder(w).Encode([]PaperclipToolApp{
 				{ID: "other-app", Type: "mcp_stdio"},
 			})
+		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/environments"):
+			_ = json.NewEncoder(w).Encode([]PaperclipEnvironment{
+				{ID: "env-1", Driver: "local"},
+			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -267,19 +272,61 @@ func TestFullCoverageClientRemaining(t *testing.T) {
 		t.Fatalf("expected CheckCapability enableEnvironments to succeed: %v", err)
 	}
 	if err := cliMock.CheckCapability(ctx, "environments"); err != nil {
-		t.Fatalf("expected CheckCapability environments alt to succeed: %v", err)
+		t.Fatalf("expected CheckCapability environments to succeed: %v", err)
 	}
 	if err := cliMock.CheckCapability(ctx, "customFeature"); err != nil {
 		t.Fatalf("expected CheckCapability customFeature to succeed: %v", err)
-	}
-	if err := cliMock.CheckCapability(ctx, "enableCustomFeature"); err != nil {
-		t.Fatalf("expected CheckCapability enableCustomFeature alt to succeed: %v", err)
 	}
 	if err := cliMock.CheckCapability(ctx, "enableDisabled"); err == nil {
 		t.Fatal("expected CheckCapability enableDisabled to fail")
 	}
 	if err := cliMock.CheckCapability(ctx, "nonExistentCapability"); err == nil {
 		t.Fatal("expected CheckCapability nonExistentCapability to fail")
+	}
+
+	// Test CheckEnvironmentCapability branches
+	if err := cliMock.CheckEnvironmentCapability(ctx, "comp-test"); err != nil {
+		t.Fatalf("expected CheckEnvironmentCapability to succeed: %v", err)
+	}
+
+	// Test CheckEnvironmentCapability with 404 company not found (route exists, returns nil)
+	srvCompanyNotFound := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"company not found"}`))
+	}))
+	defer srvCompanyNotFound.Close()
+	cliComp404, _ := NewClient(srvCompanyNotFound.URL, "tok")
+	if err := cliComp404.CheckEnvironmentCapability(ctx, ""); err != nil {
+		t.Fatalf("expected CheckEnvironmentCapability with company not found to succeed: %v", err)
+	}
+
+	// Test CheckEnvironmentCapability with unknown route 404
+	srvEnvRoute404 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"error":"Cannot GET /api/companies/none/environments"}`))
+	}))
+	defer srvEnvRoute404.Close()
+	cliEnv404, _ := NewClient(srvEnvRoute404.URL, "tok")
+	if err := cliEnv404.CheckEnvironmentCapability(ctx, ""); err == nil || !strings.Contains(err.Error(), "route not found") {
+		t.Fatalf("expected route not found error from CheckEnvironmentCapability, got: %v", err)
+	}
+
+	// Test CheckEnvironmentCapability with server 500
+	srvEnv500 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"db failure"}`))
+	}))
+	defer srvEnv500.Close()
+	cliEnv500, _ := NewClient(srvEnv500.URL, "tok")
+	if err := cliEnv500.CheckEnvironmentCapability(ctx, "comp-test"); err == nil || !strings.Contains(err.Error(), "failed to verify capability") {
+		t.Fatalf("expected failed to verify capability error, got: %v", err)
+	}
+
+	// Test CheckEnvironmentCapability with canceled context (non-APIError)
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := cliMock.CheckEnvironmentCapability(canceledCtx, "comp-test"); err == nil || !strings.Contains(err.Error(), "failed to verify capability") {
+		t.Fatalf("expected non-APIError to fail CheckEnvironmentCapability, got: %v", err)
 	}
 
 	// Test CheckCapability when route is 404
@@ -348,5 +395,101 @@ func TestFullCoverageClientRemaining(t *testing.T) {
 	appNoMatch, err := cliMock.GetToolApp(ctx, "app-no-type-no-list-match")
 	if err != nil || appNoMatch.Type != "" {
 		t.Fatalf("expected app with empty type when not in list, got: %v, %v", appNoMatch, err)
+	}
+}
+
+func TestRegressionSecretExclusionEndToEndClientCall(t *testing.T) {
+	ctx := context.Background()
+	providerToken := "paperclip-provider-bearer-token-xyz-12345"
+	topLevelSecret := "super-top-level-secret-value-999"
+	nestedSecret := "sk-nested-agent-env-token-88888"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Correlation-Id", "cid-secret-echo")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(fmt.Sprintf(`{"error":"failed operation: bearer=%s, secret=%s, nested=%s"}`,
+			providerToken, topLevelSecret, nestedSecret)))
+	}))
+	defer srv.Close()
+
+	cli, err := NewClient(srv.URL, providerToken)
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	_, err = cli.CreateAgent(ctx, "comp-1", PaperclipAgent{
+		Name: "agent-with-secrets",
+		AdapterConfig: map[string]interface{}{
+			"env": map[string]interface{}{
+				"ANTHROPIC_API_KEY": nestedSecret,
+			},
+			"token": topLevelSecret,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected CreateAgent to fail with 500 error")
+	}
+
+	errMsg := err.Error()
+	if strings.Contains(errMsg, providerToken) {
+		t.Fatalf("provider token leaked in error message: %s", errMsg)
+	}
+	if strings.Contains(errMsg, topLevelSecret) {
+		t.Fatalf("top-level secret leaked in error message: %s", errMsg)
+	}
+	if strings.Contains(errMsg, nestedSecret) {
+		t.Fatalf("nested secret leaked in error message: %s", errMsg)
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected error to be *APIError, got: %T", err)
+	}
+	if strings.Contains(apiErr.Body, providerToken) {
+		t.Fatalf("provider token leaked in apiErr.Body: %s", apiErr.Body)
+	}
+	if strings.Contains(apiErr.Body, topLevelSecret) {
+		t.Fatalf("top-level secret leaked in apiErr.Body: %s", apiErr.Body)
+	}
+	if strings.Contains(apiErr.Body, nestedSecret) {
+		t.Fatalf("nested secret leaked in apiErr.Body: %s", apiErr.Body)
+	}
+	if !strings.Contains(apiErr.Body, "[REDACTED]") {
+		t.Fatalf("expected [REDACTED] in apiErr.Body, got: %s", apiErr.Body)
+	}
+}
+
+func TestRegressionSecretRequestUnknownRoute404IsNotErrNotFound(t *testing.T) {
+	ctx := context.Background()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message": "API route not found"}`))
+	}))
+	defer srv.Close()
+
+	cli, err := NewClient(srv.URL, "prov-token")
+	if err != nil {
+		t.Fatalf("NewClient failed: %v", err)
+	}
+
+	_, err = cli.RotateSecret(ctx, "sec-1", "new-secret-val")
+	if err == nil {
+		t.Fatal("expected error on RotateSecret unknown route 404")
+	}
+	if errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown route 404 on secret request must NOT be misclassified as ErrNotFound, got: %v", err)
+	}
+
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got: %T", err)
+	}
+	if !apiErr.IsUnknownRoute {
+		t.Fatal("expected apiErr.IsUnknownRoute to be true")
+	}
+	if apiErr.Body != "[REDACTED]" {
+		t.Fatalf("expected apiErr.Body to be [REDACTED], got: %s", apiErr.Body)
 	}
 }

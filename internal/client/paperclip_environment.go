@@ -2,9 +2,11 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // Environment bindings are used transiently to preserve unmanaged keys. They
@@ -64,4 +66,29 @@ func (c *Client) InheritLocalServicePath(ctx context.Context, companyID, id stri
 		return nil, fmt.Errorf("local execution environment still overrides the service PATH after update")
 	}
 	return updated, nil
+}
+
+// CheckEnvironmentCapability verifies that the target Paperclip installation mounts the
+// environment API routes before any resource mutation is planned or executed.
+func (c *Client) CheckEnvironmentCapability(ctx context.Context, companyID string) error {
+	cid := companyID
+	if cid == "" {
+		cid = "__capability_probe__"
+	}
+	var envs []PaperclipEnvironment
+	endpoint := "/api/companies/" + url.PathEscape(cid) + "/environments?driver=local"
+	err := c.paperclipRequest(ctx, http.MethodGet, endpoint, nil, &envs)
+	if err != nil {
+		var apiErr *APIError
+		if errors.As(err, &apiErr) {
+			if apiErr.IsUnknownRoute || (apiErr.StatusCode == http.StatusNotFound && strings.Contains(strings.ToLower(apiErr.Body), "route")) {
+				return fmt.Errorf("target Paperclip installation lacks required capability %q (route not found)", "environments")
+			}
+			if apiErr.StatusCode == http.StatusNotFound {
+				return nil
+			}
+		}
+		return fmt.Errorf("failed to verify capability %q: %w", "environments", err)
+	}
+	return nil
 }

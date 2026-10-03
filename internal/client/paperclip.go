@@ -608,12 +608,49 @@ func (c *Client) paperclipRequestWithToken(ctx context.Context, method, path str
 var sensitiveKeyPattern = regexp.MustCompile(`(?i)^(value|token|secret|password|boardapitoken|board_token|apikey|api_key|credential|credentials|authorization|privatekey|private_key)$`)
 var sensitiveRegexPattern = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9\-_\.]+|((?:token|secret|password|key|value)\s*[:=]\s*["']?)[^"'\s,;]+(["']?)`)
 
+func isSensitiveKey(key string) bool {
+	if sensitiveKeyPattern.MatchString(key) {
+		return true
+	}
+	lower := strings.ToLower(key)
+	return strings.Contains(lower, "token") ||
+		strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "password") ||
+		strings.Contains(lower, "apikey") ||
+		strings.Contains(lower, "api_key") ||
+		strings.Contains(lower, "credential") ||
+		strings.Contains(lower, "private_key")
+}
+
+func extractRequestSecrets(v interface{}) []string {
+	var secrets []string
+	var walk func(val interface{}, parentKey string)
+	walk = func(val interface{}, parentKey string) {
+		switch node := val.(type) {
+		case map[string]interface{}:
+			for k, child := range node {
+				isSensitive := isSensitiveKey(k) || strings.EqualFold(parentKey, "env") || strings.EqualFold(parentKey, "envvars")
+				if str, ok := child.(string); ok && isSensitive && strings.TrimSpace(str) != "" {
+					secrets = append(secrets, strings.TrimSpace(str))
+				}
+				walk(child, k)
+			}
+		case []interface{}:
+			for _, item := range node {
+				walk(item, parentKey)
+			}
+		}
+	}
+	walk(v, "")
+	return secrets
+}
+
 func sanitizeJSONValue(v interface{}) interface{} {
 	switch val := v.(type) {
 	case map[string]interface{}:
 		sanitized := make(map[string]interface{}, len(val))
 		for k, child := range val {
-			if sensitiveKeyPattern.MatchString(k) {
+			if isSensitiveKey(k) {
 				sanitized[k] = "[REDACTED]"
 			} else {
 				sanitized[k] = sanitizeJSONValue(child)
@@ -735,13 +772,9 @@ func (c *Client) paperclipRequestWithErrorBody(ctx context.Context, method, path
 		if err != nil {
 			return fmt.Errorf("marshal paperclip request: %w", err)
 		}
-		var bodyMap map[string]interface{}
-		if err := json.Unmarshal(data, &bodyMap); err == nil {
-			for _, key := range []string{"value", "token", "password", "secret", "boardApiToken"} {
-				if val, ok := bodyMap[key].(string); ok && val != "" {
-					sensitiveSecrets = append(sensitiveSecrets, val)
-				}
-			}
+		var rawBody interface{}
+		if err := json.Unmarshal(data, &rawBody); err == nil {
+			sensitiveSecrets = append(sensitiveSecrets, extractRequestSecrets(rawBody)...)
 		}
 		bodyReader = bytes.NewReader(data)
 	}
@@ -769,12 +802,12 @@ func (c *Client) paperclipRequestWithErrorBody(ctx context.Context, method, path
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		unknownRoute := isUnknownRoute(resp.StatusCode, string(respBody))
 		correlationID := extractCorrelationID(resp, respBody)
 		sanitizedBody := sanitizeResponseBody(respBody, sensitiveSecrets...)
 		if !includeErrorBody {
 			sanitizedBody = "[REDACTED]"
 		}
-		unknownRoute := isUnknownRoute(resp.StatusCode, sanitizedBody)
 		return &APIError{
 			Method:         method,
 			Path:           path,

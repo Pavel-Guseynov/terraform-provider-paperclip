@@ -72,7 +72,16 @@ func (r *PaperclipLocalEnvironmentResource) ModifyPlan(ctx context.Context, req 
 	if r.client == nil || req.Plan.Raw.IsNull() {
 		return
 	}
-	if err := r.client.CheckCapability(ctx, "enableEnvironments"); err != nil {
+	var model PaperclipLocalEnvironmentModel
+	if diags := req.Plan.Get(ctx, &model); diags.HasError() {
+		resp.Diagnostics.Append(diags...)
+		return
+	}
+	companyID := ""
+	if !model.CompanyID.IsUnknown() && !model.CompanyID.IsNull() {
+		companyID = model.CompanyID.ValueString()
+	}
+	if err := r.client.CheckEnvironmentCapability(ctx, companyID); err != nil {
 		resp.Diagnostics.AddError("Required capability missing", err.Error())
 	}
 }
@@ -84,9 +93,6 @@ func (r *PaperclipLocalEnvironmentResource) apply(ctx context.Context, plan tfsd
 	}
 	if !model.InheritServicePath.ValueBool() {
 		return fmt.Errorf("local execution must inherit the service PATH")
-	}
-	if err := r.client.CheckCapability(ctx, "enableEnvironments"); err != nil {
-		return err
 	}
 	if model.ID.IsUnknown() || model.ID.IsNull() {
 		env, err := r.client.FindLocalEnvironment(ctx, model.CompanyID.ValueString())

@@ -104,6 +104,9 @@ func (c *Client) GetExperimentalSettings(ctx context.Context) (map[string]interf
 }
 
 func (c *Client) CheckCapability(ctx context.Context, capability string) error {
+	if capability == "environments" {
+		return c.CheckEnvironmentCapability(ctx, "")
+	}
 	settings, err := c.GetExperimentalSettings(ctx)
 	if err != nil {
 		var apiErr *APIError
@@ -114,13 +117,6 @@ func (c *Client) CheckCapability(ctx context.Context, capability string) error {
 	}
 
 	val, ok := settings[capability]
-	if !ok && strings.HasPrefix(capability, "enable") {
-		alt := strings.ToLower(capability[6:7]) + capability[7:]
-		val, ok = settings[alt]
-	} else if !ok && !strings.HasPrefix(capability, "enable") {
-		alt := "enable" + strings.ToUpper(capability[:1]) + capability[1:]
-		val, ok = settings[alt]
-	}
 	if !ok || val != true {
 		return fmt.Errorf("target Paperclip installation lacks required capability %q", capability)
 	}
