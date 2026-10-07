@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -20,6 +22,7 @@ var (
 	_ resource.ResourceWithConfigure      = &PaperclipSecretResource{}
 	_ resource.ResourceWithImportState    = &PaperclipSecretResource{}
 	_ resource.ResourceWithValidateConfig = &PaperclipSecretResource{}
+	_ resource.ResourceWithUpgradeState   = &PaperclipSecretResource{}
 )
 
 func NewPaperclipSecretResource() resource.Resource {
@@ -31,12 +34,22 @@ type PaperclipSecretResource struct {
 }
 
 type PaperclipSecretResourceModel struct {
-	ID          types.String `tfsdk:"id"`
-	CompanyID   types.String `tfsdk:"company_id"`
-	Name        types.String `tfsdk:"name"`
-	Description types.String `tfsdk:"description"`
-	Value       types.String `tfsdk:"value"`
-	Rotation    types.String `tfsdk:"rotation"`
+	ID                 types.String `tfsdk:"id"`
+	CompanyID          types.String `tfsdk:"company_id"`
+	Key                types.String `tfsdk:"key"`
+	Name               types.String `tfsdk:"name"`
+	ProviderType       types.String `tfsdk:"provider_type"`
+	Status             types.String `tfsdk:"status"`
+	ManagedMode        types.String `tfsdk:"managed_mode"`
+	ExternalRef        types.String `tfsdk:"external_ref"`
+	ProviderConfigID   types.String `tfsdk:"provider_config_id"`
+	ProviderMetadata   types.String `tfsdk:"provider_metadata"`
+	ProviderVersionRef types.String `tfsdk:"provider_version_ref"`
+	Description        types.String `tfsdk:"description"`
+	Value              types.String `tfsdk:"value"`
+	Rotation           types.String `tfsdk:"rotation"`
+	LatestVersion      types.Int64  `tfsdk:"latest_version"`
+	LastRotatedAt      types.String `tfsdk:"last_rotated_at"`
 }
 
 func normalizePaperclipSecretState(state *PaperclipSecretResourceModel, secret *client.PaperclipSecret) {
@@ -46,6 +59,32 @@ func normalizePaperclipSecretState(state *PaperclipSecretResourceModel, secret *
 	}
 	state.Name = types.StringValue(secret.Name)
 	state.Description = stringOrNull(secret.Description)
+	state.Key = stringOrNull(secret.Key)
+	if secret.Provider != "" {
+		state.ProviderType = types.StringValue(secret.Provider)
+	} else if state.ProviderType.IsNull() || state.ProviderType.IsUnknown() {
+		state.ProviderType = types.StringValue("local_encrypted")
+	}
+	if secret.Status != "" {
+		state.Status = types.StringValue(secret.Status)
+	} else if state.Status.IsNull() || state.Status.IsUnknown() {
+		state.Status = types.StringValue("active")
+	}
+	if secret.ManagedMode != "" {
+		state.ManagedMode = types.StringValue(secret.ManagedMode)
+	} else if state.ManagedMode.IsNull() || state.ManagedMode.IsUnknown() {
+		state.ManagedMode = types.StringValue("paperclip_managed")
+	}
+	state.ExternalRef = stringOrNull(secret.ExternalRef)
+	state.ProviderConfigID = stringOrNull(secret.ProviderConfigID)
+	state.ProviderVersionRef = stringOrNull(secret.ProviderVersionRef)
+	state.ProviderMetadata = refreshSemanticJSON(state.ProviderMetadata, secret.ProviderMetadata)
+	if secret.LatestVersion > 0 {
+		state.LatestVersion = types.Int64Value(secret.LatestVersion)
+	} else if state.LatestVersion.IsUnknown() {
+		state.LatestVersion = types.Int64Null()
+	}
+	state.LastRotatedAt = stringOrNull(secret.LastRotatedAt)
 }
 
 func (r *PaperclipSecretResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -54,6 +93,7 @@ func (r *PaperclipSecretResource) Metadata(ctx context.Context, req resource.Met
 
 func (r *PaperclipSecretResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		Version:     1,
 		Description: "Manages a Paperclip secret in a company.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -74,12 +114,68 @@ func (r *PaperclipSecretResource) Schema(ctx context.Context, req resource.Schem
 				Description: "Secret identifier name.",
 				Required:    true,
 			},
+			"key": schema.StringAttribute{
+				Description: "Optional native secret key.",
+				Optional:    true,
+				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"provider_type": schema.StringAttribute{
+				Description: "Secret provider backend: local_encrypted, aws_secrets_manager, gcp_secret_manager, or vault.",
+				Optional:    true,
+				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"status": schema.StringAttribute{
+				Description: "Administrative secret status: active, disabled, or archived.",
+				Optional:    true,
+				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"managed_mode": schema.StringAttribute{
+				Description: "Secret managed mode: paperclip_managed or external_reference.",
+				Optional:    true,
+				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
+			},
+			"external_ref": schema.StringAttribute{
+				Description: "External vault reference string. Required for external_reference secrets; prohibited for paperclip_managed secrets.",
+				Optional:    true,
+			},
+			"provider_config_id": schema.StringAttribute{
+				Description: "Optional vault provider configuration identifier.",
+				Optional:    true,
+			},
+			"provider_metadata": schema.StringAttribute{
+				Description: "Optional JSON metadata object for the secret provider backend.",
+				Optional:    true,
+				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+					SemanticJSONPlanModifier(),
+				},
+				Validators: []validator.String{
+					JSONAttributeValidator(),
+				},
+			},
+			"provider_version_ref": schema.StringAttribute{
+				Description: "Optional provider-specific version reference.",
+				Optional:    true,
+			},
 			"description": schema.StringAttribute{
 				Description: "Optional secret description.",
 				Optional:    true,
 			},
 			"value": schema.StringAttribute{
-				Description: "Optional write-only secret plaintext value. It must be supplied together with rotation and is never persisted in plan or state.",
+				Description: "Optional write-only secret plaintext value. It must be supplied together with rotation for paperclip_managed secrets and is never persisted in plan or state. Prohibited for external_reference secrets.",
 				Optional:    true,
 				Sensitive:   true,
 				WriteOnly:   true,
@@ -91,6 +187,81 @@ func (r *PaperclipSecretResource) Schema(ctx context.Context, req resource.Schem
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
 				},
+			},
+			"latest_version": schema.Int64Attribute{
+				Description: "The latest secret revision version number reported by Paperclip.",
+				Computed:    true,
+			},
+			"last_rotated_at": schema.StringAttribute{
+				Description: "Timestamp when the secret was last rotated, reflecting remote rotations as drift.",
+				Computed:    true,
+			},
+		},
+	}
+}
+
+func (r *PaperclipSecretResource) UpgradeState(ctx context.Context) map[int64]resource.StateUpgrader {
+	return map[int64]resource.StateUpgrader{
+		0: {
+			PriorSchema: &schema.Schema{
+				Attributes: map[string]schema.Attribute{
+					"id": schema.StringAttribute{
+						Computed: true,
+					},
+					"company_id": schema.StringAttribute{
+						Required: true,
+					},
+					"name": schema.StringAttribute{
+						Required: true,
+					},
+					"description": schema.StringAttribute{
+						Optional: true,
+					},
+					"value": schema.StringAttribute{
+						Optional:  true,
+						Sensitive: true,
+						WriteOnly: true,
+					},
+					"rotation": schema.StringAttribute{
+						Optional: true,
+						Computed: true,
+					},
+				},
+			},
+			StateUpgrader: func(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+				var prior struct {
+					ID          types.String `tfsdk:"id"`
+					CompanyID   types.String `tfsdk:"company_id"`
+					Name        types.String `tfsdk:"name"`
+					Description types.String `tfsdk:"description"`
+					Value       types.String `tfsdk:"value"`
+					Rotation    types.String `tfsdk:"rotation"`
+				}
+				resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
+				if resp.Diagnostics.HasError() {
+					return
+				}
+
+				upgraded := PaperclipSecretResourceModel{
+					ID:                 prior.ID,
+					CompanyID:          prior.CompanyID,
+					Name:               prior.Name,
+					Description:        prior.Description,
+					Value:              types.StringNull(),
+					Rotation:           prior.Rotation,
+					Key:                types.StringNull(),
+					ProviderType:       types.StringValue("local_encrypted"),
+					Status:             types.StringValue("active"),
+					ManagedMode:        types.StringValue("paperclip_managed"),
+					ExternalRef:        types.StringNull(),
+					ProviderConfigID:   types.StringNull(),
+					ProviderMetadata:   types.StringNull(),
+					ProviderVersionRef: types.StringNull(),
+					LatestVersion:      types.Int64Null(),
+					LastRotatedAt:      types.StringNull(),
+				}
+
+				resp.Diagnostics.Append(resp.State.Set(ctx, &upgraded)...)
 			},
 		},
 	}
@@ -108,17 +279,37 @@ type secretRotationValidationError struct {
 
 func validateSecretRotation(config PaperclipSecretResourceModel) []secretRotationValidationError {
 	errors := []secretRotationValidationError{}
+	mode := "paperclip_managed"
+	if !config.ManagedMode.IsNull() && !config.ManagedMode.IsUnknown() && config.ManagedMode.ValueString() != "" {
+		mode = config.ManagedMode.ValueString()
+	}
+
 	valueConfigured := configuredString(config.Value)
 	rotationConfigured := configuredString(config.Rotation)
-	if valueConfigured && !config.Value.IsUnknown() && config.Value.ValueString() == "" {
-		errors = append(errors, secretRotationValidationError{"value", "Invalid secret value", "value must not be empty when a secret rotation is declared"})
+	externalRefConfigured := configuredString(config.ExternalRef)
+
+	if mode == "external_reference" {
+		if valueConfigured {
+			errors = append(errors, secretRotationValidationError{"value", "Invalid secret value", "external_reference secrets cannot declare a plaintext value"})
+		}
+		if !externalRefConfigured || (!config.ExternalRef.IsUnknown() && config.ExternalRef.ValueString() == "") {
+			errors = append(errors, secretRotationValidationError{"external_ref", "Missing external_ref", "external_reference secrets require an external_ref"})
+		}
+	} else {
+		if externalRefConfigured && !config.ExternalRef.IsUnknown() && config.ExternalRef.ValueString() != "" {
+			errors = append(errors, secretRotationValidationError{"external_ref", "Invalid external_ref", "paperclip_managed secrets cannot set external_ref"})
+		}
+		if valueConfigured && !config.Value.IsUnknown() && config.Value.ValueString() == "" {
+			errors = append(errors, secretRotationValidationError{"value", "Invalid secret value", "value must not be empty when a secret rotation is declared"})
+		}
+		if rotationConfigured && !config.Rotation.IsUnknown() && config.Rotation.ValueString() == "" {
+			errors = append(errors, secretRotationValidationError{"rotation", "Invalid secret rotation", "rotation must be a non-empty, non-secret identifier"})
+		}
+		if valueConfigured != rotationConfigured {
+			errors = append(errors, secretRotationValidationError{"rotation", "Incomplete secret rotation declaration", "value and rotation must either both be configured or both be omitted"})
+		}
 	}
-	if rotationConfigured && !config.Rotation.IsUnknown() && config.Rotation.ValueString() == "" {
-		errors = append(errors, secretRotationValidationError{"rotation", "Invalid secret rotation", "rotation must be a non-empty, non-secret identifier"})
-	}
-	if valueConfigured != rotationConfigured {
-		errors = append(errors, secretRotationValidationError{"rotation", "Incomplete secret rotation declaration", "value and rotation must either both be configured or both be omitted"})
-	}
+
 	return errors
 }
 
@@ -131,6 +322,34 @@ func (r *PaperclipSecretResource) ValidateConfig(ctx context.Context, req resour
 
 	for _, validationError := range validateSecretRotation(config) {
 		resp.Diagnostics.AddAttributeError(path.Root(validationError.attribute), validationError.summary, validationError.detail)
+	}
+
+	if !config.Status.IsNull() && !config.Status.IsUnknown() {
+		st := config.Status.ValueString()
+		if st != "active" && st != "disabled" && st != "archived" {
+			resp.Diagnostics.AddAttributeError(path.Root("status"), "Invalid Secret Status", "status must be one of 'active', 'disabled', or 'archived'")
+		}
+	}
+
+	if !config.ProviderType.IsNull() && !config.ProviderType.IsUnknown() {
+		p := config.ProviderType.ValueString()
+		if p != "local_encrypted" && p != "aws_secrets_manager" && p != "gcp_secret_manager" && p != "vault" {
+			resp.Diagnostics.AddAttributeError(path.Root("provider_type"), "Invalid Secret Provider", "provider_type must be one of 'local_encrypted', 'aws_secrets_manager', 'gcp_secret_manager', or 'vault'")
+		}
+	}
+
+	if !config.ManagedMode.IsNull() && !config.ManagedMode.IsUnknown() {
+		m := config.ManagedMode.ValueString()
+		if m != "paperclip_managed" && m != "external_reference" {
+			resp.Diagnostics.AddAttributeError(path.Root("managed_mode"), "Invalid Secret Managed Mode", "managed_mode must be either 'paperclip_managed' or 'external_reference'")
+		}
+	}
+
+	if !config.Key.IsNull() && !config.Key.IsUnknown() {
+		k := strings.TrimSpace(config.Key.ValueString())
+		if len(k) > 120 || !secretKeyRegex.MatchString(k) {
+			resp.Diagnostics.AddAttributeError(path.Root("key"), "Invalid Secret Key", fmt.Sprintf("Key %q must match ^[a-zA-Z0-9_.-]+$ and have length between 1 and 120", k))
+		}
 	}
 }
 
@@ -158,16 +377,46 @@ func (r *PaperclipSecretResource) Create(ctx context.Context, req resource.Creat
 		return
 	}
 
-	secret, err := r.client.CreateSecret(
-		ctx,
-		plan.CompanyID.ValueString(),
-		plan.Name.ValueString(),
-		plan.Description.ValueString(),
-		config.Value.ValueString(),
-	)
+	opts := client.CreateSecretOptions{
+		Name:               plan.Name.ValueString(),
+		Key:                plan.Key.ValueString(),
+		Provider:           plan.ProviderType.ValueString(),
+		ProviderConfigID:   plan.ProviderConfigID.ValueString(),
+		ManagedMode:        plan.ManagedMode.ValueString(),
+		Description:        plan.Description.ValueString(),
+		ExternalRef:        plan.ExternalRef.ValueString(),
+		ProviderVersionRef: plan.ProviderVersionRef.ValueString(),
+	}
+
+	if !plan.ProviderMetadata.IsNull() && !plan.ProviderMetadata.IsUnknown() && plan.ProviderMetadata.ValueString() != "" {
+		var meta map[string]interface{}
+		if err := json.Unmarshal([]byte(plan.ProviderMetadata.ValueString()), &meta); err == nil {
+			opts.ProviderMetadata = meta
+		}
+	}
+
+	isExternal := plan.ManagedMode.ValueString() == "external_reference"
+	if !isExternal && configuredString(config.Value) {
+		val := config.Value.ValueString()
+		opts.Value = &val
+	}
+
+	secret, err := r.client.CreateSecretWithOptions(ctx, plan.CompanyID.ValueString(), opts)
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating Paperclip secret", err.Error())
 		return
+	}
+
+	desiredStatus := plan.Status.ValueString()
+	if desiredStatus == "disabled" || desiredStatus == "archived" {
+		updated, err := r.client.UpdateSecretWithOptions(ctx, secret.ID, client.UpdateSecretOptions{
+			Status: desiredStatus,
+		})
+		if err != nil {
+			resp.Diagnostics.AddError("Error setting Paperclip secret initial status", err.Error())
+			return
+		}
+		secret = updated
 	}
 
 	normalizePaperclipSecretState(&plan, secret)
@@ -213,18 +462,64 @@ func (r *PaperclipSecretResource) Update(ctx context.Context, req resource.Updat
 	}
 
 	secret := &client.PaperclipSecret{
-		ID:          state.ID.ValueString(),
-		CompanyID:   state.CompanyID.ValueString(),
-		Name:        plan.Name.ValueString(),
-		Description: plan.Description.ValueString(),
+		ID:                 state.ID.ValueString(),
+		CompanyID:          state.CompanyID.ValueString(),
+		Name:               plan.Name.ValueString(),
+		Description:        plan.Description.ValueString(),
+		Key:                plan.Key.ValueString(),
+		Provider:           plan.ProviderType.ValueString(),
+		Status:             plan.Status.ValueString(),
+		ManagedMode:        plan.ManagedMode.ValueString(),
+		ExternalRef:        plan.ExternalRef.ValueString(),
+		ProviderConfigID:   plan.ProviderConfigID.ValueString(),
+		ProviderVersionRef: plan.ProviderVersionRef.ValueString(),
 	}
-	if !plan.Name.Equal(state.Name) || !plan.Description.Equal(state.Description) {
-		updated, err := r.client.UpdateSecret(
-			ctx,
-			state.ID.ValueString(),
-			plan.Name.ValueString(),
-			plan.Description.ValueString(),
-		)
+
+	metaChanged := !plan.ProviderMetadata.Equal(state.ProviderMetadata)
+	statusChanged := !plan.Status.IsNull() && !plan.Status.IsUnknown() && !plan.Status.Equal(state.Status)
+	keyChanged := !plan.Key.Equal(state.Key)
+	nameChanged := !plan.Name.Equal(state.Name)
+	descChanged := !plan.Description.Equal(state.Description)
+	pcfgChanged := !plan.ProviderConfigID.Equal(state.ProviderConfigID)
+	extRefChanged := !plan.ExternalRef.Equal(state.ExternalRef)
+
+	needsMetadataUpdate := nameChanged || descChanged || keyChanged || statusChanged || pcfgChanged || extRefChanged || metaChanged
+
+	if needsMetadataUpdate {
+		name := plan.Name.ValueString()
+		if plan.Name.IsNull() || plan.Name.IsUnknown() {
+			name = state.Name.ValueString()
+		}
+		opts := client.UpdateSecretOptions{
+			Name: name,
+			Key:  plan.Key.ValueString(),
+		}
+		if statusChanged {
+			opts.Status = plan.Status.ValueString()
+		}
+		if descChanged {
+			desc := plan.Description.ValueString()
+			opts.Description = &desc
+		}
+		if pcfgChanged {
+			pcfg := plan.ProviderConfigID.ValueString()
+			opts.ProviderConfigID = &pcfg
+		}
+		if extRefChanged {
+			extRef := plan.ExternalRef.ValueString()
+			opts.ExternalRef = &extRef
+		}
+
+		if !plan.ProviderMetadata.IsNull() && !plan.ProviderMetadata.IsUnknown() && plan.ProviderMetadata.ValueString() != "" {
+			var meta map[string]interface{}
+			if err := json.Unmarshal([]byte(plan.ProviderMetadata.ValueString()), &meta); err == nil {
+				opts.ProviderMetadata = meta
+			}
+		} else if metaChanged && (plan.ProviderMetadata.IsNull() || plan.ProviderMetadata.ValueString() == "") {
+			opts.ProviderMetadata = make(map[string]interface{})
+		}
+
+		updated, err := r.client.UpdateSecretWithOptions(ctx, state.ID.ValueString(), opts)
 		if err != nil {
 			resp.Diagnostics.AddError("Error updating Paperclip secret metadata", err.Error())
 			return
@@ -233,7 +528,12 @@ func (r *PaperclipSecretResource) Update(ctx context.Context, req resource.Updat
 	}
 
 	if value := secretRotationValue(config, plan, state); value != "" {
-		rotated, err := r.client.RotateSecret(ctx, state.ID.ValueString(), value)
+		rotateOpts := client.RotateSecretOptions{Value: &value}
+		if !plan.ExternalRef.IsNull() && !plan.ExternalRef.IsUnknown() && plan.ExternalRef.ValueString() != "" {
+			extRef := plan.ExternalRef.ValueString()
+			rotateOpts.ExternalRef = &extRef
+		}
+		rotated, err := r.client.RotateSecretWithOptions(ctx, state.ID.ValueString(), rotateOpts)
 		if err != nil {
 			resp.Diagnostics.AddError("Error rotating Paperclip secret", err.Error())
 			return

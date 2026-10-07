@@ -246,6 +246,8 @@ func (p *PaperclipProvider) Resources(ctx context.Context) []func() resource.Res
 		NewPaperclipLocalEnvironmentResource,
 		NewPaperclipSkillResource,
 		NewPaperclipSecretResource,
+		NewPaperclipSecretProviderConfigResource,
+		NewPaperclipUserSecretDefinitionResource,
 		NewPaperclipAgentResource,
 		NewPaperclipAppResource,
 		NewPaperclipConnectionResource,

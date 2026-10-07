@@ -329,11 +329,47 @@ type PaperclipSkill struct {
 }
 
 type PaperclipSecret struct {
-	ID          string `json:"id,omitempty"`
-	CompanyID   string `json:"companyId,omitempty"`
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	Value       string `json:"value,omitempty"`
+	ID                 string                 `json:"id,omitempty"`
+	CompanyID          string                 `json:"companyId,omitempty"`
+	Key                string                 `json:"key,omitempty"`
+	Name               string                 `json:"name"`
+	Provider           string                 `json:"provider,omitempty"`
+	Status             string                 `json:"status,omitempty"`
+	ManagedMode        string                 `json:"managedMode,omitempty"`
+	ExternalRef        string                 `json:"externalRef,omitempty"`
+	ProviderConfigID   string                 `json:"providerConfigId,omitempty"`
+	ProviderMetadata   map[string]interface{} `json:"providerMetadata,omitempty"`
+	ProviderVersionRef string                 `json:"providerVersionRef,omitempty"`
+	Description        string                 `json:"description,omitempty"`
+	Value              string                 `json:"value,omitempty"`
+	LatestVersion      int64                  `json:"latestVersion,omitempty"`
+	LastRotatedAt      string                 `json:"lastRotatedAt,omitempty"`
+}
+
+type PaperclipSecretProviderConfig struct {
+	ID            string                 `json:"id,omitempty"`
+	CompanyID     string                 `json:"companyId,omitempty"`
+	Provider      string                 `json:"provider,omitempty"`
+	DisplayName   string                 `json:"displayName"`
+	Status        string                 `json:"status,omitempty"`
+	IsDefault     bool                   `json:"isDefault"`
+	Config        map[string]interface{} `json:"config"`
+	HealthStatus  string                 `json:"healthStatus,omitempty"`
+	HealthMessage string                 `json:"healthMessage,omitempty"`
+}
+
+type PaperclipUserSecretDefinition struct {
+	ID               string                 `json:"id,omitempty"`
+	CompanyID        string                 `json:"companyId,omitempty"`
+	Key              string                 `json:"key,omitempty"`
+	Name             string                 `json:"name"`
+	Description      string                 `json:"description"`
+	Status           string                 `json:"status,omitempty"`
+	Provider         string                 `json:"provider,omitempty"`
+	ProviderConfigID string                 `json:"providerConfigId,omitempty"`
+	ManagedMode      string                 `json:"managedMode,omitempty"`
+	ProviderMetadata map[string]interface{} `json:"providerMetadata,omitempty"`
+	UsageGuidance    string                 `json:"usageGuidance,omitempty"`
 }
 
 type PaperclipAgent struct {
@@ -1251,21 +1287,58 @@ func (c *Client) ListSkills(ctx context.Context, companyID string) ([]PaperclipS
 }
 
 // Secret CRUD
-func (c *Client) CreateSecret(ctx context.Context, companyID, name, description, value string) (*PaperclipSecret, error) {
-	payload := map[string]interface{}{
-		"name":        name,
-		"description": description,
-		"value":       value,
-	}
+type CreateSecretOptions struct {
+	Name               string                 `json:"name"`
+	Key                string                 `json:"key,omitempty"`
+	Provider           string                 `json:"provider,omitempty"`
+	ProviderConfigID   string                 `json:"providerConfigId,omitempty"`
+	ManagedMode        string                 `json:"managedMode,omitempty"`
+	Value              *string                `json:"value,omitempty"`
+	Description        string                 `json:"description,omitempty"`
+	ExternalRef        string                 `json:"externalRef,omitempty"`
+	ProviderMetadata   map[string]interface{} `json:"providerMetadata,omitempty"`
+	ProviderVersionRef string                 `json:"providerVersionRef,omitempty"`
+}
+
+type UpdateSecretOptions struct {
+	Name               string                 `json:"name,omitempty"`
+	Key                string                 `json:"key,omitempty"`
+	Status             string                 `json:"status,omitempty"`
+	ProviderConfigID   *string                `json:"providerConfigId,omitempty"`
+	Description        *string                `json:"description,omitempty"`
+	ExternalRef        *string                `json:"externalRef,omitempty"`
+	ProviderMetadata   map[string]interface{} `json:"providerMetadata,omitempty"`
+	ProviderVersionRef *string                `json:"providerVersionRef,omitempty"`
+}
+
+type RotateSecretOptions struct {
+	Value              *string `json:"value,omitempty"`
+	ExternalRef        *string `json:"externalRef,omitempty"`
+	ProviderVersionRef *string `json:"providerVersionRef,omitempty"`
+	ProviderConfigID   *string `json:"providerConfigId,omitempty"`
+}
+
+func (c *Client) CreateSecretWithOptions(ctx context.Context, companyID string, opts CreateSecretOptions) (*PaperclipSecret, error) {
 	var resp PaperclipSecret
-	if err := c.paperclipSecretRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/secrets", url.PathEscape(companyID)), payload, &resp); err != nil {
+	if err := c.paperclipSecretRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/secrets", url.PathEscape(companyID)), opts, &resp); err != nil {
 		return nil, err
 	}
 	if resp.CompanyID == "" {
 		resp.CompanyID = companyID
 	}
-	resp.Value = value
+	if opts.Value != nil {
+		resp.Value = *opts.Value
+	}
 	return &resp, nil
+}
+
+func (c *Client) CreateSecret(ctx context.Context, companyID, name, description, value string) (*PaperclipSecret, error) {
+	opts := CreateSecretOptions{
+		Name:        name,
+		Description: description,
+		Value:       &value,
+	}
+	return c.CreateSecretWithOptions(ctx, companyID, opts)
 }
 
 func (c *Client) GetSecret(ctx context.Context, companyID, secretID string) (*PaperclipSecret, error) {
@@ -1284,26 +1357,34 @@ func (c *Client) GetSecret(ctx context.Context, companyID, secretID string) (*Pa
 	return nil, ErrNotFound
 }
 
-func (c *Client) UpdateSecret(ctx context.Context, secretID, name, description string) (*PaperclipSecret, error) {
-	payload := map[string]interface{}{
-		"name":        name,
-		"description": description,
-	}
+func (c *Client) UpdateSecretWithOptions(ctx context.Context, secretID string, opts UpdateSecretOptions) (*PaperclipSecret, error) {
 	var resp PaperclipSecret
-	if err := c.paperclipSecretRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/secrets/%s", url.PathEscape(secretID)), payload, &resp); err != nil {
+	if err := c.paperclipSecretRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/secrets/%s", url.PathEscape(secretID)), opts, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
 }
 
-func (c *Client) RotateSecret(ctx context.Context, secretID, value string) (*PaperclipSecret, error) {
-	payload := map[string]interface{}{"value": value}
+func (c *Client) UpdateSecret(ctx context.Context, secretID, name, description string) (*PaperclipSecret, error) {
+	return c.UpdateSecretWithOptions(ctx, secretID, UpdateSecretOptions{
+		Name:        name,
+		Description: &description,
+	})
+}
+
+func (c *Client) RotateSecretWithOptions(ctx context.Context, secretID string, opts RotateSecretOptions) (*PaperclipSecret, error) {
 	var resp PaperclipSecret
-	if err := c.paperclipSecretRequest(ctx, http.MethodPost, fmt.Sprintf("/api/secrets/%s/rotate", url.PathEscape(secretID)), payload, &resp); err != nil {
+	if err := c.paperclipSecretRequest(ctx, http.MethodPost, fmt.Sprintf("/api/secrets/%s/rotate", url.PathEscape(secretID)), opts, &resp); err != nil {
 		return nil, err
 	}
-	resp.Value = value
+	if opts.Value != nil {
+		resp.Value = *opts.Value
+	}
 	return &resp, nil
+}
+
+func (c *Client) RotateSecret(ctx context.Context, secretID, value string) (*PaperclipSecret, error) {
+	return c.RotateSecretWithOptions(ctx, secretID, RotateSecretOptions{Value: &value})
 }
 
 func (c *Client) DeleteSecret(ctx context.Context, secretID string) error {
@@ -1325,6 +1406,135 @@ func (c *Client) ListSecrets(ctx context.Context, companyID string) ([]Paperclip
 				s.CompanyID = companyID
 			}
 			result = append(result, s)
+		}
+	}
+	return result, nil
+}
+
+// Secret Provider Config ("Vault") CRUD
+func (c *Client) CreateSecretProviderConfig(ctx context.Context, companyID string, cfg PaperclipSecretProviderConfig) (*PaperclipSecretProviderConfig, error) {
+	var resp PaperclipSecretProviderConfig
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/secret-provider-configs", url.PathEscape(companyID)), cfg, &resp); err != nil {
+		return nil, err
+	}
+	if resp.CompanyID == "" {
+		resp.CompanyID = companyID
+	}
+	return &resp, nil
+}
+
+func (c *Client) GetSecretProviderConfig(ctx context.Context, id string) (*PaperclipSecretProviderConfig, error) {
+	if id == "" {
+		return nil, ErrNotFound
+	}
+	var resp PaperclipSecretProviderConfig
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/secret-provider-configs/%s", url.PathEscape(id)), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) UpdateSecretProviderConfig(ctx context.Context, id string, cfg PaperclipSecretProviderConfig) (*PaperclipSecretProviderConfig, error) {
+	var resp PaperclipSecretProviderConfig
+	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/secret-provider-configs/%s", url.PathEscape(id)), cfg, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) DeleteSecretProviderConfig(ctx context.Context, id string) error {
+	return c.paperclipRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/secret-provider-configs/%s", url.PathEscape(id)), nil, nil)
+}
+
+func (c *Client) ListSecretProviderConfigs(ctx context.Context, companyID string) ([]PaperclipSecretProviderConfig, error) {
+	var raw interface{}
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/companies/%s/secret-provider-configs", url.PathEscape(companyID)), nil, &raw); err != nil {
+		return nil, err
+	}
+	items := extractItems(raw, "secretProviderConfigs")
+	if len(items) == 0 {
+		items = extractItems(raw, "providerConfigs")
+	}
+	if len(items) == 0 {
+		items = extractItems(raw, "configs")
+	}
+	var result []PaperclipSecretProviderConfig
+	for _, item := range items {
+		var cfg PaperclipSecretProviderConfig
+		bytesData, _ := json.Marshal(item)
+		if err := json.Unmarshal(bytesData, &cfg); err == nil {
+			if cfg.CompanyID == "" {
+				cfg.CompanyID = companyID
+			}
+			result = append(result, cfg)
+		}
+	}
+	return result, nil
+}
+
+// User Secret Definition CRUD
+func (c *Client) CreateUserSecretDefinition(ctx context.Context, companyID string, def PaperclipUserSecretDefinition) (*PaperclipUserSecretDefinition, error) {
+	var resp PaperclipUserSecretDefinition
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/user-secret-definitions", url.PathEscape(companyID)), def, &resp); err != nil {
+		return nil, err
+	}
+	if resp.CompanyID == "" {
+		resp.CompanyID = companyID
+	}
+	return &resp, nil
+}
+
+func (c *Client) GetUserSecretDefinition(ctx context.Context, companyID, id string) (*PaperclipUserSecretDefinition, error) {
+	if companyID == "" || id == "" {
+		return nil, ErrNotFound
+	}
+	defs, err := c.ListUserSecretDefinitions(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range defs {
+		if d.ID == id || d.Key == id {
+			return &d, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (c *Client) UpdateUserSecretDefinition(ctx context.Context, companyID, id string, def PaperclipUserSecretDefinition) (*PaperclipUserSecretDefinition, error) {
+	var resp PaperclipUserSecretDefinition
+	path := fmt.Sprintf("/api/companies/%s/user-secret-definitions/%s", url.PathEscape(companyID), url.PathEscape(id))
+	if err := c.paperclipRequest(ctx, http.MethodPatch, path, def, &resp); err != nil {
+		return nil, err
+	}
+	if resp.CompanyID == "" {
+		resp.CompanyID = companyID
+	}
+	return &resp, nil
+}
+
+func (c *Client) DeleteUserSecretDefinition(ctx context.Context, companyID, id string) error {
+	path := fmt.Sprintf("/api/companies/%s/user-secret-definitions/%s", url.PathEscape(companyID), url.PathEscape(id))
+	return c.paperclipRequest(ctx, http.MethodDelete, path, nil, nil)
+}
+
+func (c *Client) ListUserSecretDefinitions(ctx context.Context, companyID string) ([]PaperclipUserSecretDefinition, error) {
+	var raw interface{}
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/companies/%s/user-secret-definitions", url.PathEscape(companyID)), nil, &raw); err != nil {
+		return nil, err
+	}
+	items := extractItems(raw, "userSecretDefinitions")
+	if len(items) == 0 {
+		items = extractItems(raw, "definitions")
+	}
+	var result []PaperclipUserSecretDefinition
+	for _, item := range items {
+		var def PaperclipUserSecretDefinition
+		bytesData, _ := json.Marshal(item)
+		if err := json.Unmarshal(bytesData, &def); err == nil {
+			if def.CompanyID == "" {
+				def.CompanyID = companyID
+			}
+			result = append(result, def)
 		}
 	}
 	return result, nil

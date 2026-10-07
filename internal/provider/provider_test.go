@@ -29,6 +29,9 @@ func TestPaperclipProjectUpgradeStateProtocol(t *testing.T) {
 	server := providerserver.NewProtocol6(New("test")())()
 	schemas, err := server.GetProviderSchema(ctx, &tfprotov6.GetProviderSchemaRequest{})
 	if err != nil || len(schemas.Diagnostics) != 0 {
+		for _, d := range schemas.Diagnostics {
+			t.Logf("DIAG: %s - %s", d.Summary, d.Detail)
+		}
 		t.Fatalf("provider schema failed: %v, %v", err, schemas)
 	}
 	projectSchema := schemas.ResourceSchemas["paperclip_project"]
@@ -1036,8 +1039,8 @@ func TestProviderStructure(t *testing.T) {
 	}
 
 	res := p.Resources(ctx)
-	if len(res) != 14 {
-		t.Fatalf("expected exactly 14 resources, got %d", len(res))
+	if len(res) != 16 {
+		t.Fatalf("expected exactly 16 resources, got %d", len(res))
 	}
 	for _, rFn := range res {
 		r := rFn()
