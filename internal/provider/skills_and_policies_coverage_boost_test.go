@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
@@ -923,9 +924,9 @@ func TestSkillResourceFullCoverageRemainingBranches(t *testing.T) {
 	if !respA.PlanValue.IsNull() && !respA.PlanValue.IsUnknown() {
 		t.Fatal("expected no change on null state")
 	}
-	r := NewPaperclipSkillResource().(*PaperclipSkillResource)
-	schema := configureTestResource(t, "http://127.0.0.1", r)
-	dummyState := tfsdk.State{Schema: schema}
+	r0 := NewPaperclipSkillResource().(*PaperclipSkillResource)
+	schema0 := configureTestResource(t, "http://127.0.0.1", r0)
+	dummyState := tfsdk.State{Schema: schema0}
 	if diags := dummyState.Set(ctx, &PaperclipSkillResourceModel{
 		ID:            types.StringValue("sk-1"),
 		CompanyID:     types.StringValue("comp-1"),
@@ -1058,7 +1059,7 @@ func TestSkillResourceFullCoverageRemainingBranches(t *testing.T) {
 		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-file-404/files" && req.URL.Query().Get("path") == "gone.txt":
 			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 
-		// Read import with FileInventory
+		// Read skill with FileInventory auxiliary files (leaves state.Files null when not in state)
 		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-inv":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id":        "sk-inv",
@@ -1070,20 +1071,25 @@ func TestSkillResourceFullCoverageRemainingBranches(t *testing.T) {
 					{"path": "tool.py", "kind": "auxiliary"},
 				},
 			})
-		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-inv/files" && req.URL.Query().Get("path") == "tool.py":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"path": "tool.py", "content": "print('ok')"})
 
-		// Read import when FileInventory has only SKILL.md (covers state.Files = types.MapNull)
-		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-only-skillmd":
+		// Update with unmanaged files (plan.Files is null)
+		case req.Method == http.MethodPatch && req.URL.Path == "/api/companies/comp-unmanaged-upd/skills/sk-unmanaged":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "sk-unmanaged", "companyId": "comp-unmanaged-upd", "name": "Unm", "slug": "unm"})
+		case req.Method == http.MethodPatch && req.URL.Path == "/api/companies/comp-unmanaged-upd/skills/sk-unmanaged/files":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"path": "SKILL.md", "content": ""})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-unmanaged-upd/skills/sk-unmanaged":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":        "sk-only-skillmd",
-				"companyId": "comp-1",
-				"name":      "S",
-				"slug":      "s",
+				"id":        "sk-unmanaged",
+				"companyId": "comp-unmanaged-upd",
+				"name":      "Unm",
+				"slug":      "unm",
 				"fileInventory": []map[string]interface{}{
 					{"path": "SKILL.md", "kind": "instructions"},
+					{"path": "helper.sh", "kind": "auxiliary"},
 				},
 			})
+		case req.Method == http.MethodDelete && strings.Contains(req.URL.Path, "sk-unmanaged/files"):
+			t.Fatal("unexpected delete call for unmanaged skill files")
 
 		// Update GetSkill error
 		case req.Method == http.MethodPatch && req.URL.Path == "/api/companies/comp-upd-get-err/skills/sk-upd-get-err":
@@ -1109,8 +1115,8 @@ func TestSkillResourceFullCoverageRemainingBranches(t *testing.T) {
 	}))
 	defer server.Close()
 
-	r = NewPaperclipSkillResource().(*PaperclipSkillResource)
-	schema = configureTestResource(t, server.URL, r)
+	r := NewPaperclipSkillResource().(*PaperclipSkillResource)
+	schema := configureTestResource(t, server.URL, r)
 
 	// Create: Import rename error
 	planImpRenErr := tfsdk.Plan{Schema: schema}
@@ -1251,7 +1257,7 @@ func TestSkillResourceFullCoverageRemainingBranches(t *testing.T) {
 		t.Fatalf("expected Files to be null after all files 404, got %v", resMod404.Files)
 	}
 
-	// Read: import with FileInventory auxiliary files
+	// Read: skill with FileInventory auxiliary files leaves state.Files null when not tracked in state
 	stateInv := tfsdk.State{Schema: schema}
 	_ = stateInv.Set(ctx, &PaperclipSkillResourceModel{
 		CompanyID:     types.StringValue("comp-1"),
@@ -1270,31 +1276,11 @@ func TestSkillResourceFullCoverageRemainingBranches(t *testing.T) {
 	}
 	var resModInv PaperclipSkillResourceModel
 	_ = readInvResp.State.Get(ctx, &resModInv)
-	if resModInv.Files.IsNull() {
-		t.Fatal("expected Files to be populated from FileInventory")
+	if !resModInv.Files.IsNull() {
+		t.Fatalf("expected Files to remain null when not tracked in state, got %v", resModInv.Files)
 	}
-
-	// Read: import when FileInventory has only SKILL.md (covers state.Files = types.MapNull)
-	stateOnlySkillMd := tfsdk.State{Schema: schema}
-	_ = stateOnlySkillMd.Set(ctx, &PaperclipSkillResourceModel{
-		CompanyID:     types.StringValue("comp-1"),
-		ID:            types.StringValue("sk-only-skillmd"),
-		Name:          types.StringValue("S"),
-		Slug:          types.StringValue("s"),
-		Categories:    types.ListNull(types.StringType),
-		FileInventory: types.ListNull(fileInventoryObjectType),
-		Files:         types.MapNull(types.StringType),
-	})
-	var readOnlySkillMdResp resource.ReadResponse
-	readOnlySkillMdResp.State = stateOnlySkillMd
-	r.Read(ctx, resource.ReadRequest{State: stateOnlySkillMd}, &readOnlySkillMdResp)
-	if readOnlySkillMdResp.Diagnostics.HasError() {
-		t.Fatalf("unexpected error on only-skillmd read: %v", readOnlySkillMdResp.Diagnostics)
-	}
-	var resModOnlySkillMd PaperclipSkillResourceModel
-	_ = readOnlySkillMdResp.State.Get(ctx, &resModOnlySkillMd)
-	if !resModOnlySkillMd.Files.IsNull() {
-		t.Fatalf("expected Files to be null when inventory only has SKILL.md, got %v", resModOnlySkillMd.Files)
+	if resModInv.FileInventory.IsNull() {
+		t.Fatal("expected FileInventory to be populated")
 	}
 
 	// Update: GetSkill error
@@ -1326,5 +1312,39 @@ func TestSkillResourceFullCoverageRemainingBranches(t *testing.T) {
 	}
 	if updGetErrResp.Diagnostics.Errors()[0].Summary() != "Error fetching updated Paperclip skill" {
 		t.Fatalf("unexpected summary: %s", updGetErrResp.Diagnostics.Errors()[0].Summary())
+	}
+
+	// Update: unmanaged files in state are not deleted when plan.Files is null
+	unmanagedStateFiles, _ := types.MapValueFrom(ctx, types.StringType, map[string]string{"helper.sh": "echo 1"})
+	planUnm := tfsdk.Plan{Schema: schema}
+	_ = planUnm.Set(ctx, &PaperclipSkillResourceModel{
+		ID:            types.StringValue("sk-unmanaged"),
+		CompanyID:     types.StringValue("comp-unmanaged-upd"),
+		Name:          types.StringValue("Unm"),
+		Slug:          types.StringValue("unm"),
+		Categories:    types.ListNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+		Files:         types.MapNull(types.StringType),
+	})
+	stateUnm := tfsdk.State{Schema: schema}
+	_ = stateUnm.Set(ctx, &PaperclipSkillResourceModel{
+		ID:            types.StringValue("sk-unmanaged"),
+		CompanyID:     types.StringValue("comp-unmanaged-upd"),
+		Name:          types.StringValue("Unm"),
+		Slug:          types.StringValue("unm"),
+		Categories:    types.ListNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+		Files:         unmanagedStateFiles,
+	})
+	var updUnmResp resource.UpdateResponse
+	updUnmResp.State = stateUnm
+	r.Update(ctx, resource.UpdateRequest{Plan: planUnm, State: stateUnm}, &updUnmResp)
+	if updUnmResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error updating unmanaged skill: %v", updUnmResp.Diagnostics)
+	}
+	var resModUnm PaperclipSkillResourceModel
+	_ = updUnmResp.State.Get(ctx, &resModUnm)
+	if !resModUnm.Files.IsNull() {
+		t.Fatalf("expected Files to remain null in state after unmanaged update, got %v", resModUnm.Files)
 	}
 }

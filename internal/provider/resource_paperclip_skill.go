@@ -609,23 +609,6 @@ func (r *PaperclipSkillResource) Read(ctx context.Context, req resource.ReadRequ
 				state.Files = types.MapNull(types.StringType)
 			}
 		}
-	} else if len(skill.FileInventory) > 0 {
-		// Populate files on import if auxiliary files exist in fileInventory
-		auxFiles := make(map[string]string)
-		for _, entry := range skill.FileInventory {
-			if entry.Path == "SKILL.md" {
-				continue
-			}
-			detail, ferr := r.client.GetSkillFile(ctx, companyID, skillID, entry.Path)
-			if ferr == nil && detail != nil {
-				auxFiles[entry.Path] = detail.Content
-			}
-		}
-		if len(auxFiles) > 0 {
-			state.Files, _ = types.MapValueFrom(ctx, types.StringType, auxFiles)
-		} else {
-			state.Files = types.MapNull(types.StringType)
-		}
 	} else {
 		state.Files = types.MapNull(types.StringType)
 	}
@@ -724,15 +707,17 @@ func (r *PaperclipSkillResource) Update(ctx context.Context, req resource.Update
 		resp.Diagnostics.Append(state.Files.ElementsAs(ctx, &stateFiles, false)...)
 	}
 
-	// Delete obsolete files (excluding SKILL.md)
-	for oldPath := range stateFiles {
-		if oldPath == "SKILL.md" {
-			continue
-		}
-		if _, stillPresent := planFiles[oldPath]; !stillPresent {
-			if ferr := r.client.DeleteSkillFile(ctx, companyID, skillID, oldPath); ferr != nil {
-				resp.Diagnostics.AddError("Error deleting skill auxiliary file", ferr.Error())
-				return
+	// Delete obsolete files (excluding SKILL.md) only if files are managed by Terraform
+	if !plan.Files.IsNull() && !plan.Files.IsUnknown() && !state.Files.IsNull() && !state.Files.IsUnknown() {
+		for oldPath := range stateFiles {
+			if oldPath == "SKILL.md" {
+				continue
+			}
+			if _, stillPresent := planFiles[oldPath]; !stillPresent {
+				if ferr := r.client.DeleteSkillFile(ctx, companyID, skillID, oldPath); ferr != nil {
+					resp.Diagnostics.AddError("Error deleting skill auxiliary file", ferr.Error())
+					return
+				}
 			}
 		}
 	}
