@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -16,10 +17,18 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
+var fileInventoryObjectType = types.ObjectType{
+	AttrTypes: map[string]attr.Type{
+		"path": types.StringType,
+		"kind": types.StringType,
+	},
+}
+
 var (
-	_ resource.Resource                = &PaperclipSkillResource{}
-	_ resource.ResourceWithConfigure   = &PaperclipSkillResource{}
-	_ resource.ResourceWithImportState = &PaperclipSkillResource{}
+	_ resource.Resource                 = &PaperclipSkillResource{}
+	_ resource.ResourceWithConfigure    = &PaperclipSkillResource{}
+	_ resource.ResourceWithImportState  = &PaperclipSkillResource{}
+	_ resource.ResourceWithUpgradeState = &PaperclipSkillResource{}
 )
 
 func NewPaperclipSkillResource() resource.Resource {
@@ -30,15 +39,37 @@ type PaperclipSkillResource struct {
 	client *client.Client
 }
 
+type PaperclipSkillFileInventoryModel struct {
+	Path types.String `tfsdk:"path"`
+	Kind types.String `tfsdk:"kind"`
+}
+
 type PaperclipSkillResourceModel struct {
-	ID            types.String `tfsdk:"id"`
-	CompanyID     types.String `tfsdk:"company_id"`
-	Name          types.String `tfsdk:"name"`
-	Slug          types.String `tfsdk:"slug"`
-	Description   types.String `tfsdk:"description"`
-	Content       types.String `tfsdk:"content"`
-	SchemaVersion types.Int64  `tfsdk:"schema_version"`
-	Metadata      types.String `tfsdk:"metadata"`
+	ID               types.String `tfsdk:"id"`
+	CompanyID        types.String `tfsdk:"company_id"`
+	Name             types.String `tfsdk:"name"`
+	Slug             types.String `tfsdk:"slug"`
+	Description      types.String `tfsdk:"description"`
+	Content          types.String `tfsdk:"content"`
+	SchemaVersion    types.Int64  `tfsdk:"schema_version"`
+	Metadata         types.String `tfsdk:"metadata"`
+	IconURL          types.String `tfsdk:"icon_url"`
+	Color            types.String `tfsdk:"color"`
+	Tagline          types.String `tfsdk:"tagline"`
+	AuthorName       types.String `tfsdk:"author_name"`
+	HomepageURL      types.String `tfsdk:"homepage_url"`
+	Categories       types.List   `tfsdk:"categories"`
+	SharingScope     types.String `tfsdk:"sharing_scope"`
+	Files            types.Map    `tfsdk:"files"`
+	FileInventory    types.List   `tfsdk:"file_inventory"`
+	CurrentVersionID types.String `tfsdk:"current_version_id"`
+	VersionSnapshot  types.String `tfsdk:"version_snapshot"`
+	SourceType       types.String `tfsdk:"source_type"`
+	SourceLocator    types.String `tfsdk:"source_locator"`
+	FolderID         types.String `tfsdk:"folder_id"`
+	ForkedFromID     types.String `tfsdk:"forked_from_id"`
+	ImportSource     types.String `tfsdk:"import_source"`
+	CatalogSkillID   types.String `tfsdk:"catalog_skill_id"`
 }
 
 func (r *PaperclipSkillResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -47,7 +78,8 @@ func (r *PaperclipSkillResource) Metadata(ctx context.Context, req resource.Meta
 
 func (r *PaperclipSkillResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Paperclip skill in a company's catalog.",
+		Version:     1,
+		Description: "Manages a Paperclip skill in a company's catalog with multi-file, versioning, and lifecycle management.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Description: "Unique identifier for the skill.",
@@ -76,8 +108,9 @@ func (r *PaperclipSkillResource) Schema(ctx context.Context, req resource.Schema
 				Optional:    true,
 			},
 			"content": schema.StringAttribute{
-				Description: "Markdown instructions and skill content.",
-				Required:    true,
+				Description: "Markdown instructions and skill content (SKILL.md).",
+				Optional:    true,
+				Computed:    true,
 			},
 			"schema_version": schema.Int64Attribute{
 				Description: "Skill schema version (default: 1).",
@@ -90,6 +123,151 @@ func (r *PaperclipSkillResource) Schema(ctx context.Context, req resource.Schema
 				PlanModifiers: []planmodifier.String{
 					SemanticJSONPlanModifier(),
 				},
+			},
+			"icon_url": schema.StringAttribute{
+				Description: "Icon URL for the skill.",
+				Optional:    true,
+				Computed:    true,
+			},
+			"color": schema.StringAttribute{
+				Description: "Badge or UI accent color for the skill.",
+				Optional:    true,
+				Computed:    true,
+			},
+			"tagline": schema.StringAttribute{
+				Description: "Short summary tagline for catalog display.",
+				Optional:    true,
+				Computed:    true,
+			},
+			"author_name": schema.StringAttribute{
+				Description: "Display author name.",
+				Optional:    true,
+				Computed:    true,
+			},
+			"homepage_url": schema.StringAttribute{
+				Description: "Documentation or homepage URL.",
+				Optional:    true,
+				Computed:    true,
+			},
+			"categories": schema.ListAttribute{
+				Description: "List of skill categorization tags.",
+				Optional:    true,
+				Computed:    true,
+				ElementType: types.StringType,
+			},
+			"sharing_scope": schema.StringAttribute{
+				Description: "Sharing scope of the skill (e.g. 'company').",
+				Optional:    true,
+				Computed:    true,
+			},
+			"files": schema.MapAttribute{
+				Description: "Multi-file map of file relative paths to file contents.",
+				Optional:    true,
+				ElementType: types.StringType,
+			},
+			"file_inventory": schema.ListNestedAttribute{
+				Description: "Catalog file inventory of all files associated with this skill.",
+				Computed:    true,
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"path": schema.StringAttribute{
+							Description: "Relative file path.",
+							Computed:    true,
+						},
+						"kind": schema.StringAttribute{
+							Description: "Kind of file (e.g. 'skill_md', 'script', 'asset').",
+							Computed:    true,
+						},
+					},
+				},
+			},
+			"current_version_id": schema.StringAttribute{
+				Description: "ID of the current active version snapshot.",
+				Computed:    true,
+			},
+			"version_snapshot": schema.StringAttribute{
+				Description: "When set or changed, creates an immutable skill version snapshot with this label.",
+				Optional:    true,
+			},
+			"source_type": schema.StringAttribute{
+				Description: "Provenance source type.",
+				Computed:    true,
+			},
+			"source_locator": schema.StringAttribute{
+				Description: "Provenance source locator URI or path.",
+				Computed:    true,
+			},
+			"folder_id": schema.StringAttribute{
+				Description: "Folder ID containing this skill.",
+				Computed:    true,
+			},
+			"forked_from_id": schema.StringAttribute{
+				Description: "Original skill ID if forked.",
+				Computed:    true,
+			},
+			"import_source": schema.StringAttribute{
+				Description: "Source locator or local path to import on creation.",
+				Optional:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+			"catalog_skill_id": schema.StringAttribute{
+				Description: "Catalog skill ID to install on creation.",
+				Optional:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
+		},
+	}
+}
+
+func (r *PaperclipSkillResource) UpgradeState(ctx context.Context) map[int64]resource.StateUpgrader {
+	return map[int64]resource.StateUpgrader{
+		0: {
+			PriorSchema: &schema.Schema{
+				Attributes: map[string]schema.Attribute{
+					"id":             schema.StringAttribute{Computed: true},
+					"company_id":     schema.StringAttribute{Required: true},
+					"name":           schema.StringAttribute{Required: true},
+					"slug":           schema.StringAttribute{Required: true},
+					"description":    schema.StringAttribute{Optional: true},
+					"content":        schema.StringAttribute{Required: true},
+					"schema_version": schema.Int64Attribute{Optional: true, Computed: true},
+					"metadata":       schema.StringAttribute{Computed: true},
+				},
+			},
+			StateUpgrader: func(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+				var prior struct {
+					ID            types.String `tfsdk:"id"`
+					CompanyID     types.String `tfsdk:"company_id"`
+					Name          types.String `tfsdk:"name"`
+					Slug          types.String `tfsdk:"slug"`
+					Description   types.String `tfsdk:"description"`
+					Content       types.String `tfsdk:"content"`
+					SchemaVersion types.Int64  `tfsdk:"schema_version"`
+					Metadata      types.String `tfsdk:"metadata"`
+				}
+				resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
+				if resp.Diagnostics.HasError() {
+					return
+				}
+				upgraded := PaperclipSkillResourceModel{
+					ID:            prior.ID,
+					CompanyID:     prior.CompanyID,
+					Name:          prior.Name,
+					Slug:          prior.Slug,
+					Description:   prior.Description,
+					Content:       prior.Content,
+					SchemaVersion: prior.SchemaVersion,
+					Metadata:      prior.Metadata,
+					Categories:    types.ListNull(types.StringType),
+					Files:         types.MapNull(types.StringType),
+					FileInventory: types.ListNull(fileInventoryObjectType),
+					SharingScope:  types.StringValue("company"),
+				}
+				resp.Diagnostics.Append(resp.State.Set(ctx, &upgraded)...)
 			},
 		},
 	}
@@ -110,6 +288,65 @@ func (r *PaperclipSkillResource) Configure(ctx context.Context, req resource.Con
 	r.client = c
 }
 
+func populateSkillModel(ctx context.Context, m *PaperclipSkillResourceModel, skill *client.PaperclipSkill, planFiles types.Map) {
+	m.ID = types.StringValue(skill.ID)
+	if skill.CompanyID != "" {
+		m.CompanyID = types.StringValue(skill.CompanyID)
+	}
+	m.Name = types.StringValue(skill.Name)
+	m.Slug = types.StringValue(skill.Slug)
+	m.Description = stringOrNull(skill.Description)
+	if skill.Content != "" || (!m.Content.IsNull() && !m.Content.IsUnknown()) {
+		m.Content = types.StringValue(skill.Content)
+	} else {
+		m.Content = types.StringNull()
+	}
+	if skill.SchemaVersion > 0 {
+		m.SchemaVersion = types.Int64Value(skill.SchemaVersion)
+	} else {
+		m.SchemaVersion = types.Int64Value(1)
+	}
+	m.Metadata = refreshSemanticJSON(m.Metadata, skill.Metadata)
+	m.IconURL = stringOrNull(skill.IconURL)
+	m.Color = stringOrNull(skill.Color)
+	m.Tagline = stringOrNull(skill.Tagline)
+	m.AuthorName = stringOrNull(skill.AuthorName)
+	m.HomepageURL = stringOrNull(skill.HomepageURL)
+	m.SharingScope = stringOrNull(skill.SharingScope)
+	if len(skill.Categories) > 0 {
+		cats, _ := types.ListValueFrom(ctx, types.StringType, skill.Categories)
+		m.Categories = cats
+	} else {
+		m.Categories = types.ListNull(types.StringType)
+	}
+	m.CurrentVersionID = stringOrNull(skill.CurrentVersionID)
+	m.SourceType = stringOrNull(skill.SourceType)
+	m.SourceLocator = stringOrNull(skill.SourceLocator)
+	m.FolderID = stringOrNull(skill.FolderID)
+	m.ForkedFromID = stringOrNull(skill.ForkedFromID)
+
+	// File inventory
+	if len(skill.FileInventory) > 0 {
+		inv := make([]PaperclipSkillFileInventoryModel, len(skill.FileInventory))
+		for i, entry := range skill.FileInventory {
+			inv[i] = PaperclipSkillFileInventoryModel{
+				Path: types.StringValue(entry.Path),
+				Kind: stringOrNull(entry.Kind),
+			}
+		}
+		invList, _ := types.ListValueFrom(ctx, fileInventoryObjectType, inv)
+		m.FileInventory = invList
+	} else {
+		m.FileInventory = types.ListNull(fileInventoryObjectType)
+	}
+
+	if planFiles.IsNull() || planFiles.IsUnknown() {
+		m.Files = types.MapNull(types.StringType)
+	} else {
+		m.Files = planFiles
+	}
+}
+
 func (r *PaperclipSkillResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan PaperclipSkillResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -117,38 +354,115 @@ func (r *PaperclipSkillResource) Create(ctx context.Context, req resource.Create
 		return
 	}
 
+	companyID := plan.CompanyID.ValueString()
 	schemaVer := int64(1)
 	if !plan.SchemaVersion.IsNull() && !plan.SchemaVersion.IsUnknown() && plan.SchemaVersion.ValueInt64() > 0 {
 		schemaVer = plan.SchemaVersion.ValueInt64()
 	}
 
-	skill := client.PaperclipSkill{
-		CompanyID:     plan.CompanyID.ValueString(),
-		Name:          plan.Name.ValueString(),
-		Slug:          plan.Slug.ValueString(),
-		Description:   plan.Description.ValueString(),
-		Content:       plan.Content.ValueString(),
-		SchemaVersion: schemaVer,
+	var filesMap map[string]string
+	if !plan.Files.IsNull() && !plan.Files.IsUnknown() {
+		resp.Diagnostics.Append(plan.Files.ElementsAs(ctx, &filesMap, false)...)
 	}
 
-	created, err := r.client.CreateSkill(ctx, plan.CompanyID.ValueString(), skill)
-	if err != nil {
-		resp.Diagnostics.AddError("Error creating Paperclip skill", err.Error())
-		return
+	content := plan.Content.ValueString()
+	if content == "" && filesMap != nil {
+		if c, ok := filesMap["SKILL.md"]; ok {
+			content = c
+		}
 	}
 
-	plan.ID = types.StringValue(created.ID)
-	plan.CompanyID = types.StringValue(created.CompanyID)
-	plan.Name = types.StringValue(created.Name)
-	plan.Slug = types.StringValue(created.Slug)
-	plan.Description = stringOrNull(created.Description)
-	plan.Content = types.StringValue(created.Content)
-	if created.SchemaVersion > 0 {
-		plan.SchemaVersion = types.Int64Value(created.SchemaVersion)
+	var categories []string
+	if !plan.Categories.IsNull() && !plan.Categories.IsUnknown() {
+		resp.Diagnostics.Append(plan.Categories.ElementsAs(ctx, &categories, false)...)
+	}
+
+	var created *client.PaperclipSkill
+	var err error
+
+	if !plan.ImportSource.IsNull() && !plan.ImportSource.IsUnknown() && plan.ImportSource.ValueString() != "" {
+		created, err = r.client.ImportSkill(ctx, companyID, plan.ImportSource.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Error importing Paperclip skill", err.Error())
+			return
+		}
+		// If custom name or slug was specified and differs from imported, rename
+		if (plan.Name.ValueString() != "" && plan.Name.ValueString() != created.Name) ||
+			(plan.Slug.ValueString() != "" && plan.Slug.ValueString() != created.Slug) {
+			renamed, rerr := r.client.RenameSkill(ctx, companyID, created.ID, plan.Name.ValueString(), plan.Slug.ValueString())
+			if rerr == nil && renamed != nil {
+				created = renamed
+			}
+		}
+	} else if !plan.CatalogSkillID.IsNull() && !plan.CatalogSkillID.IsUnknown() && plan.CatalogSkillID.ValueString() != "" {
+		created, err = r.client.InstallCatalogSkill(ctx, companyID, plan.CatalogSkillID.ValueString(), plan.Slug.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Error installing catalog skill", err.Error())
+			return
+		}
+		if plan.Name.ValueString() != "" && plan.Name.ValueString() != created.Name {
+			renamed, rerr := r.client.RenameSkill(ctx, companyID, created.ID, plan.Name.ValueString(), plan.Slug.ValueString())
+			if rerr == nil && renamed != nil {
+				created = renamed
+			}
+		}
 	} else {
-		plan.SchemaVersion = types.Int64Value(1)
+		skill := client.PaperclipSkill{
+			CompanyID:     companyID,
+			Name:          plan.Name.ValueString(),
+			Slug:          plan.Slug.ValueString(),
+			Description:   plan.Description.ValueString(),
+			Content:       content,
+			SchemaVersion: schemaVer,
+			IconURL:       plan.IconURL.ValueString(),
+			Color:         plan.Color.ValueString(),
+			Tagline:       plan.Tagline.ValueString(),
+			AuthorName:    plan.AuthorName.ValueString(),
+			HomepageURL:   plan.HomepageURL.ValueString(),
+			Categories:    categories,
+			SharingScope:  plan.SharingScope.ValueString(),
+		}
+		created, err = r.client.CreateSkill(ctx, companyID, skill)
+		if err != nil {
+			resp.Diagnostics.AddError("Error creating Paperclip skill", err.Error())
+			return
+		}
 	}
-	plan.Metadata = refreshSemanticJSON(plan.Metadata, created.Metadata)
+
+	// Update auxiliary files if declared
+	if len(filesMap) > 0 {
+		for filePath, fileContent := range filesMap {
+			if filePath == "SKILL.md" {
+				continue
+			}
+			if _, ferr := r.client.UpdateSkillFile(ctx, companyID, created.ID, filePath, fileContent); ferr != nil {
+				resp.Diagnostics.AddError("Error uploading skill auxiliary file", ferr.Error())
+				return
+			}
+		}
+	}
+
+	// Create version snapshot if requested
+	if !plan.VersionSnapshot.IsNull() && !plan.VersionSnapshot.IsUnknown() && plan.VersionSnapshot.ValueString() != "" {
+		v, verr := r.client.CreateSkillVersion(ctx, companyID, created.ID, plan.VersionSnapshot.ValueString())
+		if verr != nil {
+			resp.Diagnostics.AddError("Error creating skill version snapshot", verr.Error())
+			return
+		}
+		if v != nil {
+			created.CurrentVersionID = v.ID
+		}
+	}
+
+	fresh, err := r.client.GetSkill(ctx, companyID, created.ID)
+	if err == nil && fresh != nil {
+		created = fresh
+	}
+
+	populateSkillModel(ctx, &plan, created, plan.Files)
+	if !plan.Files.IsNull() && !plan.Files.IsUnknown() && len(filesMap) > 0 {
+		plan.Files, _ = types.MapValueFrom(ctx, types.StringType, filesMap)
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -160,7 +474,10 @@ func (r *PaperclipSkillResource) Read(ctx context.Context, req resource.ReadRequ
 		return
 	}
 
-	skill, err := r.client.GetSkill(ctx, state.CompanyID.ValueString(), state.ID.ValueString())
+	companyID := state.CompanyID.ValueString()
+	skillID := state.ID.ValueString()
+
+	skill, err := r.client.GetSkill(ctx, companyID, skillID)
 	if err != nil {
 		if errors.Is(err, client.ErrNotFound) {
 			resp.State.RemoveResource(ctx)
@@ -170,20 +487,26 @@ func (r *PaperclipSkillResource) Read(ctx context.Context, req resource.ReadRequ
 		return
 	}
 
-	state.ID = types.StringValue(skill.ID)
-	if skill.CompanyID != "" {
-		state.CompanyID = types.StringValue(skill.CompanyID)
+	populateSkillModel(ctx, &state, skill, state.Files)
+
+	// If files are tracked in state, refresh their contents
+	if !state.Files.IsNull() && !state.Files.IsUnknown() {
+		var stateFiles map[string]string
+		resp.Diagnostics.Append(state.Files.ElementsAs(ctx, &stateFiles, false)...)
+		if stateFiles != nil {
+			refreshed := make(map[string]string, len(stateFiles))
+			for p := range stateFiles {
+				detail, ferr := r.client.GetSkillFile(ctx, companyID, skillID, p)
+				if ferr == nil && detail != nil {
+					refreshed[p] = detail.Content
+				}
+			}
+			if len(refreshed) > 0 {
+				refreshedMap, _ := types.MapValueFrom(ctx, types.StringType, refreshed)
+				state.Files = refreshedMap
+			}
+		}
 	}
-	state.Name = types.StringValue(skill.Name)
-	state.Slug = types.StringValue(skill.Slug)
-	state.Description = stringOrNull(skill.Description)
-	state.Content = types.StringValue(skill.Content)
-	if skill.SchemaVersion > 0 {
-		state.SchemaVersion = types.Int64Value(skill.SchemaVersion)
-	} else {
-		state.SchemaVersion = types.Int64Value(1)
-	}
-	state.Metadata = refreshSemanticJSON(state.Metadata, skill.Metadata)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -198,6 +521,28 @@ func (r *PaperclipSkillResource) Update(ctx context.Context, req resource.Update
 		return
 	}
 
+	companyID := state.CompanyID.ValueString()
+	skillID := state.ID.ValueString()
+
+	// 1. Rename via dedicated endpoint if name or slug changed
+	nameChanged := !plan.Name.IsNull() && !plan.Name.IsUnknown() && plan.Name.ValueString() != "" && plan.Name.ValueString() != state.Name.ValueString()
+	slugChanged := !plan.Slug.IsNull() && !plan.Slug.IsUnknown() && plan.Slug.ValueString() != "" && plan.Slug.ValueString() != state.Slug.ValueString()
+	if nameChanged || slugChanged {
+		targetName := state.Name.ValueString()
+		if !plan.Name.IsNull() && !plan.Name.IsUnknown() && plan.Name.ValueString() != "" {
+			targetName = plan.Name.ValueString()
+		}
+		targetSlug := state.Slug.ValueString()
+		if !plan.Slug.IsNull() && !plan.Slug.IsUnknown() && plan.Slug.ValueString() != "" {
+			targetSlug = plan.Slug.ValueString()
+		}
+		if _, err := r.client.RenameSkill(ctx, companyID, skillID, targetName, targetSlug); err != nil {
+			resp.Diagnostics.AddError("Error renaming Paperclip skill", err.Error())
+			return
+		}
+	}
+
+	// 2. Metadata & SKILL.md update
 	schemaVer := int64(1)
 	if !plan.SchemaVersion.IsNull() && !plan.SchemaVersion.IsUnknown() && plan.SchemaVersion.ValueInt64() > 0 {
 		schemaVer = plan.SchemaVersion.ValueInt64()
@@ -211,33 +556,101 @@ func (r *PaperclipSkillResource) Update(ctx context.Context, req resource.Update
 		}
 	}
 
-	skill := client.PaperclipSkill{
-		CompanyID:     state.CompanyID.ValueString(),
+	var planFiles map[string]string
+	if !plan.Files.IsNull() && !plan.Files.IsUnknown() {
+		resp.Diagnostics.Append(plan.Files.ElementsAs(ctx, &planFiles, false)...)
+	}
+
+	content := plan.Content.ValueString()
+	if content == "" && planFiles != nil {
+		if c, ok := planFiles["SKILL.md"]; ok {
+			content = c
+		}
+	}
+
+	var categories []string
+	if !plan.Categories.IsNull() && !plan.Categories.IsUnknown() {
+		resp.Diagnostics.Append(plan.Categories.ElementsAs(ctx, &categories, false)...)
+	}
+
+	skillPayload := client.PaperclipSkill{
+		CompanyID:     companyID,
 		Name:          plan.Name.ValueString(),
 		Slug:          plan.Slug.ValueString(),
 		Description:   plan.Description.ValueString(),
-		Content:       plan.Content.ValueString(),
+		Content:       content,
 		SchemaVersion: schemaVer,
 		Metadata:      metaMap,
+		IconURL:       plan.IconURL.ValueString(),
+		Color:         plan.Color.ValueString(),
+		Tagline:       plan.Tagline.ValueString(),
+		AuthorName:    plan.AuthorName.ValueString(),
+		HomepageURL:   plan.HomepageURL.ValueString(),
+		Categories:    categories,
+		SharingScope:  plan.SharingScope.ValueString(),
 	}
 
-	updated, err := r.client.UpdateSkill(ctx, state.CompanyID.ValueString(), state.ID.ValueString(), skill)
+	updated, err := r.client.UpdateSkill(ctx, companyID, skillID, skillPayload)
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating Paperclip skill", err.Error())
 		return
 	}
 
-	plan.ID = types.StringValue(updated.ID)
-	plan.Name = types.StringValue(updated.Name)
-	plan.Slug = types.StringValue(updated.Slug)
-	plan.Description = stringOrNull(updated.Description)
-	plan.Content = types.StringValue(updated.Content)
-	if updated.SchemaVersion > 0 {
-		plan.SchemaVersion = types.Int64Value(updated.SchemaVersion)
-	} else {
-		plan.SchemaVersion = types.Int64Value(1)
+	// 3. Multi-file reconciliation (add, patch, delete)
+	var stateFiles map[string]string
+	if !state.Files.IsNull() && !state.Files.IsUnknown() {
+		resp.Diagnostics.Append(state.Files.ElementsAs(ctx, &stateFiles, false)...)
 	}
-	plan.Metadata = refreshSemanticJSON(plan.Metadata, updated.Metadata)
+
+	// Delete obsolete files (excluding SKILL.md)
+	for oldPath := range stateFiles {
+		if oldPath == "SKILL.md" {
+			continue
+		}
+		if _, stillPresent := planFiles[oldPath]; !stillPresent {
+			if ferr := r.client.DeleteSkillFile(ctx, companyID, skillID, oldPath); ferr != nil {
+				resp.Diagnostics.AddError("Error deleting skill auxiliary file", ferr.Error())
+				return
+			}
+		}
+	}
+
+	// Update or add auxiliary files
+	for newPath, newContent := range planFiles {
+		if newPath == "SKILL.md" {
+			continue
+		}
+		oldContent, hadOld := stateFiles[newPath]
+		if !hadOld || oldContent != newContent {
+			if _, ferr := r.client.UpdateSkillFile(ctx, companyID, skillID, newPath, newContent); ferr != nil {
+				resp.Diagnostics.AddError("Error updating skill auxiliary file", ferr.Error())
+				return
+			}
+		}
+	}
+
+	// 4. Version snapshot
+	if !plan.VersionSnapshot.IsNull() && !plan.VersionSnapshot.IsUnknown() && plan.VersionSnapshot.ValueString() != "" &&
+		plan.VersionSnapshot.ValueString() != state.VersionSnapshot.ValueString() {
+		v, verr := r.client.CreateSkillVersion(ctx, companyID, skillID, plan.VersionSnapshot.ValueString())
+		if verr != nil {
+			resp.Diagnostics.AddError("Error creating skill version snapshot", verr.Error())
+			return
+		}
+		if v != nil {
+			updated.CurrentVersionID = v.ID
+		}
+	}
+
+	fresh, err := r.client.GetSkill(ctx, companyID, skillID)
+	if err == nil && fresh != nil {
+		updated = fresh
+	}
+
+	populateSkillModel(ctx, &plan, updated, plan.Files)
+	if !plan.Files.IsNull() && !plan.Files.IsUnknown() && len(planFiles) > 0 {
+		plan.Files, _ = types.MapValueFrom(ctx, types.StringType, planFiles)
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -251,7 +664,10 @@ func (r *PaperclipSkillResource) Delete(ctx context.Context, req resource.Delete
 
 	if err := r.client.DeleteSkill(ctx, state.CompanyID.ValueString(), state.ID.ValueString()); err != nil {
 		if !errors.Is(err, client.ErrNotFound) {
-			resp.Diagnostics.AddError("Error deleting Paperclip skill", err.Error())
+			resp.Diagnostics.AddError(
+				"Error deleting Paperclip skill",
+				fmt.Sprintf("Failed to delete skill %s: %s (ensure any dependent agent skill assignments are removed before retiring skills)", state.ID.ValueString(), err.Error()),
+			)
 			return
 		}
 	}

@@ -316,16 +316,76 @@ type PaperclipWorkspace struct {
 	SourceType string `json:"sourceType,omitempty"`
 }
 
+type PaperclipSkillFileEntry struct {
+	Path string `json:"path"`
+	Kind string `json:"kind,omitempty"`
+}
+
+type PaperclipSkillFileDetail struct {
+	SkillID  string `json:"skillId,omitempty"`
+	Path     string `json:"path"`
+	Kind     string `json:"kind,omitempty"`
+	Content  string `json:"content"`
+	Language string `json:"language,omitempty"`
+	Markdown bool   `json:"markdown,omitempty"`
+	Editable bool   `json:"editable,omitempty"`
+}
+
+type PaperclipSkillVersion struct {
+	ID             string `json:"id"`
+	CompanyID      string `json:"companyId"`
+	CompanySkillID string `json:"companySkillId"`
+	RevisionNumber int64  `json:"revisionNumber,omitempty"`
+	Label          string `json:"label,omitempty"`
+	CreatedAt      string `json:"createdAt,omitempty"`
+}
+
 type PaperclipSkill struct {
-	ID            string                 `json:"id,omitempty"`
-	CompanyID     string                 `json:"companyId,omitempty"`
-	Name          string                 `json:"name"`
-	Slug          string                 `json:"slug"`
-	Description   string                 `json:"description,omitempty"`
-	Content       string                 `json:"content,omitempty"`
-	Markdown      string                 `json:"markdown,omitempty"`
-	SchemaVersion int64                  `json:"schemaVersion,omitempty"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	ID               string                    `json:"id,omitempty"`
+	CompanyID        string                    `json:"companyId,omitempty"`
+	Name             string                    `json:"name"`
+	Slug             string                    `json:"slug"`
+	Description      string                    `json:"description,omitempty"`
+	Content          string                    `json:"content,omitempty"`
+	Markdown         string                    `json:"markdown,omitempty"`
+	IconURL          string                    `json:"iconUrl,omitempty"`
+	Color            string                    `json:"color,omitempty"`
+	Tagline          string                    `json:"tagline,omitempty"`
+	AuthorName       string                    `json:"authorName,omitempty"`
+	HomepageURL      string                    `json:"homepageUrl,omitempty"`
+	Categories       []string                  `json:"categories,omitempty"`
+	SharingScope     string                    `json:"sharingScope,omitempty"`
+	FolderID         string                    `json:"folderId,omitempty"`
+	ForkedFromID     string                    `json:"forkedFromSkillId,omitempty"`
+	SourceType       string                    `json:"sourceType,omitempty"`
+	SourceLocator    string                    `json:"sourceLocator,omitempty"`
+	CurrentVersionID string                    `json:"currentVersionId,omitempty"`
+	FileInventory    []PaperclipSkillFileEntry `json:"fileInventory,omitempty"`
+	SchemaVersion    int64                     `json:"schemaVersion,omitempty"`
+	Metadata         map[string]interface{}    `json:"metadata,omitempty"`
+}
+
+type PaperclipDesiredSkillEntry struct {
+	Key       string  `json:"key"`
+	VersionID *string `json:"versionId,omitempty"`
+}
+
+type PaperclipAgentSkillSnapshot struct {
+	AdapterType         string                       `json:"adapterType"`
+	Supported           bool                         `json:"supported"`
+	Mode                string                       `json:"mode"`
+	DesiredSkills       []string                     `json:"desiredSkills"`
+	DesiredSkillEntries []PaperclipDesiredSkillEntry `json:"desiredSkillEntries"`
+	Entries             []map[string]interface{}     `json:"entries"`
+	Warnings            []string                     `json:"warnings"`
+}
+
+type PaperclipSkillPolicy struct {
+	SchemaVersion int64                    `json:"schemaVersion"`
+	Revision      int64                    `json:"revision"`
+	DefaultEffect string                   `json:"defaultEffect"`
+	Rules         []map[string]interface{} `json:"rules"`
+	Materialized  bool                     `json:"materialized"`
 }
 
 type PaperclipSecret struct {
@@ -1165,6 +1225,33 @@ func (c *Client) CreateSkill(ctx context.Context, companyID string, skill Paperc
 		"markdown":    skill.Content,
 		"content":     skill.Content,
 	}
+	if skill.IconURL != "" {
+		payload["iconUrl"] = skill.IconURL
+	}
+	if skill.Color != "" {
+		payload["color"] = skill.Color
+	}
+	if skill.Tagline != "" {
+		payload["tagline"] = skill.Tagline
+	}
+	if skill.AuthorName != "" {
+		payload["authorName"] = skill.AuthorName
+	}
+	if skill.HomepageURL != "" {
+		payload["homepageUrl"] = skill.HomepageURL
+	}
+	if skill.Categories != nil {
+		payload["categories"] = skill.Categories
+	}
+	if skill.SharingScope != "" {
+		payload["sharingScope"] = skill.SharingScope
+	}
+	if skill.FolderID != "" {
+		payload["folderId"] = skill.FolderID
+	}
+	if skill.ForkedFromID != "" {
+		payload["forkedFromSkillId"] = skill.ForkedFromID
+	}
 	if skill.Metadata != nil {
 		payload["metadata"] = skill.Metadata
 	}
@@ -1198,14 +1285,156 @@ func (c *Client) GetSkill(ctx context.Context, companyID, skillID string) (*Pape
 	return &resp, nil
 }
 
-// UpdateSkill converges a skill through the two Paperclip write surfaces: the
-// record PATCH owns the metadata, and the file PATCH owns the SKILL.md content
-// that Paperclip mirrors into the record's markdown.
+func (c *Client) RenameSkill(ctx context.Context, companyID, skillID, name, slug string) (*PaperclipSkill, error) {
+	payload := map[string]interface{}{
+		"name": name,
+	}
+	if slug != "" {
+		payload["slug"] = slug
+	}
+	var resp struct {
+		Skill PaperclipSkill `json:"skill"`
+	}
+	err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/skills/%s/rename", url.PathEscape(companyID), url.PathEscape(skillID)), payload, &resp)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Skill.ID != "" {
+		if resp.Skill.Content == "" && resp.Skill.Markdown != "" {
+			resp.Skill.Content = resp.Skill.Markdown
+		}
+		if resp.Skill.CompanyID == "" {
+			resp.Skill.CompanyID = companyID
+		}
+		return &resp.Skill, nil
+	}
+	return c.GetSkill(ctx, companyID, skillID)
+}
+
+func (c *Client) PatchSkillMetadata(ctx context.Context, companyID, skillID string, metadata map[string]interface{}) (*PaperclipSkill, error) {
+	var resp PaperclipSkill
+	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/companies/%s/skills/%s", url.PathEscape(companyID), url.PathEscape(skillID)), metadata, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Content == "" && resp.Markdown != "" {
+		resp.Content = resp.Markdown
+	}
+	if resp.CompanyID == "" {
+		resp.CompanyID = companyID
+	}
+	return &resp, nil
+}
+
+func (c *Client) UpdateSkillFile(ctx context.Context, companyID, skillID, filePath, content string) (*PaperclipSkillFileDetail, error) {
+	payload := map[string]interface{}{
+		"path":    filePath,
+		"content": content,
+	}
+	var resp PaperclipSkillFileDetail
+	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/companies/%s/skills/%s/files", url.PathEscape(companyID), url.PathEscape(skillID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) DeleteSkillFile(ctx context.Context, companyID, skillID, filePath string) error {
+	payload := map[string]interface{}{
+		"path":   filePath,
+		"target": "file",
+	}
+	return c.paperclipRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/companies/%s/skills/%s/files", url.PathEscape(companyID), url.PathEscape(skillID)), payload, nil)
+}
+
+func (c *Client) GetSkillFile(ctx context.Context, companyID, skillID, filePath string) (*PaperclipSkillFileDetail, error) {
+	var resp PaperclipSkillFileDetail
+	endpoint := fmt.Sprintf("/api/companies/%s/skills/%s/files?path=%s", url.PathEscape(companyID), url.PathEscape(skillID), url.QueryEscape(filePath))
+	if err := c.paperclipRequest(ctx, http.MethodGet, endpoint, nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) CreateSkillVersion(ctx context.Context, companyID, skillID, label string) (*PaperclipSkillVersion, error) {
+	payload := map[string]interface{}{}
+	if label != "" {
+		payload["label"] = label
+	}
+	var resp PaperclipSkillVersion
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/skills/%s/versions", url.PathEscape(companyID), url.PathEscape(skillID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) ListSkillVersions(ctx context.Context, companyID, skillID string) ([]PaperclipSkillVersion, error) {
+	var raw []PaperclipSkillVersion
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/companies/%s/skills/%s/versions", url.PathEscape(companyID), url.PathEscape(skillID)), nil, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func (c *Client) ImportSkill(ctx context.Context, companyID, source string) (*PaperclipSkill, error) {
+	payload := map[string]interface{}{
+		"source": source,
+	}
+	var resp struct {
+		Imported []PaperclipSkill `json:"imported"`
+		Warnings []string         `json:"warnings"`
+	}
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/skills/import", url.PathEscape(companyID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	if len(resp.Imported) == 0 {
+		return nil, fmt.Errorf("skill import produced no skills")
+	}
+	skill := resp.Imported[0]
+	if skill.Content == "" && skill.Markdown != "" {
+		skill.Content = skill.Markdown
+	}
+	if skill.CompanyID == "" {
+		skill.CompanyID = companyID
+	}
+	return &skill, nil
+}
+
+func (c *Client) InstallCatalogSkill(ctx context.Context, companyID, catalogSkillID, slug string) (*PaperclipSkill, error) {
+	payload := map[string]interface{}{
+		"catalogSkillId": catalogSkillID,
+	}
+	if slug != "" {
+		payload["slug"] = slug
+	}
+	var resp struct {
+		Action   string         `json:"action"`
+		Skill    PaperclipSkill `json:"skill"`
+		Warnings []string       `json:"warnings"`
+	}
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/skills/install-catalog", url.PathEscape(companyID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	skill := resp.Skill
+	if skill.Content == "" && skill.Markdown != "" {
+		skill.Content = skill.Markdown
+	}
+	if skill.CompanyID == "" {
+		skill.CompanyID = companyID
+	}
+	return &skill, nil
+}
+
 func (c *Client) UpdateSkill(ctx context.Context, companyID, skillID string, skill PaperclipSkill) (*PaperclipSkill, error) {
 	skillPath := fmt.Sprintf("/api/companies/%s/skills/%s", url.PathEscape(companyID), url.PathEscape(skillID))
 	metadata := map[string]interface{}{
-		"description": skill.Description,
-		"metadata":    skill.Metadata,
+		"description":  skill.Description,
+		"metadata":     skill.Metadata,
+		"iconUrl":      skill.IconURL,
+		"color":        skill.Color,
+		"tagline":      skill.Tagline,
+		"authorName":   skill.AuthorName,
+		"homepageUrl":  skill.HomepageURL,
+		"categories":   skill.Categories,
+		"sharingScope": skill.SharingScope,
 	}
 	if skill.Name != "" {
 		metadata["name"] = skill.Name
@@ -1216,8 +1445,8 @@ func (c *Client) UpdateSkill(ctx context.Context, companyID, skillID string, ski
 	if err := c.paperclipRequest(ctx, http.MethodPatch, skillPath, metadata, nil); err != nil {
 		return nil, err
 	}
-	file := map[string]interface{}{"path": "SKILL.md", "content": skill.Content}
-	if err := c.paperclipRequest(ctx, http.MethodPatch, skillPath+"/files", file, nil); err != nil {
+
+	if _, err := c.UpdateSkillFile(ctx, companyID, skillID, "SKILL.md", skill.Content); err != nil {
 		return nil, err
 	}
 	return c.GetSkill(ctx, companyID, skillID)
@@ -1248,6 +1477,79 @@ func (c *Client) ListSkills(ctx context.Context, companyID string) ([]PaperclipS
 		}
 	}
 	return result, nil
+}
+
+// Agent Skill Assignments
+func (c *Client) GetAgentSkills(ctx context.Context, agentID string) (*PaperclipAgentSkillSnapshot, error) {
+	if agentID == "" {
+		return nil, ErrNotFound
+	}
+	var resp PaperclipAgentSkillSnapshot
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/agents/%s/skills", url.PathEscape(agentID)), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) SyncAgentSkills(ctx context.Context, agentID, mode string, desiredSkills []PaperclipDesiredSkillEntry) (*PaperclipAgentSkillSnapshot, error) {
+	if agentID == "" {
+		return nil, ErrNotFound
+	}
+	if desiredSkills == nil {
+		desiredSkills = []PaperclipDesiredSkillEntry{}
+	}
+	payload := map[string]interface{}{
+		"mode":          mode,
+		"desiredSkills": desiredSkills,
+	}
+	var resp PaperclipAgentSkillSnapshot
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/agents/%s/skills/sync", url.PathEscape(agentID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// Company Skill Policy
+func (c *Client) GetSkillPolicy(ctx context.Context, companyID string) (*PaperclipSkillPolicy, error) {
+	if companyID == "" {
+		return nil, ErrNotFound
+	}
+	var resp PaperclipSkillPolicy
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/companies/%s/skill-policy", url.PathEscape(companyID)), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) ReplaceSkillPolicy(ctx context.Context, companyID string, expectedRevision int64, defaultEffect string, rules []map[string]interface{}) (*PaperclipSkillPolicy, error) {
+	if companyID == "" {
+		return nil, ErrNotFound
+	}
+	if rules == nil {
+		rules = []map[string]interface{}{}
+	}
+	payload := map[string]interface{}{
+		"schemaVersion":    1,
+		"expectedRevision": expectedRevision,
+		"defaultEffect":    defaultEffect,
+		"rules":            rules,
+	}
+	var resp PaperclipSkillPolicy
+	if err := c.paperclipRequest(ctx, http.MethodPut, fmt.Sprintf("/api/companies/%s/skill-policy", url.PathEscape(companyID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) ResetSkillPolicy(ctx context.Context, companyID string) (*PaperclipSkillPolicy, error) {
+	if companyID == "" {
+		return nil, ErrNotFound
+	}
+	var resp PaperclipSkillPolicy
+	if err := c.paperclipRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/companies/%s/skill-policy", url.PathEscape(companyID)), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }
 
 // Secret CRUD

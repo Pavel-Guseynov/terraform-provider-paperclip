@@ -359,6 +359,7 @@ var paperclipManagedAdapterConfigKeys = []string{
 	"instructionsEntryFile",
 	"instructionsBundleMode",
 	"agentsMdPath",
+	"paperclipSkillSync",
 }
 
 func isSecretRefBinding(val interface{}) bool {

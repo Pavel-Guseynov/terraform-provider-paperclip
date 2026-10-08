@@ -26,14 +26,26 @@ type PaperclipSkillDataSource struct {
 }
 
 type PaperclipSkillDataSourceModel struct {
-	ID            types.String `tfsdk:"id"`
-	CompanyID     types.String `tfsdk:"company_id"`
-	Name          types.String `tfsdk:"name"`
-	Slug          types.String `tfsdk:"slug"`
-	Description   types.String `tfsdk:"description"`
-	Content       types.String `tfsdk:"content"`
-	SchemaVersion types.Int64  `tfsdk:"schema_version"`
-	Metadata      types.String `tfsdk:"metadata"`
+	ID               types.String `tfsdk:"id"`
+	CompanyID        types.String `tfsdk:"company_id"`
+	Name             types.String `tfsdk:"name"`
+	Slug             types.String `tfsdk:"slug"`
+	Description      types.String `tfsdk:"description"`
+	Content          types.String `tfsdk:"content"`
+	SchemaVersion    types.Int64  `tfsdk:"schema_version"`
+	Metadata         types.String `tfsdk:"metadata"`
+	IconURL          types.String `tfsdk:"icon_url"`
+	Color            types.String `tfsdk:"color"`
+	Tagline          types.String `tfsdk:"tagline"`
+	AuthorName       types.String `tfsdk:"author_name"`
+	HomepageURL      types.String `tfsdk:"homepage_url"`
+	Categories       *[]string    `tfsdk:"categories"`
+	SharingScope     types.String `tfsdk:"sharing_scope"`
+	CurrentVersionID types.String `tfsdk:"current_version_id"`
+	SourceType       types.String `tfsdk:"source_type"`
+	SourceLocator    types.String `tfsdk:"source_locator"`
+	FolderID         types.String `tfsdk:"folder_id"`
+	ForkedFromID     types.String `tfsdk:"forked_from_id"`
 }
 
 func (d *PaperclipSkillDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -77,6 +89,55 @@ func (d *PaperclipSkillDataSource) Schema(ctx context.Context, req datasource.Sc
 			},
 			"metadata": schema.StringAttribute{
 				Description: "Skill JSON metadata.",
+				Computed:    true,
+			},
+			"icon_url": schema.StringAttribute{
+				Description: "Skill icon URL.",
+				Computed:    true,
+			},
+			"color": schema.StringAttribute{
+				Description: "Skill UI badge color.",
+				Computed:    true,
+			},
+			"tagline": schema.StringAttribute{
+				Description: "Skill catalog tagline.",
+				Computed:    true,
+			},
+			"author_name": schema.StringAttribute{
+				Description: "Author display name.",
+				Computed:    true,
+			},
+			"homepage_url": schema.StringAttribute{
+				Description: "Homepage or documentation URL.",
+				Computed:    true,
+			},
+			"categories": schema.ListAttribute{
+				Description: "Category tags.",
+				Computed:    true,
+				ElementType: types.StringType,
+			},
+			"sharing_scope": schema.StringAttribute{
+				Description: "Sharing scope.",
+				Computed:    true,
+			},
+			"current_version_id": schema.StringAttribute{
+				Description: "Current active version snapshot ID.",
+				Computed:    true,
+			},
+			"source_type": schema.StringAttribute{
+				Description: "Provenance source type.",
+				Computed:    true,
+			},
+			"source_locator": schema.StringAttribute{
+				Description: "Provenance source locator.",
+				Computed:    true,
+			},
+			"folder_id": schema.StringAttribute{
+				Description: "Folder ID.",
+				Computed:    true,
+			},
+			"forked_from_id": schema.StringAttribute{
+				Description: "Forked from skill ID.",
 				Computed:    true,
 			},
 		},
@@ -166,14 +227,12 @@ func (d *PaperclipSkillDataSource) Read(ctx context.Context, req datasource.Read
 	config.CompanyID = types.StringValue(companyID)
 	config.Name = types.StringValue(skill.Name)
 	config.Slug = types.StringValue(skill.Slug)
-	if skill.Description != "" {
-		config.Description = types.StringValue(skill.Description)
-	} else {
-		config.Description = types.StringNull()
-	}
+	config.Description = stringOrNull(skill.Description)
 	config.Content = types.StringValue(skill.Content)
 	if skill.SchemaVersion > 0 {
 		config.SchemaVersion = types.Int64Value(skill.SchemaVersion)
+	} else {
+		config.SchemaVersion = types.Int64Value(1)
 	}
 	if skill.Metadata != nil {
 		data, _ := json.Marshal(skill.Metadata)
@@ -181,6 +240,23 @@ func (d *PaperclipSkillDataSource) Read(ctx context.Context, req datasource.Read
 	} else {
 		config.Metadata = types.StringNull()
 	}
+	config.IconURL = stringOrNull(skill.IconURL)
+	config.Color = stringOrNull(skill.Color)
+	config.Tagline = stringOrNull(skill.Tagline)
+	config.AuthorName = stringOrNull(skill.AuthorName)
+	config.HomepageURL = stringOrNull(skill.HomepageURL)
+	config.SharingScope = stringOrNull(skill.SharingScope)
+	if skill.Categories != nil {
+		cats := append([]string{}, skill.Categories...)
+		config.Categories = &cats
+	} else {
+		config.Categories = nil
+	}
+	config.CurrentVersionID = stringOrNull(skill.CurrentVersionID)
+	config.SourceType = stringOrNull(skill.SourceType)
+	config.SourceLocator = stringOrNull(skill.SourceLocator)
+	config.FolderID = stringOrNull(skill.FolderID)
+	config.ForkedFromID = stringOrNull(skill.ForkedFromID)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }
