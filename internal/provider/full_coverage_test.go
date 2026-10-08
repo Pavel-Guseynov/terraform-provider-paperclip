@@ -175,6 +175,8 @@ func TestFullCoverageAgentRemaining(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "comp-1"})
 		case r.Method == http.MethodPost && (r.URL.Path == "/api/agents" || r.URL.Path == "/api/companies/comp-1/agents"):
 			var body map[string]interface{}
 			_ = json.NewDecoder(r.Body).Decode(&body)

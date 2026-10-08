@@ -332,6 +332,56 @@ func TestAgentModifyPlan(t *testing.T) {
 	if !modResp4.Diagnostics.HasError() {
 		t.Fatal("expected cycle diagnostic error in ModifyPlan")
 	}
+
+	// 5. Clearing trust_preset in ModifyPlan
+	plan5 := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = plan5.Set(ctx, &PaperclipAgentResourceModel{
+		CompanyID:       types.StringValue("comp-1"),
+		Name:            types.StringValue("ag"),
+		CanAssignTasks:  types.BoolValue(true),
+		CanCreateAgents: types.BoolValue(false),
+		TrustPreset:     types.StringNull(),
+	})
+	state5 := tfsdk.State{Schema: schemaResp.Schema}
+	_ = state5.Set(ctx, &PaperclipAgentResourceModel{
+		ID:          types.StringValue("ag-state"),
+		CompanyID:   types.StringValue("comp-1"),
+		TrustPreset: types.StringValue("standard"),
+	})
+	var modResp5 resource.ModifyPlanResponse
+	modResp5.Plan = plan5
+	r.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:  plan5,
+		State: state5,
+	}, &modResp5)
+	if !modResp5.Diagnostics.HasError() {
+		t.Fatal("expected diagnostic error when clearing trust_preset in ModifyPlan")
+	}
+
+	// 6. Clearing authorization_policy in ModifyPlan
+	plan6 := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = plan6.Set(ctx, &PaperclipAgentResourceModel{
+		CompanyID:           types.StringValue("comp-1"),
+		Name:                types.StringValue("ag"),
+		CanAssignTasks:      types.BoolValue(true),
+		CanCreateAgents:     types.BoolValue(false),
+		AuthorizationPolicy: types.StringNull(),
+	})
+	state6 := tfsdk.State{Schema: schemaResp.Schema}
+	_ = state6.Set(ctx, &PaperclipAgentResourceModel{
+		ID:                  types.StringValue("ag-state"),
+		CompanyID:           types.StringValue("comp-1"),
+		AuthorizationPolicy: types.StringValue(`{"protectedAgent":true}`),
+	})
+	var modResp6 resource.ModifyPlanResponse
+	modResp6.Plan = plan6
+	r.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:  plan6,
+		State: state6,
+	}, &modResp6)
+	if !modResp6.Diagnostics.HasError() {
+		t.Fatal("expected diagnostic error when clearing authorization_policy in ModifyPlan")
+	}
 }
 
 func TestAgentCreatePendingApprovalAndLifecycle(t *testing.T) {
@@ -1194,6 +1244,54 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 	r.Update(ctx, resource.UpdateRequest{Plan: planFB, State: stateFB}, &updResp9)
 	if updResp9.Diagnostics.HasError() {
 		t.Fatal(updResp9.Diagnostics)
+	}
+
+	// 10. Attempting to clear trust_preset in Update returns diagnostic error
+	planClearTP := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = planClearTP.Set(ctx, &PaperclipAgentResourceModel{
+		ID:              types.StringValue("ag-upd"),
+		CompanyID:       types.StringValue("comp-1"),
+		Name:            types.StringValue("ag"),
+		CanAssignTasks:  types.BoolValue(true),
+		CanCreateAgents: types.BoolValue(false),
+		TrustPreset:     types.StringNull(),
+	})
+	stateClearTP := tfsdk.State{Schema: schemaResp.Schema}
+	_ = stateClearTP.Set(ctx, &PaperclipAgentResourceModel{
+		ID:          types.StringValue("ag-upd"),
+		CompanyID:   types.StringValue("comp-1"),
+		Name:        types.StringValue("ag"),
+		TrustPreset: types.StringValue("standard"),
+	})
+	var updResp10 resource.UpdateResponse
+	updResp10.State = tfsdk.State{Schema: schemaResp.Schema}
+	r.Update(ctx, resource.UpdateRequest{Plan: planClearTP, State: stateClearTP}, &updResp10)
+	if !updResp10.Diagnostics.HasError() {
+		t.Fatal("expected diagnostic error when clearing trust_preset in Update")
+	}
+
+	// 11. Attempting to clear authorization_policy in Update returns diagnostic error
+	planClearAP := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = planClearAP.Set(ctx, &PaperclipAgentResourceModel{
+		ID:                  types.StringValue("ag-upd"),
+		CompanyID:           types.StringValue("comp-1"),
+		Name:                types.StringValue("ag"),
+		CanAssignTasks:      types.BoolValue(true),
+		CanCreateAgents:     types.BoolValue(false),
+		AuthorizationPolicy: types.StringNull(),
+	})
+	stateClearAP := tfsdk.State{Schema: schemaResp.Schema}
+	_ = stateClearAP.Set(ctx, &PaperclipAgentResourceModel{
+		ID:                  types.StringValue("ag-upd"),
+		CompanyID:           types.StringValue("comp-1"),
+		Name:                types.StringValue("ag"),
+		AuthorizationPolicy: types.StringValue(`{"protectedAgent":true}`),
+	})
+	var updResp11 resource.UpdateResponse
+	updResp11.State = tfsdk.State{Schema: schemaResp.Schema}
+	r.Update(ctx, resource.UpdateRequest{Plan: planClearAP, State: stateClearAP}, &updResp11)
+	if !updResp11.Diagnostics.HasError() {
+		t.Fatal("expected diagnostic error when clearing authorization_policy in Update")
 	}
 }
 

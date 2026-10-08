@@ -144,6 +144,8 @@ func TestClientMethodsSuccessAndErrors(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "skill-empty", "versions": []interface{}{}})
 		case r.URL.Path == "/api/companies" && r.Method == http.MethodGet:
 			_ = json.NewEncoder(w).Encode([]interface{}{map[string]interface{}{"id": "comp-1", "name": "Acme"}})
+		case r.URL.Path == "/api/companies/comp-1" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "comp-1", "name": "Acme"})
 		case r.URL.Path == "/api/companies/comp-1/tool-apps" && r.Method == http.MethodGet:
 			_ = json.NewEncoder(w).Encode([]interface{}{})
 		default:
@@ -825,6 +827,8 @@ func TestClientRemainingCoverage(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "pol-1"}) // line 1646
 		case r.Method == http.MethodDelete && r.URL.Path == "/api/tool-policies/pol-1":
 			w.WriteHeader(http.StatusOK) // line 1657
+		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/c1":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "c1"})
 		default:
 			http.NotFound(w, r)
 		}

@@ -432,6 +432,8 @@ func TestAgentReconciliationBranches(t *testing.T) {
 	srvInstrErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "comp-1"})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/companies/comp-1/agents":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": "a1", "companyId": "comp-1", "name": "ag1", "role": "r", "adapterType": "antigravity",

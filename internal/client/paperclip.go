@@ -1402,17 +1402,16 @@ func (c *Client) CreateAgentHire(ctx context.Context, companyID string, agent Pa
 // Agent CRUD
 func (c *Client) CreateAgent(ctx context.Context, companyID string, agent PaperclipAgent) (*PaperclipAgent, error) {
 	company, err := c.GetCompany(ctx, companyID)
-	if err == nil && company != nil && company.RequireBoardApprovalForNewAgents {
+	if err != nil {
+		return nil, err
+	}
+	if company != nil && company.RequireBoardApprovalForNewAgents {
 		return c.CreateAgentHire(ctx, companyID, agent)
 	}
 
 	payload := buildAgentCreatePayload(agent)
 	var resp PaperclipAgent
-	err = c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/agents", url.PathEscape(companyID)), payload, &resp)
-	if err != nil {
-		if strings.Contains(err.Error(), "agent-hires") || strings.Contains(err.Error(), "requires board approval") {
-			return c.CreateAgentHire(ctx, companyID, agent)
-		}
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/agents", url.PathEscape(companyID)), payload, &resp); err != nil {
 		return nil, err
 	}
 	if resp.CompanyID == "" {

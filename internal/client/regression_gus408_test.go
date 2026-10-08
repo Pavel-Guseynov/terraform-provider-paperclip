@@ -351,6 +351,10 @@ func TestRegressionSecretExclusionEndToEndClientCall(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("X-Correlation-Id", "cid-secret-echo")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1" {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "comp-1"})
+			return
+		}
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(fmt.Sprintf(`{"error":"failed operation: bearer=%s, secret=%s, nested=%s"}`,
 			providerToken, topLevelSecret, nestedSecret)))

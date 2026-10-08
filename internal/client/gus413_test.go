@@ -151,16 +151,13 @@ func TestCreateAgentHiringApprovalPaths(t *testing.T) {
 		t.Fatalf("expected hire approval on ag1: %+v", ag1)
 	}
 
-	// 2. Company config was false, but server rejected agents route with agent-hires message
-	ag2, err := cli.CreateAgent(ctx, "comp-err", PaperclipAgent{Name: "fallback-hire"})
-	if err != nil {
-		t.Fatalf("CreateAgent fallback to agent-hires failed: %v", err)
-	}
-	if ag2.HireApproval == nil || ag2.HireApproval.ID != "appr-err-1" {
-		t.Fatalf("expected hire approval on ag2: %+v", ag2)
+	// 2. GetCompany fails -> returns error
+	_, err = cli.CreateAgent(ctx, "comp-notfound", PaperclipAgent{Name: "fallback-hire"})
+	if err == nil {
+		t.Fatal("expected error when GetCompany fails")
 	}
 
-	// 3. Regular error is returned
+	// 3. Regular error is returned on agent create failure
 	_, err = cli.CreateAgent(ctx, "comp-fail", PaperclipAgent{Name: "fail"})
 	if err == nil {
 		t.Fatal("expected error on comp-fail")

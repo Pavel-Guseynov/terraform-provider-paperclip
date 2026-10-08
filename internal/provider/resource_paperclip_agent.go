@@ -389,6 +389,28 @@ func (r *PaperclipAgentResource) ModifyPlan(ctx context.Context, req resource.Mo
 		resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
 	}
 
+	if !req.State.Raw.IsNull() {
+		var state PaperclipAgentResourceModel
+		if !req.State.Get(ctx, &state).HasError() {
+			if !state.TrustPreset.IsNull() && !state.TrustPreset.IsUnknown() && state.TrustPreset.ValueString() != "" &&
+				(plan.TrustPreset.IsNull() || plan.TrustPreset.ValueString() == "") {
+				resp.Diagnostics.AddAttributeError(
+					path.Root("trust_preset"),
+					"Invalid Attribute Modification",
+					"trust_preset cannot be cleared once configured: the Paperclip API does not support removing trust_preset. Set trust_preset to an explicit value (such as \"standard\") instead.",
+				)
+			}
+			if !state.AuthorizationPolicy.IsNull() && !state.AuthorizationPolicy.IsUnknown() && state.AuthorizationPolicy.ValueString() != "" &&
+				(plan.AuthorizationPolicy.IsNull() || plan.AuthorizationPolicy.ValueString() == "") {
+				resp.Diagnostics.AddAttributeError(
+					path.Root("authorization_policy"),
+					"Invalid Attribute Modification",
+					"authorization_policy cannot be cleared once configured: the Paperclip API does not support removing authorization_policy. Update authorization_policy to an explicit configuration instead.",
+				)
+			}
+		}
+	}
+
 	if !plan.AuthorizationPolicy.IsNull() && !plan.AuthorizationPolicy.IsUnknown() && plan.AuthorizationPolicy.ValueString() != "" {
 		if _, err := validateAuthorizationPolicy(plan.AuthorizationPolicy.ValueString()); err != nil {
 			resp.Diagnostics.AddAttributeError(path.Root("authorization_policy"), "Invalid Authorization Policy", err.Error())
@@ -947,6 +969,25 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 			resp.Diagnostics.AddAttributeError(path.Root("metadata"), "Invalid JSON", err.Error())
 			return
 		}
+	}
+
+	if !state.TrustPreset.IsNull() && !state.TrustPreset.IsUnknown() && state.TrustPreset.ValueString() != "" &&
+		(plan.TrustPreset.IsNull() || plan.TrustPreset.ValueString() == "") {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("trust_preset"),
+			"Invalid Attribute Modification",
+			"trust_preset cannot be cleared once configured: the Paperclip API does not support removing trust_preset. Set trust_preset to an explicit value (such as \"standard\") instead.",
+		)
+		return
+	}
+	if !state.AuthorizationPolicy.IsNull() && !state.AuthorizationPolicy.IsUnknown() && state.AuthorizationPolicy.ValueString() != "" &&
+		(plan.AuthorizationPolicy.IsNull() || plan.AuthorizationPolicy.ValueString() == "") {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("authorization_policy"),
+			"Invalid Attribute Modification",
+			"authorization_policy cannot be cleared once configured: the Paperclip API does not support removing authorization_policy. Update authorization_policy to an explicit configuration instead.",
+		)
+		return
 	}
 
 	var authPolicyMap map[string]interface{}
