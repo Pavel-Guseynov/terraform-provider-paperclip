@@ -510,7 +510,7 @@ func TestBackwardCompatibilityExistingStatePlansWithoutReplacementAcrossResource
 		},
 		{
 			typeName: "paperclip_agent",
-			rawJSON:  `{"id":"agent-1","company_id":"comp-1","name":"agent-1","role":"engineer","title":"Senior Eng","adapter_type":"hermes_local","status":null,"runtime_config":null,"adapter_config":null,"metadata":null,"instructions":null,"can_assign_tasks":true,"can_create_agents":false}`,
+			rawJSON:  `{"id":"agent-1","company_id":"comp-1","name":"agent-1","role":"engineer","title":"Senior Eng","icon":null,"reports_to":null,"capabilities":null,"default_environment_id":null,"adapter_type":"hermes_local","status":null,"runtime_config":null,"adapter_config":null,"metadata":null,"instructions":null,"can_assign_tasks":true,"can_create_agents":false,"can_create_skills":true,"trust_preset":null,"authorization_policy":null,"paused":false,"retirement":"delete"}`,
 		},
 		{
 			typeName: "paperclip_app",
