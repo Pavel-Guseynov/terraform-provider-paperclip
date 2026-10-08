@@ -255,7 +255,7 @@ func (d *PaperclipAgentDataSource) Read(ctx context.Context, req datasource.Read
 		config.CanCreateAgents = types.BoolValue(agent.Permissions.CanCreateAgents)
 		config.CanCreateSkills = types.BoolValue(agent.Permissions.CanCreateSkills)
 		config.TrustPreset = stringOrNull(agent.Permissions.TrustPreset)
-		if agent.Permissions.AuthorizationPolicy != nil {
+		if len(agent.Permissions.AuthorizationPolicy) > 0 {
 			data, _ := json.Marshal(agent.Permissions.AuthorizationPolicy)
 			config.AuthorizationPolicy = types.StringValue(string(data))
 		} else {

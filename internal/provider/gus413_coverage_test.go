@@ -358,7 +358,7 @@ func TestAgentModifyPlan(t *testing.T) {
 		t.Fatal("expected diagnostic error when clearing trust_preset in ModifyPlan")
 	}
 
-	// 6. Clearing authorization_policy in ModifyPlan
+	// 6. Clearing authorization_policy in ModifyPlan is allowed
 	plan6 := tfsdk.Plan{Schema: schemaResp.Schema}
 	_ = plan6.Set(ctx, &PaperclipAgentResourceModel{
 		CompanyID:           types.StringValue("comp-1"),
@@ -379,8 +379,8 @@ func TestAgentModifyPlan(t *testing.T) {
 		Plan:  plan6,
 		State: state6,
 	}, &modResp6)
-	if !modResp6.Diagnostics.HasError() {
-		t.Fatal("expected diagnostic error when clearing authorization_policy in ModifyPlan")
+	if modResp6.Diagnostics.HasError() {
+		t.Fatalf("expected no diagnostic error when clearing authorization_policy in ModifyPlan, got: %v", modResp6.Diagnostics)
 	}
 }
 
@@ -916,6 +916,43 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 				CanCreateAgents: false,
 				CanCreateSkills: true,
 			})
+		case r.URL.Path == "/api/agents/ag-upd-clear-ap" && r.Method == http.MethodPatch:
+			_ = json.NewEncoder(w).Encode(client.PaperclipAgent{
+				ID:        "ag-upd-clear-ap",
+				CompanyID: "comp-1",
+				Name:      "ag",
+				Status:    "idle",
+				Permissions: &client.PaperclipAgentPermissions{
+					CanAssignTasks:  true,
+					CanCreateAgents: false,
+					CanCreateSkills: true,
+					TrustPreset:     "standard",
+				},
+			})
+		case r.URL.Path == "/api/agents/ag-upd-clear-ap" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(client.PaperclipAgent{
+				ID:        "ag-upd-clear-ap",
+				CompanyID: "comp-1",
+				Name:      "ag",
+				Status:    "idle",
+				Permissions: &client.PaperclipAgentPermissions{
+					CanAssignTasks:      true,
+					CanCreateAgents:     false,
+					CanCreateSkills:     true,
+					TrustPreset:         "standard",
+					AuthorizationPolicy: map[string]interface{}{},
+				},
+			})
+		case r.URL.Path == "/api/agents/ag-upd-clear-ap/permissions" && r.Method == http.MethodPatch:
+			w.WriteHeader(http.StatusOK)
+		case r.URL.Path == "/api/agents/ag-upd-clear-ap/permissions" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(client.PaperclipAgentPermissions{
+				CanAssignTasks:      true,
+				CanCreateAgents:     false,
+				CanCreateSkills:     true,
+				TrustPreset:         "standard",
+				AuthorizationPolicy: map[string]interface{}{},
+			})
 		case r.URL.Path == "/api/agents/ag-pause-fail" && r.Method == http.MethodPatch:
 			_ = json.NewEncoder(w).Encode(client.PaperclipAgent{
 				ID:          "ag-pause-fail",
@@ -1246,52 +1283,39 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 		t.Fatal(updResp9.Diagnostics)
 	}
 
-	// 10. Attempting to clear trust_preset in Update returns diagnostic error
-	planClearTP := tfsdk.Plan{Schema: schemaResp.Schema}
-	_ = planClearTP.Set(ctx, &PaperclipAgentResourceModel{
-		ID:              types.StringValue("ag-upd"),
-		CompanyID:       types.StringValue("comp-1"),
-		Name:            types.StringValue("ag"),
-		CanAssignTasks:  types.BoolValue(true),
-		CanCreateAgents: types.BoolValue(false),
-		TrustPreset:     types.StringNull(),
-	})
-	stateClearTP := tfsdk.State{Schema: schemaResp.Schema}
-	_ = stateClearTP.Set(ctx, &PaperclipAgentResourceModel{
-		ID:          types.StringValue("ag-upd"),
-		CompanyID:   types.StringValue("comp-1"),
-		Name:        types.StringValue("ag"),
-		TrustPreset: types.StringValue("standard"),
-	})
-	var updResp10 resource.UpdateResponse
-	updResp10.State = tfsdk.State{Schema: schemaResp.Schema}
-	r.Update(ctx, resource.UpdateRequest{Plan: planClearTP, State: stateClearTP}, &updResp10)
-	if !updResp10.Diagnostics.HasError() {
-		t.Fatal("expected diagnostic error when clearing trust_preset in Update")
-	}
-
-	// 11. Attempting to clear authorization_policy in Update returns diagnostic error
+	// 10. Clearing authorization_policy in Update succeeds and converges to null
 	planClearAP := tfsdk.Plan{Schema: schemaResp.Schema}
 	_ = planClearAP.Set(ctx, &PaperclipAgentResourceModel{
-		ID:                  types.StringValue("ag-upd"),
+		ID:                  types.StringValue("ag-upd-clear-ap"),
 		CompanyID:           types.StringValue("comp-1"),
 		Name:                types.StringValue("ag"),
 		CanAssignTasks:      types.BoolValue(true),
 		CanCreateAgents:     types.BoolValue(false),
+		CanCreateSkills:     types.BoolValue(true),
+		TrustPreset:         types.StringValue("standard"),
 		AuthorizationPolicy: types.StringNull(),
 	})
 	stateClearAP := tfsdk.State{Schema: schemaResp.Schema}
 	_ = stateClearAP.Set(ctx, &PaperclipAgentResourceModel{
-		ID:                  types.StringValue("ag-upd"),
+		ID:                  types.StringValue("ag-upd-clear-ap"),
 		CompanyID:           types.StringValue("comp-1"),
 		Name:                types.StringValue("ag"),
+		CanAssignTasks:      types.BoolValue(true),
+		CanCreateAgents:     types.BoolValue(false),
+		CanCreateSkills:     types.BoolValue(true),
+		TrustPreset:         types.StringValue("standard"),
 		AuthorizationPolicy: types.StringValue(`{"protectedAgent":true}`),
 	})
 	var updResp11 resource.UpdateResponse
 	updResp11.State = tfsdk.State{Schema: schemaResp.Schema}
 	r.Update(ctx, resource.UpdateRequest{Plan: planClearAP, State: stateClearAP}, &updResp11)
-	if !updResp11.Diagnostics.HasError() {
-		t.Fatal("expected diagnostic error when clearing authorization_policy in Update")
+	if updResp11.Diagnostics.HasError() {
+		t.Fatalf("unexpected error when clearing authorization_policy in Update: %v", updResp11.Diagnostics)
+	}
+	var res11 PaperclipAgentResourceModel
+	_ = updResp11.State.Get(ctx, &res11)
+	if !res11.AuthorizationPolicy.IsNull() {
+		t.Fatalf("expected authorization_policy to converge to null in state, got: %+v", res11.AuthorizationPolicy)
 	}
 }
 

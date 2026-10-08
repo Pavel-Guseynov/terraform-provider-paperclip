@@ -292,4 +292,20 @@ func TestUpdateAgentPermissionsGUS413(t *testing.T) {
 	if payload["trustPreset"] != "standard" || payload["authorizationPolicy"] == nil {
 		t.Fatalf("unexpected permissions payload: %+v", payload)
 	}
+
+	// Also verify empty AuthorizationPolicy sends empty map to clear policy
+	err = cli.UpdateAgentPermissions(ctx, "agent-1", PaperclipAgentPermissions{
+		CanCreateAgents:     false,
+		CanCreateSkills:     true,
+		CanAssignTasks:      true,
+		TrustPreset:         "standard",
+		AuthorizationPolicy: map[string]interface{}{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authPol, ok := payload["authorizationPolicy"].(map[string]interface{})
+	if !ok || len(authPol) != 0 {
+		t.Fatalf("expected empty map for empty authorizationPolicy, got: %+v", payload["authorizationPolicy"])
+	}
 }
