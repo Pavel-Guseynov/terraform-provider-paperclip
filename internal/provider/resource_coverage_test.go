@@ -74,7 +74,7 @@ func TestDataSourcesErrorAndEdgeCases(t *testing.T) {
 	okCompServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode([]map[string]interface{}{{
-			"id": "comp-1", "name": "Acme", "description": "", "requireTaskStartConfirmation": true,
+			"id": "comp-1", "name": "Acme", "description": "", "status": "active",
 		}})
 	}))
 	defer okCompServer.Close()

@@ -201,9 +201,10 @@ func TestAllClientMethodsFailures(t *testing.T) {
 
 	// Exercise error return paths on all client functions
 	_, _ = cli.CreateBoardKey(ctx, "key-name")
-	_, _ = cli.CreateCompany(ctx, "Acme", "desc", false)
+	_, _ = cli.CreateCompany(ctx, PaperclipCompany{Name: "Acme"})
 	_, _ = cli.GetCompany(ctx, "comp-1")
-	_, _ = cli.UpdateCompany(ctx, "comp-1", "Acme", "desc", false)
+	_, _ = cli.UpdateCompany(ctx, "comp-1", map[string]interface{}{"name": "Acme", "description": "desc"})
+	_ = cli.DeleteCompany(ctx, "comp-1")
 	_ = cli.ArchiveCompany(ctx, "comp-1")
 	_, _ = cli.ListCompanies(ctx)
 	_, _ = cli.CreateProject(ctx, "comp-1", "proj", "desc", nil)
