@@ -74,7 +74,7 @@ func TestCompanyGUS421ResourceFullLifecycle(t *testing.T) {
 				"interactionResolverGovernance": map[string]interface{}{
 					"suggest_tasks": map[string]interface{}{
 						"defaultPolicy": "board_only",
-						"cap":           float64(5),
+						"cap":           "board_only",
 					},
 				},
 				"feedbackDataSharingEnabled": true,
@@ -105,7 +105,7 @@ func TestCompanyGUS421ResourceFullLifecycle(t *testing.T) {
 		Status:                           types.StringValue("paused"),
 		DefaultResponsibleUserID:         types.StringValue("user-1"),
 		RequireBoardApprovalForNewAgents: types.BoolValue(true),
-		InteractionResolverGovernance:    types.StringValue(`{"suggest_tasks":{"default_policy":"board_only","cap":5}}`),
+		InteractionResolverGovernance:    types.StringValue(`{"suggest_tasks":{"defaultPolicy":"board_only","cap":"board_only"}}`),
 		FeedbackDataSharingEnabled:       types.BoolValue(true),
 		LogoAssetID:                      types.StringValue("asset-123"),
 		ArchiveOnDestroy:                 types.BoolValue(true),
@@ -626,9 +626,9 @@ func TestInteractionResolverGovernanceValidatorAndParser(t *testing.T) {
 	// Valid cases
 	validCases := []string{
 		`{"suggest_tasks":{"defaultPolicy":"anyone"}}`,
-		`{"ask_user_questions":{"default_policy":"not_creator","cap":10}}`,
+		`{"ask_user_questions":{"defaultPolicy":"not_creator","cap":"human_only"}}`,
 		`{"request_confirmation":{"defaultPolicy":"human_only"}}`,
-		`{"request_checkbox_confirmation":{"defaultPolicy":"board_or_agents","cap":0}}`,
+		`{"request_checkbox_confirmation":{"defaultPolicy":"board_or_agents","cap":"anyone"}}`,
 		`{"request_item_verdicts":{"defaultPolicy":"board_only"}}`,
 	}
 
@@ -677,11 +677,11 @@ func TestInteractionResolverGovernanceValidatorAndParser(t *testing.T) {
 		{"invalid kind", `{"unknown_kind":{"defaultPolicy":"anyone"}}`},
 		{"non-object kind value", `{"suggest_tasks":"anyone"}`},
 		{"invalid key", `{"suggest_tasks":{"invalid_key":"anyone"}}`},
+		{"default_policy alias rejected", `{"suggest_tasks":{"default_policy":"anyone"}}`},
 		{"invalid policy", `{"suggest_tasks":{"defaultPolicy":"superadmin"}}`},
 		{"non-string policy", `{"suggest_tasks":{"defaultPolicy":123}}`},
-		{"negative cap", `{"suggest_tasks":{"cap":-1}}`},
-		{"non-integer cap", `{"suggest_tasks":{"cap":2.5}}`},
-		{"string cap", `{"suggest_tasks":{"cap":"ten"}}`},
+		{"invalid cap policy", `{"suggest_tasks":{"cap":"invalid_cap"}}`},
+		{"non-string cap", `{"suggest_tasks":{"cap":5}}`},
 	}
 
 	for _, tc := range invalidCases {
@@ -698,7 +698,7 @@ func TestInteractionResolverGovernanceValidatorAndParser(t *testing.T) {
 	}
 
 	// Parser tests
-	parsed, err := parseInteractionResolverGovernance(`{"suggest_tasks":{"default_policy":"board_only","cap":5}}`)
+	parsed, err := parseInteractionResolverGovernance(`{"suggest_tasks":{"defaultPolicy":"board_only","cap":"board_only"}}`)
 	if err != nil {
 		t.Fatalf("parse failed: %v", err)
 	}
@@ -707,7 +707,10 @@ func TestInteractionResolverGovernanceValidatorAndParser(t *testing.T) {
 		t.Fatal("expected suggest_tasks map")
 	}
 	if suggestObj["defaultPolicy"] != "board_only" {
-		t.Fatalf("expected default_policy to be normalized to defaultPolicy, got %v", suggestObj["defaultPolicy"])
+		t.Fatalf("expected defaultPolicy to be board_only, got %v", suggestObj["defaultPolicy"])
+	}
+	if suggestObj["cap"] != "board_only" {
+		t.Fatalf("expected cap to be board_only, got %v", suggestObj["cap"])
 	}
 
 	// Parser with empty string
@@ -957,6 +960,174 @@ func TestCompanyGUS421RemainingCoverage(t *testing.T) {
 	}
 	if !outAgentState.Instructions.IsNull() {
 		t.Fatalf("expected null instructions when content is empty, got %v", outAgentState.Instructions)
+	}
+}
+
+func TestCompanyStatusDrift(t *testing.T) {
+	ctx := context.Background()
+
+	var currentRemoteStatus = "paused"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-drift" {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":     "comp-drift",
+				"name":   "Drift Corp",
+				"status": currentRemoteStatus,
+			})
+			return
+		}
+		http.NotFound(w, req)
+	}))
+	defer server.Close()
+
+	r := NewPaperclipCompanyResource().(*PaperclipCompanyResource)
+	schema := configureTestResource(t, server.URL, r)
+
+	// State currently active
+	stateModel := PaperclipCompanyResourceModel{
+		ID:     types.StringValue("comp-drift"),
+		Name:   types.StringValue("Drift Corp"),
+		Status: types.StringValue("active"),
+	}
+	state := tfsdk.State{Schema: schema}
+	if diags := state.Set(ctx, &stateModel); diags.HasError() {
+		t.Fatal(diags)
+	}
+
+	// 1. Remote drifted to "paused"
+	readResp1 := resource.ReadResponse{State: tfsdk.State{Schema: schema}}
+	r.Read(ctx, resource.ReadRequest{State: state}, &readResp1)
+	if readResp1.Diagnostics.HasError() {
+		t.Fatalf("Read failed: %v", readResp1.Diagnostics)
+	}
+	var outState1 PaperclipCompanyResourceModel
+	if diags := readResp1.State.Get(ctx, &outState1); diags.HasError() {
+		t.Fatal(diags)
+	}
+	if outState1.Status.ValueString() != "paused" {
+		t.Fatalf("expected status paused, got %s", outState1.Status.ValueString())
+	}
+
+	// 2. Remote drifted to "archived"
+	currentRemoteStatus = "archived"
+	readResp2 := resource.ReadResponse{State: tfsdk.State{Schema: schema}}
+	r.Read(ctx, resource.ReadRequest{State: readResp1.State}, &readResp2)
+	if readResp2.Diagnostics.HasError() {
+		t.Fatalf("Read failed: %v", readResp2.Diagnostics)
+	}
+	var outState2 PaperclipCompanyResourceModel
+	if diags := readResp2.State.Get(ctx, &outState2); diags.HasError() {
+		t.Fatal(diags)
+	}
+	if outState2.Status.ValueString() != "archived" {
+		t.Fatalf("expected status archived, got %s", outState2.Status.ValueString())
+	}
+}
+
+func TestCompanyImportZeroChangePlan(t *testing.T) {
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-zero" {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":                               "comp-zero",
+				"name":                             "Zero Change Corp",
+				"description":                      "Zero change description",
+				"status":                           "paused",
+				"defaultResponsibleUserId":         "user-zero",
+				"requireBoardApprovalForNewAgents": true,
+				"interactionResolverGovernance": map[string]interface{}{
+					"suggest_tasks": map[string]interface{}{
+						"defaultPolicy": "human_only",
+						"cap":           "board_only",
+					},
+				},
+				"feedbackDataSharingEnabled": true,
+				"logoAssetId":                "logo-asset-zero",
+			})
+			return
+		}
+		http.NotFound(w, req)
+	}))
+	defer server.Close()
+
+	r := NewPaperclipCompanyResource().(*PaperclipCompanyResource)
+	schema := configureTestResource(t, server.URL, r)
+
+	// 1. Import
+	var importResp resource.ImportStateResponse
+	importResp.State = tfsdk.State{Schema: schema}
+	_ = importResp.State.Set(ctx, &PaperclipCompanyResourceModel{})
+	r.ImportState(ctx, resource.ImportStateRequest{ID: "comp-zero"}, &importResp)
+	if importResp.Diagnostics.HasError() {
+		t.Fatalf("ImportState failed: %v", importResp.Diagnostics)
+	}
+
+	// 2. Read after import
+	readResp := resource.ReadResponse{State: importResp.State}
+	r.Read(ctx, resource.ReadRequest{State: importResp.State}, &readResp)
+	if readResp.Diagnostics.HasError() {
+		t.Fatalf("Read failed: %v", readResp.Diagnostics)
+	}
+
+	var state PaperclipCompanyResourceModel
+	if diags := readResp.State.Get(ctx, &state); diags.HasError() {
+		t.Fatal(diags)
+	}
+
+	// Verify all imported attributes match remote
+	if state.ID.ValueString() != "comp-zero" {
+		t.Fatalf("expected comp-zero, got %s", state.ID.ValueString())
+	}
+	if state.Name.ValueString() != "Zero Change Corp" {
+		t.Fatalf("expected Zero Change Corp, got %s", state.Name.ValueString())
+	}
+	if state.Description.ValueString() != "Zero change description" {
+		t.Fatalf("expected Zero change description, got %s", state.Description.ValueString())
+	}
+	if state.Status.ValueString() != "paused" {
+		t.Fatalf("expected paused, got %s", state.Status.ValueString())
+	}
+	if state.DefaultResponsibleUserID.ValueString() != "user-zero" {
+		t.Fatalf("expected user-zero, got %s", state.DefaultResponsibleUserID.ValueString())
+	}
+	if !state.RequireBoardApprovalForNewAgents.ValueBool() {
+		t.Fatal("expected require_board_approval_for_new_agents true")
+	}
+	if !state.FeedbackDataSharingEnabled.ValueBool() {
+		t.Fatal("expected feedback_data_sharing_enabled true")
+	}
+	if state.LogoAssetID.ValueString() != "logo-asset-zero" {
+		t.Fatalf("expected logo-asset-zero, got %s", state.LogoAssetID.ValueString())
+	}
+	if !state.ArchiveOnDestroy.ValueBool() {
+		t.Fatal("expected default archive_on_destroy true")
+	}
+
+	// 3. Plan with matching configuration (semantically equivalent governance with reversed key order)
+	matchingPlanModel := PaperclipCompanyResourceModel{
+		ID:                               types.StringValue("comp-zero"),
+		Name:                             types.StringValue("Zero Change Corp"),
+		Description:                      types.StringValue("Zero change description"),
+		Status:                           types.StringValue("paused"),
+		DefaultResponsibleUserID:         types.StringValue("user-zero"),
+		RequireBoardApprovalForNewAgents: types.BoolValue(true),
+		InteractionResolverGovernance:    types.StringValue(`{"suggest_tasks":{"cap":"board_only","defaultPolicy":"human_only"}}`),
+		FeedbackDataSharingEnabled:       types.BoolValue(true),
+		LogoAssetID:                      types.StringValue("logo-asset-zero"),
+		ArchiveOnDestroy:                 types.BoolValue(true),
+	}
+
+	refreshedGov := refreshSemanticJSON(matchingPlanModel.InteractionResolverGovernance, map[string]interface{}{
+		"suggest_tasks": map[string]interface{}{
+			"defaultPolicy": "human_only",
+			"cap":           "board_only",
+		},
+	})
+	if refreshedGov.ValueString() != matchingPlanModel.InteractionResolverGovernance.ValueString() {
+		t.Fatalf("expected semantic equality, got %s vs %s", refreshedGov.ValueString(), matchingPlanModel.InteractionResolverGovernance.ValueString())
 	}
 }
 

@@ -197,31 +197,12 @@ func (interactionResolverGovernanceValidator) ValidateString(ctx context.Context
 			continue
 		}
 		for k, p := range policyObj {
-			if k != "defaultPolicy" && k != "default_policy" && k != "cap" {
+			if k != "defaultPolicy" && k != "cap" {
 				resp.Diagnostics.AddAttributeError(
 					req.Path,
 					"Invalid Interaction Resolver Governance Policy Key",
 					fmt.Sprintf("Key %q for kind %q is not valid. Expected defaultPolicy or cap", k, kind),
 				)
-				continue
-			}
-			if k == "cap" {
-				switch v := p.(type) {
-				case float64:
-					if v < 0 || v != float64(int(v)) {
-						resp.Diagnostics.AddAttributeError(
-							req.Path,
-							"Invalid Interaction Resolver Governance Cap",
-							fmt.Sprintf("Cap for kind %q must be a non-negative integer, got %v", kind, p),
-						)
-					}
-				default:
-					resp.Diagnostics.AddAttributeError(
-						req.Path,
-						"Invalid Interaction Resolver Governance Cap",
-						fmt.Sprintf("Cap for kind %q must be a non-negative integer, got %v", kind, p),
-					)
-				}
 				continue
 			}
 			pStr, ok := p.(string)
@@ -248,21 +229,5 @@ func parseInteractionResolverGovernance(raw string) (map[string]interface{}, err
 	if err := json.Unmarshal([]byte(raw), &m); err != nil {
 		return nil, err
 	}
-	normalized := make(map[string]interface{})
-	for kind, v := range m {
-		if obj, ok := v.(map[string]interface{}); ok {
-			kindObj := make(map[string]interface{})
-			for k, val := range obj {
-				if k == "default_policy" {
-					kindObj["defaultPolicy"] = val
-				} else {
-					kindObj[k] = val
-				}
-			}
-			normalized[kind] = kindObj
-		} else {
-			normalized[kind] = v
-		}
-	}
-	return normalized, nil
+	return m, nil
 }
