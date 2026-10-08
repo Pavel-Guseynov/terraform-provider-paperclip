@@ -324,6 +324,13 @@ func TestCompanyGUS421ResourceErrorBranches(t *testing.T) {
 		t.Fatal("expected error on invalid governance JSON during update")
 	}
 
+	// Update fails in UpdateCompany (comp-err returns 500 on PATCH)
+	var updateErrResp resource.UpdateResponse
+	r.Update(ctx, resource.UpdateRequest{Plan: plan, State: state}, &updateErrResp)
+	if !updateErrResp.Diagnostics.HasError() {
+		t.Fatal("expected error on failed UpdateCompany during update")
+	}
+
 	// Read 404 removes resource
 	state404Model := PaperclipCompanyResourceModel{
 		ID: types.StringValue("comp-404"),

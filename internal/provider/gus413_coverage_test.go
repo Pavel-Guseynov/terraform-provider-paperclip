@@ -790,6 +790,7 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 	resumeCalled := false
 	instructionsCleared := false
 	agUpdNilPermsGetCount := 0
+	agUpdClearAPPolicyCleared := false
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -930,6 +931,10 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 				},
 			})
 		case r.URL.Path == "/api/agents/ag-upd-clear-ap" && r.Method == http.MethodGet:
+			policy := map[string]interface{}{"protectedAgent": true}
+			if agUpdClearAPPolicyCleared {
+				policy = map[string]interface{}{}
+			}
 			_ = json.NewEncoder(w).Encode(client.PaperclipAgent{
 				ID:        "ag-upd-clear-ap",
 				CompanyID: "comp-1",
@@ -940,10 +945,11 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 					CanCreateAgents:     false,
 					CanCreateSkills:     true,
 					TrustPreset:         "standard",
-					AuthorizationPolicy: map[string]interface{}{},
+					AuthorizationPolicy: policy,
 				},
 			})
 		case r.URL.Path == "/api/agents/ag-upd-clear-ap/permissions" && r.Method == http.MethodPatch:
+			agUpdClearAPPolicyCleared = true
 			w.WriteHeader(http.StatusOK)
 		case r.URL.Path == "/api/agents/ag-upd-clear-ap/permissions" && r.Method == http.MethodGet:
 			_ = json.NewEncoder(w).Encode(client.PaperclipAgentPermissions{
