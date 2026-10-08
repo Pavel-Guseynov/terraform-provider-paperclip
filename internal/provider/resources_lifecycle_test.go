@@ -45,15 +45,15 @@ func TestPaperclipCompanyResourceLifecycle(t *testing.T) {
 		switch {
 		case req.Method == http.MethodPost && req.URL.Path == "/api/companies":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "comp-1", "name": "Acme", "description": "Acme Corp", "requireTaskStartConfirmation": false,
+				"id": "comp-1", "name": "Acme", "description": "Acme Corp", "status": "active",
 			})
 		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "comp-1", "name": "Acme", "description": "Acme Corp", "requireTaskStartConfirmation": false,
+				"id": "comp-1", "name": "Acme", "description": "Acme Corp", "status": "active",
 			})
 		case req.Method == http.MethodPatch && req.URL.Path == "/api/companies/comp-1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "comp-1", "name": "Acme Updated", "description": "New Desc", "requireTaskStartConfirmation": true,
+				"id": "comp-1", "name": "Acme Updated", "description": "New Desc", "status": "active",
 			})
 		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-1/archive":
 			archiveCalled = true
@@ -84,9 +84,12 @@ func TestPaperclipCompanyResourceLifecycle(t *testing.T) {
 
 	// Create
 	model := PaperclipCompanyResourceModel{
-		Name:                         types.StringValue("Acme"),
-		Description:                  types.StringValue("Acme Corp"),
-		RequireTaskStartConfirmation: types.BoolValue(false),
+		Name:                             types.StringValue("Acme"),
+		Description:                      types.StringValue("Acme Corp"),
+		Status:                           types.StringValue("active"),
+		RequireBoardApprovalForNewAgents: types.BoolValue(false),
+		FeedbackDataSharingEnabled:       types.BoolValue(false),
+		ArchiveOnDestroy:                 types.BoolValue(true),
 	}
 	plan := tfsdk.Plan{Schema: schema}
 	if diags := plan.Set(ctx, &model); diags.HasError() {
@@ -108,7 +111,7 @@ func TestPaperclipCompanyResourceLifecycle(t *testing.T) {
 	// Update
 	model.Name = types.StringValue("Acme Updated")
 	model.Description = types.StringValue("New Desc")
-	model.RequireTaskStartConfirmation = types.BoolValue(true)
+	model.Status = types.StringValue("active")
 	model.ID = types.StringValue("comp-1")
 	if diags := plan.Set(ctx, &model); diags.HasError() {
 		t.Fatal(diags)
@@ -887,6 +890,8 @@ func TestPaperclipAgentResourceLifecycle(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "comp-1"})
 		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-1/agents":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": "agent-1", "companyId": "comp-1", "name": "Agent 1", "role": "engineer",

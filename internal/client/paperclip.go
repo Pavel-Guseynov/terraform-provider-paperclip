@@ -287,10 +287,15 @@ func extractStringSlice(v interface{}) []string {
 }
 
 type PaperclipCompany struct {
-	ID                           string `json:"id,omitempty"`
-	Name                         string `json:"name"`
-	Description                  string `json:"description,omitempty"`
-	RequireTaskStartConfirmation bool   `json:"requireTaskStartConfirmation"`
+	ID                               string                 `json:"id,omitempty"`
+	Name                             string                 `json:"name"`
+	Description                      string                 `json:"description,omitempty"`
+	Status                           string                 `json:"status,omitempty"`
+	DefaultResponsibleUserID         string                 `json:"defaultResponsibleUserId,omitempty"`
+	RequireBoardApprovalForNewAgents bool                   `json:"requireBoardApprovalForNewAgents"`
+	InteractionResolverGovernance    map[string]interface{} `json:"interactionResolverGovernance,omitempty"`
+	FeedbackDataSharingEnabled       bool                   `json:"feedbackDataSharingEnabled"`
+	LogoAssetID                      string                 `json:"logoAssetId,omitempty"`
 }
 
 type PaperclipProject struct {
@@ -399,20 +404,36 @@ type PaperclipSecret struct {
 }
 
 type PaperclipAgent struct {
-	ID            string                 `json:"id,omitempty"`
-	CompanyID     string                 `json:"companyId,omitempty"`
-	Name          string                 `json:"name"`
-	Role          string                 `json:"role,omitempty"`
-	Title         string                 `json:"title,omitempty"`
-	AdapterType   string                 `json:"adapterType,omitempty"`
-	Status        string                 `json:"status,omitempty"`
-	RuntimeConfig map[string]interface{} `json:"runtimeConfig,omitempty"`
+	ID                   string                 `json:"id,omitempty"`
+	CompanyID            string                 `json:"companyId,omitempty"`
+	Name                 string                 `json:"name"`
+	Role                 string                 `json:"role,omitempty"`
+	Title                string                 `json:"title,omitempty"`
+	Icon                 string                 `json:"icon,omitempty"`
+	ReportsTo            string                 `json:"reportsTo,omitempty"`
+	Capabilities         string                 `json:"capabilities,omitempty"`
+	DefaultEnvironmentID string                 `json:"defaultEnvironmentId,omitempty"`
+	AdapterType          string                 `json:"adapterType,omitempty"`
+	Status               string                 `json:"status,omitempty"`
+	RuntimeConfig        map[string]interface{} `json:"runtimeConfig,omitempty"`
 	AdapterConfig        map[string]interface{} `json:"adapterConfig,omitempty"`
 	ReplaceAdapterConfig bool                   `json:"replaceAdapterConfig,omitempty"`
 	Metadata             map[string]interface{} `json:"metadata,omitempty"`
 	// Permissions is board-reported on a single-agent read and never sent back
 	// on an agent write; the permissions route owns it.
-	Permissions *PaperclipAgentPermissions `json:"permissions,omitempty"`
+	Permissions  *PaperclipAgentPermissions `json:"permissions,omitempty"`
+	HireApproval *PaperclipApproval         `json:"hireApproval,omitempty"`
+}
+
+type PaperclipApproval struct {
+	ID     string `json:"id"`
+	Type   string `json:"type"`
+	Status string `json:"status"`
+}
+
+type PaperclipAgentHireResponse struct {
+	Agent    PaperclipAgent     `json:"agent"`
+	Approval *PaperclipApproval `json:"approval,omitempty"`
 }
 
 // PaperclipAgentPermissions is the agent's own permission flags and the body of
@@ -420,9 +441,11 @@ type PaperclipAgent struct {
 // the unchanged flags back. Writing CanAssignTasks false also withdraws the
 // explicit tasks:assign grant Paperclip attaches to every agent it creates.
 type PaperclipAgentPermissions struct {
-	CanCreateAgents bool `json:"canCreateAgents"`
-	CanCreateSkills bool `json:"canCreateSkills"`
-	CanAssignTasks  bool `json:"canAssignTasks"`
+	CanCreateAgents     bool                   `json:"canCreateAgents"`
+	CanCreateSkills     bool                   `json:"canCreateSkills"`
+	CanAssignTasks      bool                   `json:"canAssignTasks"`
+	TrustPreset         string                 `json:"trustPreset,omitempty"`
+	AuthorizationPolicy map[string]interface{} `json:"authorizationPolicy,omitempty"`
 }
 
 type PaperclipAgentKey struct {
@@ -973,13 +996,15 @@ func extractItems(raw interface{}, key string) []map[string]interface{} {
 }
 
 // Company CRUD
-func (c *Client) CreateCompany(ctx context.Context, name, description string, requireTaskStartConfirmation bool) (*PaperclipCompany, error) {
+func (c *Client) CreateCompany(ctx context.Context, comp PaperclipCompany) (*PaperclipCompany, error) {
 	payload := map[string]interface{}{
-		"name":                         name,
-		"requireTaskStartConfirmation": requireTaskStartConfirmation,
+		"name": comp.Name,
 	}
-	if description != "" {
-		payload["description"] = description
+	if comp.Description != "" {
+		payload["description"] = comp.Description
+	}
+	if comp.DefaultResponsibleUserID != "" {
+		payload["defaultResponsibleUserId"] = comp.DefaultResponsibleUserID
 	}
 	var resp PaperclipCompany
 	if err := c.paperclipRequest(ctx, http.MethodPost, "/api/companies", payload, &resp); err != nil {
@@ -1026,14 +1051,9 @@ func (c *Client) FindCompanyByName(ctx context.Context, name string) (*Paperclip
 	return &matches[0], nil
 }
 
-func (c *Client) UpdateCompany(ctx context.Context, id, name, description string, requireTaskStartConfirmation bool) (*PaperclipCompany, error) {
-	payload := map[string]interface{}{
-		"name":                         name,
-		"description":                  description,
-		"requireTaskStartConfirmation": requireTaskStartConfirmation,
-	}
+func (c *Client) UpdateCompany(ctx context.Context, id string, patch map[string]interface{}) (*PaperclipCompany, error) {
 	var resp PaperclipCompany
-	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/companies/%s", url.PathEscape(id)), payload, &resp); err != nil {
+	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/companies/%s", url.PathEscape(id)), patch, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -1041,6 +1061,10 @@ func (c *Client) UpdateCompany(ctx context.Context, id, name, description string
 
 func (c *Client) ArchiveCompany(ctx context.Context, id string) error {
 	return c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/archive", url.PathEscape(id)), map[string]interface{}{}, nil)
+}
+
+func (c *Client) DeleteCompany(ctx context.Context, id string) error {
+	return c.paperclipRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/companies/%s", url.PathEscape(id)), nil, nil)
 }
 
 func (c *Client) ListCompanies(ctx context.Context) ([]PaperclipCompany, error) {
@@ -1650,10 +1674,69 @@ func (c *Client) ListSecrets(ctx context.Context, companyID string) ([]Paperclip
 	return result, nil
 }
 
+func buildAgentCreatePayload(agent PaperclipAgent) map[string]interface{} {
+	payload := map[string]interface{}{
+		"name":        agent.Name,
+		"role":        agent.Role,
+		"adapterType": agent.AdapterType,
+	}
+	if agent.Title != "" {
+		payload["title"] = agent.Title
+	}
+	if agent.Icon != "" {
+		payload["icon"] = agent.Icon
+	}
+	if agent.ReportsTo != "" {
+		payload["reportsTo"] = agent.ReportsTo
+	}
+	if agent.Capabilities != "" {
+		payload["capabilities"] = agent.Capabilities
+	}
+	if agent.DefaultEnvironmentID != "" {
+		payload["defaultEnvironmentId"] = agent.DefaultEnvironmentID
+	}
+	if agent.RuntimeConfig != nil {
+		payload["runtimeConfig"] = agent.RuntimeConfig
+	}
+	if agent.AdapterConfig != nil {
+		payload["adapterConfig"] = agent.AdapterConfig
+	}
+	if agent.Metadata != nil {
+		payload["metadata"] = agent.Metadata
+	}
+	if agent.Permissions != nil {
+		payload["permissions"] = agent.Permissions
+	}
+	return payload
+}
+
+func (c *Client) CreateAgentHire(ctx context.Context, companyID string, agent PaperclipAgent) (*PaperclipAgent, error) {
+	payload := buildAgentCreatePayload(agent)
+	var resp PaperclipAgentHireResponse
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/agent-hires", url.PathEscape(companyID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	res := resp.Agent
+	if res.CompanyID == "" {
+		res.CompanyID = companyID
+	}
+	res.HireApproval = resp.Approval
+	return &res, nil
+}
+
 // Agent CRUD
 func (c *Client) CreateAgent(ctx context.Context, companyID string, agent PaperclipAgent) (*PaperclipAgent, error) {
+	company, err := c.GetCompany(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	if company != nil && company.RequireBoardApprovalForNewAgents {
+		return c.CreateAgentHire(ctx, companyID, agent)
+	}
+
+	payload := buildAgentCreatePayload(agent)
 	var resp PaperclipAgent
-	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/agents", url.PathEscape(companyID)), agent, &resp); err != nil {
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/agents", url.PathEscape(companyID)), payload, &resp); err != nil {
 		return nil, err
 	}
 	if resp.CompanyID == "" {
@@ -1677,8 +1760,32 @@ func (c *Client) UpdateAgent(ctx context.Context, agentID string, agent Papercli
 	payload := map[string]interface{}{
 		"name":        agent.Name,
 		"role":        agent.Role,
-		"title":       agent.Title,
 		"adapterType": agent.AdapterType,
+	}
+	if agent.Title != "" {
+		payload["title"] = agent.Title
+	} else {
+		payload["title"] = nil
+	}
+	if agent.Icon != "" {
+		payload["icon"] = agent.Icon
+	} else {
+		payload["icon"] = nil
+	}
+	if agent.ReportsTo != "" {
+		payload["reportsTo"] = agent.ReportsTo
+	} else {
+		payload["reportsTo"] = nil
+	}
+	if agent.Capabilities != "" {
+		payload["capabilities"] = agent.Capabilities
+	} else {
+		payload["capabilities"] = nil
+	}
+	if agent.DefaultEnvironmentID != "" {
+		payload["defaultEnvironmentId"] = agent.DefaultEnvironmentID
+	} else {
+		payload["defaultEnvironmentId"] = nil
 	}
 	if agent.RuntimeConfig != nil {
 		payload["runtimeConfig"] = agent.RuntimeConfig
@@ -1709,11 +1816,34 @@ func (c *Client) DeleteAgent(ctx context.Context, agentID string) error {
 	return c.paperclipRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/agents/%s", url.PathEscape(agentID)), nil, nil)
 }
 
+func (c *Client) PauseAgent(ctx context.Context, agentID string) error {
+	return c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/agents/%s/pause", url.PathEscape(agentID)), nil, nil)
+}
+
+func (c *Client) ResumeAgent(ctx context.Context, agentID string) error {
+	return c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/agents/%s/resume", url.PathEscape(agentID)), nil, nil)
+}
+
+func (c *Client) TerminateAgent(ctx context.Context, agentID string) error {
+	return c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/agents/%s/terminate", url.PathEscape(agentID)), nil, nil)
+}
+
 // UpdateAgentPermissions replaces the agent's board permission flags. Paperclip
 // grants tasks:assign to every agent it creates, so the declared value is
 // reconciled after creation rather than sent with it.
 func (c *Client) UpdateAgentPermissions(ctx context.Context, agentID string, permissions PaperclipAgentPermissions) error {
-	return c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/agents/%s/permissions", url.PathEscape(agentID)), permissions, nil)
+	payload := map[string]interface{}{
+		"canCreateAgents": permissions.CanCreateAgents,
+		"canCreateSkills": permissions.CanCreateSkills,
+		"canAssignTasks":  permissions.CanAssignTasks,
+	}
+	if permissions.TrustPreset != "" {
+		payload["trustPreset"] = permissions.TrustPreset
+	}
+	if permissions.AuthorizationPolicy != nil {
+		payload["authorizationPolicy"] = permissions.AuthorizationPolicy
+	}
+	return c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/agents/%s/permissions", url.PathEscape(agentID)), payload, nil)
 }
 
 func (c *Client) ListAgents(ctx context.Context, companyID string) ([]PaperclipAgent, error) {

@@ -1443,16 +1443,16 @@ func TestAgentPermissionReconciliation(t *testing.T) {
 	// Declared values that differ are written once, carrying the undeclared flag
 	// back unchanged because the route replaces all of them, and proven by a read.
 	expected := []map[string]bool{{"canCreateAgents": false, "canCreateSkills": true, "canAssignTasks": true}}
-	if err := r.reconcilePermissions(ctx, "agent-1", true, false); err != nil || !reflect.DeepEqual(*writes, expected) {
+	if err := r.reconcilePermissions(ctx, "agent-1", true, false, true, "", nil); err != nil || !reflect.DeepEqual(*writes, expected) {
 		t.Fatalf("drifted create-agents flag must be written once with the other flags preserved: err %v writes %v", err, *writes)
 	}
 	// Declared values the board already reports write nothing.
-	if err := r.reconcilePermissions(ctx, "agent-1", true, false); err != nil || len(*writes) != 1 {
+	if err := r.reconcilePermissions(ctx, "agent-1", true, false, true, "", nil); err != nil || len(*writes) != 1 {
 		t.Fatalf("converged values must not be rewritten: err %v writes %v", err, *writes)
 	}
 	// A changed task-assignment declaration keeps the declared create-agents value.
 	expected = append(expected, map[string]bool{"canCreateAgents": false, "canCreateSkills": true, "canAssignTasks": false})
-	if err := r.reconcilePermissions(ctx, "agent-1", false, false); err != nil || !reflect.DeepEqual(*writes, expected) {
+	if err := r.reconcilePermissions(ctx, "agent-1", false, false, true, "", nil); err != nil || !reflect.DeepEqual(*writes, expected) {
 		t.Fatalf("task assignment must be written with the declared create-agents value: err %v writes %v", err, *writes)
 	}
 }
@@ -1461,14 +1461,14 @@ func TestAgentPermissionReconciliationRefusesUnprovenState(t *testing.T) {
 	ctx := context.Background()
 	t.Run("board reports no permissions", func(t *testing.T) {
 		r, writes := permissionBoard(t, nil, true)
-		err := r.reconcilePermissions(ctx, "agent-1", true, false)
+		err := r.reconcilePermissions(ctx, "agent-1", true, false, true, "", nil)
 		if err == nil || !strings.Contains(err.Error(), "board reported no permissions for agent agent-1") || len(*writes) != 0 {
 			t.Fatalf("absent permissions must fail without a write: err %v writes %v", err, *writes)
 		}
 	})
 	t.Run("board ignores the write", func(t *testing.T) {
 		r, writes := permissionBoard(t, map[string]interface{}{"canCreateAgents": true, "canCreateSkills": true, "canAssignTasks": true}, false)
-		err := r.reconcilePermissions(ctx, "agent-1", true, false)
+		err := r.reconcilePermissions(ctx, "agent-1", true, false, true, "", nil)
 		if err == nil || !strings.Contains(err.Error(), "agent permissions did not converge: declared can_assign_tasks true and can_create_agents false") || len(*writes) != 1 {
 			t.Fatalf("an unconverged write must fail after one attempt: err %v writes %v", err, *writes)
 		}

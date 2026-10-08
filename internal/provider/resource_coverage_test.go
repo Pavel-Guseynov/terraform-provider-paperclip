@@ -74,7 +74,7 @@ func TestDataSourcesErrorAndEdgeCases(t *testing.T) {
 	okCompServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode([]map[string]interface{}{{
-			"id": "comp-1", "name": "Acme", "description": "", "requireTaskStartConfirmation": true,
+			"id": "comp-1", "name": "Acme", "description": "", "status": "active",
 		}})
 	}))
 	defer okCompServer.Close()
@@ -349,7 +349,7 @@ func TestAgentReconciliationBranches(t *testing.T) {
 	defer srvErr.Close()
 	rErr := NewPaperclipAgentResource().(*PaperclipAgentResource)
 	configureTestResource(t, srvErr.URL, rErr)
-	if err := rErr.reconcilePermissions(ctx, "a1", false, false); err == nil {
+	if err := rErr.reconcilePermissions(ctx, "a1", false, false, true, "", nil); err == nil {
 		t.Fatal("expected error on GetAgent failure")
 	}
 
@@ -361,7 +361,7 @@ func TestAgentReconciliationBranches(t *testing.T) {
 	defer srvNoPerms.Close()
 	rNoPerms := NewPaperclipAgentResource().(*PaperclipAgentResource)
 	configureTestResource(t, srvNoPerms.URL, rNoPerms)
-	if err := rNoPerms.reconcilePermissions(ctx, "a1", true, false); err == nil {
+	if err := rNoPerms.reconcilePermissions(ctx, "a1", true, false, true, "", nil); err == nil {
 		t.Fatal("expected error on nil permissions")
 	}
 
@@ -372,7 +372,7 @@ func TestAgentReconciliationBranches(t *testing.T) {
 		step++
 		if step == 1 {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "a1", "permissions": map[string]interface{}{"canAssignTasks": false, "canCreateAgents": false},
+				"id": "a1", "permissions": map[string]interface{}{"canAssignTasks": false, "canCreateAgents": false, "canCreateSkills": true},
 			})
 		} else {
 			http.Error(w, "update error", http.StatusInternalServerError)
@@ -381,7 +381,7 @@ func TestAgentReconciliationBranches(t *testing.T) {
 	defer srvUpdErr.Close()
 	rUpdErr := NewPaperclipAgentResource().(*PaperclipAgentResource)
 	configureTestResource(t, srvUpdErr.URL, rUpdErr)
-	if err := rUpdErr.reconcilePermissions(ctx, "a1", true, false); err == nil {
+	if err := rUpdErr.reconcilePermissions(ctx, "a1", true, false, true, "", nil); err == nil {
 		t.Fatal("expected error on UpdateAgentPermissions")
 	}
 
@@ -392,7 +392,7 @@ func TestAgentReconciliationBranches(t *testing.T) {
 		step++
 		if step == 1 {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "a1", "permissions": map[string]interface{}{"canAssignTasks": false, "canCreateAgents": false},
+				"id": "a1", "permissions": map[string]interface{}{"canAssignTasks": false, "canCreateAgents": false, "canCreateSkills": true},
 			})
 		} else if step == 2 {
 			w.WriteHeader(http.StatusOK)
@@ -403,7 +403,7 @@ func TestAgentReconciliationBranches(t *testing.T) {
 	defer srvGet2Err.Close()
 	rGet2Err := NewPaperclipAgentResource().(*PaperclipAgentResource)
 	configureTestResource(t, srvGet2Err.URL, rGet2Err)
-	if err := rGet2Err.reconcilePermissions(ctx, "a1", true, false); err == nil {
+	if err := rGet2Err.reconcilePermissions(ctx, "a1", true, false, true, "", nil); err == nil {
 		t.Fatal("expected error on second GetAgent")
 	}
 
@@ -412,19 +412,19 @@ func TestAgentReconciliationBranches(t *testing.T) {
 	srvNoConv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"id": "a1", "permissions": map[string]interface{}{"canAssignTasks": false, "canCreateAgents": false},
+			"id": "a1", "permissions": map[string]interface{}{"canAssignTasks": false, "canCreateAgents": false, "canCreateSkills": true},
 		})
 	}))
 	defer srvNoConv.Close()
 	rNoConv := NewPaperclipAgentResource().(*PaperclipAgentResource)
 	configureTestResource(t, srvNoConv.URL, rNoConv)
-	if err := rNoConv.reconcilePermissions(ctx, "a1", true, false); err == nil {
+	if err := rNoConv.reconcilePermissions(ctx, "a1", true, false, true, "", nil); err == nil {
 		t.Fatal("expected divergence error")
 	}
 
 	// permissionState with nil
-	canAssign, canCreate := permissionState(nil)
-	if !canAssign.IsNull() || !canCreate.IsNull() {
+	canAssign, canCreate, canSkills := permissionState(nil)
+	if !canAssign.IsNull() || !canCreate.IsNull() || !canSkills.IsNull() {
 		t.Fatal("expected nulls for nil permissions")
 	}
 
@@ -432,6 +432,8 @@ func TestAgentReconciliationBranches(t *testing.T) {
 	srvInstrErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "comp-1"})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/companies/comp-1/agents":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": "a1", "companyId": "comp-1", "name": "ag1", "role": "r", "adapterType": "antigravity",
