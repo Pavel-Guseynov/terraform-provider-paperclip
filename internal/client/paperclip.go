@@ -287,11 +287,15 @@ func extractStringSlice(v interface{}) []string {
 }
 
 type PaperclipCompany struct {
-	ID                           string `json:"id,omitempty"`
-	Name                         string `json:"name"`
-	Description                  string `json:"description,omitempty"`
-	RequireTaskStartConfirmation bool   `json:"requireTaskStartConfirmation"`
-	RequireBoardApprovalForNewAgents bool `json:"requireBoardApprovalForNewAgents"`
+	ID                               string                 `json:"id,omitempty"`
+	Name                             string                 `json:"name"`
+	Description                      string                 `json:"description,omitempty"`
+	Status                           string                 `json:"status,omitempty"`
+	DefaultResponsibleUserID         string                 `json:"defaultResponsibleUserId,omitempty"`
+	RequireBoardApprovalForNewAgents bool                   `json:"requireBoardApprovalForNewAgents"`
+	InteractionResolverGovernance    map[string]interface{} `json:"interactionResolverGovernance,omitempty"`
+	FeedbackDataSharingEnabled       bool                   `json:"feedbackDataSharingEnabled"`
+	LogoAssetID                      string                 `json:"logoAssetId,omitempty"`
 }
 
 type PaperclipProject struct {
@@ -930,13 +934,15 @@ func extractItems(raw interface{}, key string) []map[string]interface{} {
 }
 
 // Company CRUD
-func (c *Client) CreateCompany(ctx context.Context, name, description string, requireTaskStartConfirmation bool) (*PaperclipCompany, error) {
+func (c *Client) CreateCompany(ctx context.Context, comp PaperclipCompany) (*PaperclipCompany, error) {
 	payload := map[string]interface{}{
-		"name":                         name,
-		"requireTaskStartConfirmation": requireTaskStartConfirmation,
+		"name": comp.Name,
 	}
-	if description != "" {
-		payload["description"] = description
+	if comp.Description != "" {
+		payload["description"] = comp.Description
+	}
+	if comp.DefaultResponsibleUserID != "" {
+		payload["defaultResponsibleUserId"] = comp.DefaultResponsibleUserID
 	}
 	var resp PaperclipCompany
 	if err := c.paperclipRequest(ctx, http.MethodPost, "/api/companies", payload, &resp); err != nil {
@@ -983,14 +989,9 @@ func (c *Client) FindCompanyByName(ctx context.Context, name string) (*Paperclip
 	return &matches[0], nil
 }
 
-func (c *Client) UpdateCompany(ctx context.Context, id, name, description string, requireTaskStartConfirmation bool) (*PaperclipCompany, error) {
-	payload := map[string]interface{}{
-		"name":                         name,
-		"description":                  description,
-		"requireTaskStartConfirmation": requireTaskStartConfirmation,
-	}
+func (c *Client) UpdateCompany(ctx context.Context, id string, patch map[string]interface{}) (*PaperclipCompany, error) {
 	var resp PaperclipCompany
-	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/companies/%s", url.PathEscape(id)), payload, &resp); err != nil {
+	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/companies/%s", url.PathEscape(id)), patch, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -998,6 +999,10 @@ func (c *Client) UpdateCompany(ctx context.Context, id, name, description string
 
 func (c *Client) ArchiveCompany(ctx context.Context, id string) error {
 	return c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/archive", url.PathEscape(id)), map[string]interface{}{}, nil)
+}
+
+func (c *Client) DeleteCompany(ctx context.Context, id string) error {
+	return c.paperclipRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/companies/%s", url.PathEscape(id)), nil, nil)
 }
 
 func (c *Client) ListCompanies(ctx context.Context) ([]PaperclipCompany, error) {

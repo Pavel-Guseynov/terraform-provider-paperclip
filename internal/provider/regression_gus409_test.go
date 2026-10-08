@@ -482,7 +482,7 @@ func TestBackwardCompatibilityExistingStatePlansWithoutReplacementAcrossResource
 	}{
 		{
 			typeName: "paperclip_company",
-			rawJSON:  `{"id":"comp-1","name":"Acme","description":"Corp","require_task_start_confirmation":false}`,
+			rawJSON:  `{"id":"comp-1","name":"Acme","description":"Corp","status":"active","default_responsible_user_id":null,"require_board_approval_for_new_agents":false,"interaction_resolver_governance":null,"feedback_data_sharing_enabled":false,"logo_asset_id":null,"archive_on_destroy":true}`,
 		},
 		{
 			typeName: "paperclip_project",
