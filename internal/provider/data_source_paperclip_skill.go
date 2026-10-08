@@ -28,6 +28,7 @@ type PaperclipSkillDataSource struct {
 type PaperclipSkillDataSourceModel struct {
 	ID               types.String `tfsdk:"id"`
 	CompanyID        types.String `tfsdk:"company_id"`
+	Key              types.String `tfsdk:"key"`
 	Name             types.String `tfsdk:"name"`
 	Slug             types.String `tfsdk:"slug"`
 	Description      types.String `tfsdk:"description"`
@@ -73,6 +74,10 @@ func (d *PaperclipSkillDataSource) Schema(ctx context.Context, req datasource.Sc
 			"slug": schema.StringAttribute{
 				Description: "Skill slug.",
 				Optional:    true,
+				Computed:    true,
+			},
+			"key": schema.StringAttribute{
+				Description: "Canonical skill reference key.",
 				Computed:    true,
 			},
 			"description": schema.StringAttribute{
@@ -225,6 +230,11 @@ func (d *PaperclipSkillDataSource) Read(ctx context.Context, req datasource.Read
 
 	config.ID = types.StringValue(skill.ID)
 	config.CompanyID = types.StringValue(companyID)
+	canonicalKey := skill.Key
+	if canonicalKey == "" && companyID != "" && skill.Slug != "" {
+		canonicalKey = fmt.Sprintf("company/%s/%s", companyID, skill.Slug)
+	}
+	config.Key = stringOrNull(canonicalKey)
 	config.Name = types.StringValue(skill.Name)
 	config.Slug = types.StringValue(skill.Slug)
 	config.Description = stringOrNull(skill.Description)

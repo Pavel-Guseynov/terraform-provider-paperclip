@@ -10,6 +10,7 @@ import (
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -438,9 +439,13 @@ func TestSkillResourceErrorBranchesAndRenameScenarios(t *testing.T) {
 			http.Error(w, `{"error":"file upload failed"}`, http.StatusInternalServerError)
 		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-1/skills/sk-created/versions":
 			http.Error(w, `{"error":"version create failed"}`, http.StatusInternalServerError)
-		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-created":
+		case req.Method == http.MethodGet && (req.URL.Path == "/api/companies/comp-1/skills/sk-created" || req.URL.Path == "/api/companies/comp-1/skills/renamed-id"):
+			id := "sk-created"
+			if req.URL.Path == "/api/companies/comp-1/skills/renamed-id" {
+				id = "renamed-id"
+			}
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":        "sk-created",
+				"id":        id,
 				"companyId": "comp-1",
 				"name":      "Created",
 				"slug":      "created",
@@ -902,5 +907,424 @@ func TestSkillUpdateFileReconciliationAndAllRemainingBranches(t *testing.T) {
 	r.Update(ctx, resource.UpdateRequest{Plan: planVerFailPlan, State: goodState}, &updVerFailResp)
 	if !updVerFailResp.Diagnostics.HasError() {
 		t.Fatal("expected error on CreateSkillVersion failure")
+	}
+}
+
+func TestSkillResourceFullCoverageRemainingBranches(t *testing.T) {
+	ctx := context.Background()
+
+	// 1. Int64 plan modifier coverage
+	pm := int64UseStateForUnknown()
+	if pm.Description(ctx) == "" || pm.MarkdownDescription(ctx) == "" {
+		t.Fatal("empty description")
+	}
+	var respA planmodifier.Int64Response
+	pm.PlanModifyInt64(ctx, planmodifier.Int64Request{State: tfsdk.State{}}, &respA)
+	if !respA.PlanValue.IsNull() && !respA.PlanValue.IsUnknown() {
+		t.Fatal("expected no change on null state")
+	}
+	r := NewPaperclipSkillResource().(*PaperclipSkillResource)
+	schema := configureTestResource(t, "http://127.0.0.1", r)
+	dummyState := tfsdk.State{Schema: schema}
+	if diags := dummyState.Set(ctx, &PaperclipSkillResourceModel{
+		ID:            types.StringValue("sk-1"),
+		CompanyID:     types.StringValue("comp-1"),
+		Name:          types.StringValue("name"),
+		Slug:          types.StringValue("slug"),
+		Categories:    types.ListNull(types.StringType),
+		Files:         types.MapNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+	}); diags.HasError() {
+		t.Fatalf("failed to set dummy state: %v", diags)
+	}
+
+	var respB planmodifier.Int64Response
+	respB.PlanValue = types.Int64Value(10)
+	pm.PlanModifyInt64(ctx, planmodifier.Int64Request{
+		State:     dummyState,
+		PlanValue: types.Int64Value(10),
+	}, &respB)
+	if respB.PlanValue.ValueInt64() != 10 {
+		t.Fatal("expected plan value preserved")
+	}
+	var respC planmodifier.Int64Response
+	pm.PlanModifyInt64(ctx, planmodifier.Int64Request{
+		State:       dummyState,
+		PlanValue:   types.Int64Unknown(),
+		ConfigValue: types.Int64Unknown(),
+	}, &respC)
+	var respD planmodifier.Int64Response
+	pm.PlanModifyInt64(ctx, planmodifier.Int64Request{
+		State:       dummyState,
+		StateValue:  types.Int64Value(42),
+		PlanValue:   types.Int64Unknown(),
+		ConfigValue: types.Int64Null(),
+	}, &respD)
+	if respD.PlanValue.ValueInt64() != 42 {
+		t.Fatalf("expected 42, got %v", respD.PlanValue)
+	}
+
+	// 2. populateSkillModel branch coverage
+	var mod PaperclipSkillResourceModel
+	mod.CompanyID = types.StringValue("comp-fallback")
+	mod.VersionSnapshot = types.StringUnknown()
+	populateSkillModel(ctx, &mod, &client.PaperclipSkill{
+		ID:             "sk-1",
+		Slug:           "fallback-slug",
+		CurrentVersion: &client.PaperclipSkillVersion{Label: "v1.2.3"},
+	}, types.MapNull(types.StringType))
+	if mod.Key.ValueString() != "company/comp-fallback/fallback-slug" {
+		t.Fatalf("expected fallback key, got %v", mod.Key)
+	}
+	if mod.VersionSnapshot.ValueString() != "v1.2.3" {
+		t.Fatalf("expected v1.2.3 version snapshot, got %v", mod.VersionSnapshot)
+	}
+
+	var mod2 PaperclipSkillResourceModel
+	mod2.VersionSnapshot = types.StringUnknown()
+	populateSkillModel(ctx, &mod2, &client.PaperclipSkill{
+		ID:   "sk-2",
+		Slug: "slug-2",
+	}, types.MapNull(types.StringType))
+	if !mod2.VersionSnapshot.IsNull() {
+		t.Fatalf("expected null version snapshot, got %v", mod2.VersionSnapshot)
+	}
+
+	var updGetCount int
+	// 3. Mock server for Create/Read/Update edge branches
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		// Import rename error
+		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-imp-ren-err/skills/import":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"imported": []map[string]interface{}{{"id": "imp-1", "name": "orig", "slug": "orig"}},
+			})
+		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-imp-ren-err/skills/imp-1/rename":
+			http.Error(w, `{"error":"rename failed"}`, http.StatusInternalServerError)
+
+		// Catalog rename error
+		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-cat-ren-err/skills/install-catalog":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"skill": map[string]interface{}{"id": "cat-1", "name": "orig-cat", "slug": "orig-cat"},
+			})
+		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-cat-ren-err/skills/cat-1/rename":
+			http.Error(w, `{"error":"catalog rename failed"}`, http.StatusInternalServerError)
+
+		// Create GetSkill error
+		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-create-get-err/skills":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":   "cr-1",
+				"name": "Created",
+				"slug": "created",
+			})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-create-get-err/skills/cr-1":
+			http.Error(w, `{"error":"get after create failed"}`, http.StatusInternalServerError)
+
+		// Create with auxiliary files including SKILL.md (covers continue on SKILL.md in Create)
+		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-files-create/skills":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":   "sk-files",
+				"name": "WithFiles",
+				"slug": "with-files",
+			})
+		case req.Method == http.MethodPatch && req.URL.Path == "/api/companies/comp-files-create/skills/sk-files/files":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"path": "tool.sh", "content": "echo 1"})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-files-create/skills/sk-files":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":        "sk-files",
+				"companyId": "comp-files-create",
+				"name":      "WithFiles",
+				"slug":      "with-files",
+				"files": map[string]interface{}{
+					"SKILL.md": "skill content",
+					"tool.sh":  "echo 1",
+				},
+			})
+
+		// Read 500 error
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-500":
+			http.Error(w, `{"error":"get failed"}`, http.StatusInternalServerError)
+
+		// Read file 500 error
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-file-err":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "sk-file-err", "companyId": "comp-1", "name": "S", "slug": "s"})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-file-err/files" && req.URL.Query().Get("path") == "fail.txt":
+			http.Error(w, `{"error":"file read error"}`, http.StatusInternalServerError)
+
+		// Read file 404 (file removed remotely)
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-file-404":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "sk-file-404", "companyId": "comp-1", "name": "S", "slug": "s"})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-file-404/files" && req.URL.Query().Get("path") == "gone.txt":
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+
+		// Read import with FileInventory
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-inv":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":        "sk-inv",
+				"companyId": "comp-1",
+				"name":      "S",
+				"slug":      "s",
+				"fileInventory": []map[string]interface{}{
+					{"path": "SKILL.md", "kind": "instructions"},
+					{"path": "tool.py", "kind": "auxiliary"},
+				},
+			})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-inv/files" && req.URL.Query().Get("path") == "tool.py":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"path": "tool.py", "content": "print('ok')"})
+
+		// Read import when FileInventory has only SKILL.md (covers state.Files = types.MapNull)
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/skills/sk-only-skillmd":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":        "sk-only-skillmd",
+				"companyId": "comp-1",
+				"name":      "S",
+				"slug":      "s",
+				"fileInventory": []map[string]interface{}{
+					{"path": "SKILL.md", "kind": "instructions"},
+				},
+			})
+
+		// Update GetSkill error
+		case req.Method == http.MethodPatch && req.URL.Path == "/api/companies/comp-upd-get-err/skills/sk-upd-get-err":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "sk-upd-get-err", "companyId": "comp-upd-get-err", "name": "Upd", "slug": "upd"})
+		case req.Method == http.MethodPatch && req.URL.Path == "/api/companies/comp-upd-get-err/skills/sk-upd-get-err/files":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"path": "SKILL.md", "content": "c"})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-upd-get-err/skills/sk-upd-get-err":
+			updGetCount++
+			if updGetCount == 1 {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"id":        "sk-upd-get-err",
+					"companyId": "comp-upd-get-err",
+					"name":      "Upd",
+					"slug":      "upd",
+				})
+				return
+			}
+			http.Error(w, `{"error":"get after update failed"}`, http.StatusInternalServerError)
+
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	defer server.Close()
+
+	r = NewPaperclipSkillResource().(*PaperclipSkillResource)
+	schema = configureTestResource(t, server.URL, r)
+
+	// Create: Import rename error
+	planImpRenErr := tfsdk.Plan{Schema: schema}
+	_ = planImpRenErr.Set(ctx, &PaperclipSkillResourceModel{
+		CompanyID:     types.StringValue("comp-imp-ren-err"),
+		Name:          types.StringValue("renamed-name"),
+		Slug:          types.StringValue("renamed-slug"),
+		ImportSource:  types.StringValue("https://example.com"),
+		Categories:    types.ListNull(types.StringType),
+		Files:         types.MapNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+	})
+	var createImpRenErrResp resource.CreateResponse
+	r.Create(ctx, resource.CreateRequest{Plan: planImpRenErr}, &createImpRenErrResp)
+	if !createImpRenErrResp.Diagnostics.HasError() {
+		t.Fatal("expected error on import rename failure")
+	}
+	if createImpRenErrResp.Diagnostics.Errors()[0].Summary() != "Error renaming imported Paperclip skill" {
+		t.Fatalf("unexpected summary: %s", createImpRenErrResp.Diagnostics.Errors()[0].Summary())
+	}
+
+	// Create: Catalog rename error
+	planCatRenErr := tfsdk.Plan{Schema: schema}
+	_ = planCatRenErr.Set(ctx, &PaperclipSkillResourceModel{
+		CompanyID:      types.StringValue("comp-cat-ren-err"),
+		Name:           types.StringValue("renamed-cat-name"),
+		CatalogSkillID: types.StringValue("cat-1"),
+		Categories:     types.ListNull(types.StringType),
+		Files:          types.MapNull(types.StringType),
+		FileInventory:  types.ListNull(fileInventoryObjectType),
+	})
+	var createCatRenErrResp resource.CreateResponse
+	r.Create(ctx, resource.CreateRequest{Plan: planCatRenErr}, &createCatRenErrResp)
+	if !createCatRenErrResp.Diagnostics.HasError() {
+		t.Fatal("expected error on catalog rename failure")
+	}
+	if createCatRenErrResp.Diagnostics.Errors()[0].Summary() != "Error renaming installed catalog skill" {
+		t.Fatalf("unexpected summary: %s", createCatRenErrResp.Diagnostics.Errors()[0].Summary())
+	}
+
+	// Create: GetSkill error
+	planCrGetErr := tfsdk.Plan{Schema: schema}
+	_ = planCrGetErr.Set(ctx, &PaperclipSkillResourceModel{
+		CompanyID:     types.StringValue("comp-create-get-err"),
+		Name:          types.StringValue("Created"),
+		Slug:          types.StringValue("created"),
+		Categories:    types.ListNull(types.StringType),
+		Files:         types.MapNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+	})
+	var createCrGetErrResp resource.CreateResponse
+	r.Create(ctx, resource.CreateRequest{Plan: planCrGetErr}, &createCrGetErrResp)
+	if !createCrGetErrResp.Diagnostics.HasError() {
+		t.Fatal("expected error on GetSkill failure after create")
+	}
+	if createCrGetErrResp.Diagnostics.Errors()[0].Summary() != "Error fetching created Paperclip skill" {
+		t.Fatalf("unexpected summary: %s", createCrGetErrResp.Diagnostics.Errors()[0].Summary())
+	}
+
+	// Create: with auxiliary files including SKILL.md (covers continue on SKILL.md in Create)
+	filesWithSkillMd, _ := types.MapValueFrom(ctx, types.StringType, map[string]string{
+		"SKILL.md": "# Title",
+		"tool.sh":  "echo 1",
+	})
+	planFilesSkillMd := tfsdk.Plan{Schema: schema}
+	_ = planFilesSkillMd.Set(ctx, &PaperclipSkillResourceModel{
+		CompanyID:     types.StringValue("comp-files-create"),
+		Name:          types.StringValue("WithFiles"),
+		Slug:          types.StringValue("with-files"),
+		Categories:    types.ListNull(types.StringType),
+		Files:         filesWithSkillMd,
+		FileInventory: types.ListNull(fileInventoryObjectType),
+	})
+	createFilesSkillMdResp := resource.CreateResponse{State: tfsdk.State{Schema: schema}}
+	r.Create(ctx, resource.CreateRequest{Plan: planFilesSkillMd}, &createFilesSkillMdResp)
+	if createFilesSkillMdResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on create with files: %v", createFilesSkillMdResp.Diagnostics)
+	}
+
+	// Read: 500 error
+	state500 := tfsdk.State{Schema: schema}
+	_ = state500.Set(ctx, &PaperclipSkillResourceModel{
+		CompanyID:     types.StringValue("comp-1"),
+		ID:            types.StringValue("sk-500"),
+		Name:          types.StringValue("S"),
+		Slug:          types.StringValue("s"),
+		Categories:    types.ListNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+		Files:         types.MapNull(types.StringType),
+	})
+	var read500Resp resource.ReadResponse
+	read500Resp.State = state500
+	r.Read(ctx, resource.ReadRequest{State: state500}, &read500Resp)
+	if !read500Resp.Diagnostics.HasError() {
+		t.Fatal("expected error on 500 GetSkill")
+	}
+
+	// Read: file 500 error
+	filesErrMap, _ := types.MapValueFrom(ctx, types.StringType, map[string]string{"fail.txt": "content"})
+	stateFileErr := tfsdk.State{Schema: schema}
+	_ = stateFileErr.Set(ctx, &PaperclipSkillResourceModel{
+		CompanyID:     types.StringValue("comp-1"),
+		ID:            types.StringValue("sk-file-err"),
+		Name:          types.StringValue("S"),
+		Slug:          types.StringValue("s"),
+		Categories:    types.ListNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+		Files:         filesErrMap,
+	})
+	var readFileErrResp resource.ReadResponse
+	readFileErrResp.State = stateFileErr
+	r.Read(ctx, resource.ReadRequest{State: stateFileErr}, &readFileErrResp)
+	if !readFileErrResp.Diagnostics.HasError() {
+		t.Fatal("expected error on file 500 read")
+	}
+
+	// Read: file 404 (drift to null)
+	files404Map, _ := types.MapValueFrom(ctx, types.StringType, map[string]string{"gone.txt": "content"})
+	stateFile404 := tfsdk.State{Schema: schema}
+	_ = stateFile404.Set(ctx, &PaperclipSkillResourceModel{
+		CompanyID:     types.StringValue("comp-1"),
+		ID:            types.StringValue("sk-file-404"),
+		Name:          types.StringValue("S"),
+		Slug:          types.StringValue("s"),
+		Categories:    types.ListNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+		Files:         files404Map,
+	})
+	var readFile404Resp resource.ReadResponse
+	readFile404Resp.State = stateFile404
+	r.Read(ctx, resource.ReadRequest{State: stateFile404}, &readFile404Resp)
+	if readFile404Resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on file 404 read: %v", readFile404Resp.Diagnostics)
+	}
+	var resMod404 PaperclipSkillResourceModel
+	_ = readFile404Resp.State.Get(ctx, &resMod404)
+	if !resMod404.Files.IsNull() {
+		t.Fatalf("expected Files to be null after all files 404, got %v", resMod404.Files)
+	}
+
+	// Read: import with FileInventory auxiliary files
+	stateInv := tfsdk.State{Schema: schema}
+	_ = stateInv.Set(ctx, &PaperclipSkillResourceModel{
+		CompanyID:     types.StringValue("comp-1"),
+		ID:            types.StringValue("sk-inv"),
+		Name:          types.StringValue("S"),
+		Slug:          types.StringValue("s"),
+		Categories:    types.ListNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+		Files:         types.MapNull(types.StringType),
+	})
+	var readInvResp resource.ReadResponse
+	readInvResp.State = stateInv
+	r.Read(ctx, resource.ReadRequest{State: stateInv}, &readInvResp)
+	if readInvResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on inventory read: %v", readInvResp.Diagnostics)
+	}
+	var resModInv PaperclipSkillResourceModel
+	_ = readInvResp.State.Get(ctx, &resModInv)
+	if resModInv.Files.IsNull() {
+		t.Fatal("expected Files to be populated from FileInventory")
+	}
+
+	// Read: import when FileInventory has only SKILL.md (covers state.Files = types.MapNull)
+	stateOnlySkillMd := tfsdk.State{Schema: schema}
+	_ = stateOnlySkillMd.Set(ctx, &PaperclipSkillResourceModel{
+		CompanyID:     types.StringValue("comp-1"),
+		ID:            types.StringValue("sk-only-skillmd"),
+		Name:          types.StringValue("S"),
+		Slug:          types.StringValue("s"),
+		Categories:    types.ListNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+		Files:         types.MapNull(types.StringType),
+	})
+	var readOnlySkillMdResp resource.ReadResponse
+	readOnlySkillMdResp.State = stateOnlySkillMd
+	r.Read(ctx, resource.ReadRequest{State: stateOnlySkillMd}, &readOnlySkillMdResp)
+	if readOnlySkillMdResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on only-skillmd read: %v", readOnlySkillMdResp.Diagnostics)
+	}
+	var resModOnlySkillMd PaperclipSkillResourceModel
+	_ = readOnlySkillMdResp.State.Get(ctx, &resModOnlySkillMd)
+	if !resModOnlySkillMd.Files.IsNull() {
+		t.Fatalf("expected Files to be null when inventory only has SKILL.md, got %v", resModOnlySkillMd.Files)
+	}
+
+	// Update: GetSkill error
+	planUpdGetErr := tfsdk.Plan{Schema: schema}
+	_ = planUpdGetErr.Set(ctx, &PaperclipSkillResourceModel{
+		ID:            types.StringValue("sk-upd-get-err"),
+		CompanyID:     types.StringValue("comp-upd-get-err"),
+		Name:          types.StringValue("Upd"),
+		Slug:          types.StringValue("upd"),
+		Categories:    types.ListNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+		Files:         types.MapNull(types.StringType),
+	})
+	stateUpdGetErr := tfsdk.State{Schema: schema}
+	_ = stateUpdGetErr.Set(ctx, &PaperclipSkillResourceModel{
+		ID:            types.StringValue("sk-upd-get-err"),
+		CompanyID:     types.StringValue("comp-upd-get-err"),
+		Name:          types.StringValue("Upd"),
+		Slug:          types.StringValue("upd"),
+		Categories:    types.ListNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+		Files:         types.MapNull(types.StringType),
+	})
+	var updGetErrResp resource.UpdateResponse
+	updGetErrResp.State = stateUpdGetErr
+	r.Update(ctx, resource.UpdateRequest{Plan: planUpdGetErr, State: stateUpdGetErr}, &updGetErrResp)
+	if !updGetErrResp.Diagnostics.HasError() {
+		t.Fatal("expected error on GetSkill after update")
+	}
+	if updGetErrResp.Diagnostics.Errors()[0].Summary() != "Error fetching updated Paperclip skill" {
+		t.Fatalf("unexpected summary: %s", updGetErrResp.Diagnostics.Errors()[0].Summary())
 	}
 }

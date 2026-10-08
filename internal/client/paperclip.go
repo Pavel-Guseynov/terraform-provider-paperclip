@@ -343,6 +343,7 @@ type PaperclipSkillVersion struct {
 type PaperclipSkill struct {
 	ID               string                    `json:"id,omitempty"`
 	CompanyID        string                    `json:"companyId,omitempty"`
+	Key              string                    `json:"key,omitempty"`
 	Name             string                    `json:"name"`
 	Slug             string                    `json:"slug"`
 	Description      string                    `json:"description,omitempty"`
@@ -360,6 +361,7 @@ type PaperclipSkill struct {
 	SourceType       string                    `json:"sourceType,omitempty"`
 	SourceLocator    string                    `json:"sourceLocator,omitempty"`
 	CurrentVersionID string                    `json:"currentVersionId,omitempty"`
+	CurrentVersion   *PaperclipSkillVersion    `json:"currentVersion,omitempty"`
 	FileInventory    []PaperclipSkillFileEntry `json:"fileInventory,omitempty"`
 	SchemaVersion    int64                     `json:"schemaVersion,omitempty"`
 	Metadata         map[string]interface{}    `json:"metadata,omitempty"`
@@ -1426,15 +1428,31 @@ func (c *Client) InstallCatalogSkill(ctx context.Context, companyID, catalogSkil
 func (c *Client) UpdateSkill(ctx context.Context, companyID, skillID string, skill PaperclipSkill) (*PaperclipSkill, error) {
 	skillPath := fmt.Sprintf("/api/companies/%s/skills/%s", url.PathEscape(companyID), url.PathEscape(skillID))
 	metadata := map[string]interface{}{
-		"description":  skill.Description,
-		"metadata":     skill.Metadata,
-		"iconUrl":      skill.IconURL,
-		"color":        skill.Color,
-		"tagline":      skill.Tagline,
-		"authorName":   skill.AuthorName,
-		"homepageUrl":  skill.HomepageURL,
-		"categories":   skill.Categories,
-		"sharingScope": skill.SharingScope,
+		"description": skill.Description,
+	}
+	if skill.Metadata != nil {
+		metadata["metadata"] = skill.Metadata
+	}
+	if skill.IconURL != "" {
+		metadata["iconUrl"] = skill.IconURL
+	}
+	if skill.Color != "" {
+		metadata["color"] = skill.Color
+	}
+	if skill.Tagline != "" {
+		metadata["tagline"] = skill.Tagline
+	}
+	if skill.AuthorName != "" {
+		metadata["authorName"] = skill.AuthorName
+	}
+	if skill.HomepageURL != "" {
+		metadata["homepageUrl"] = skill.HomepageURL
+	}
+	if skill.Categories != nil {
+		metadata["categories"] = skill.Categories
+	}
+	if skill.SharingScope != "" {
+		metadata["sharingScope"] = skill.SharingScope
 	}
 	if skill.Name != "" {
 		metadata["name"] = skill.Name

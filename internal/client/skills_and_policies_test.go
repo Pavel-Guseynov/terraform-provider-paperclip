@@ -419,3 +419,100 @@ func TestSkillsClientEdgeCasesAndBranchCoverage(t *testing.T) {
 		t.Fatalf("RenameSkill companyId backfill failed: s=%+v, err=%v", renamedNoComp, err)
 	}
 }
+
+func TestUpdateSkillCoverageAndContract(t *testing.T) {
+	ctx := context.Background()
+
+	var receivedBody map[string]interface{}
+	var fileUpdated bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/companies/comp-1/skills/sk-all":
+			_ = json.NewDecoder(r.Body).Decode(&receivedBody)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":        "sk-all",
+				"companyId": "comp-1",
+			})
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/companies/comp-1/skills/sk-all/files":
+			fileUpdated = true
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"skillId": "sk-all",
+				"path":    "SKILL.md",
+				"content": "# New Content",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/skills/sk-all":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":        "sk-all",
+				"companyId": "comp-1",
+				"name":      "All Set",
+				"slug":      "all-set",
+				"markdown":  "# New Content",
+			})
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/companies/comp-1/skills/sk-err":
+			http.Error(w, `{"error":"patch failed"}`, http.StatusInternalServerError)
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/companies/comp-1/skills/sk-file-err":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "sk-file-err"})
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/companies/comp-1/skills/sk-file-err/files":
+			http.Error(w, `{"error":"file upload failed"}`, http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := NewClient(server.URL, "token")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	// 1. UpdateSkill with all fields set
+	updSkill, err := cli.UpdateSkill(ctx, "comp-1", "sk-all", PaperclipSkill{
+		Name:         "All Set",
+		Slug:         "all-set",
+		Description:  "All desc",
+		Content:      "# New Content",
+		IconURL:      "https://example.com/icon.png",
+		Color:        "#abcdef",
+		Tagline:      "tag",
+		AuthorName:   "author",
+		HomepageURL:  "https://example.com",
+		Categories:   []string{"cat1", "cat2"},
+		SharingScope: "company",
+		Metadata:     map[string]interface{}{"extra": "value"},
+	})
+	if err != nil || updSkill == nil || !fileUpdated {
+		t.Fatalf("UpdateSkill with all fields failed: s=%+v, err=%v", updSkill, err)
+	}
+	// Assert GUS-416-R2-F1 contract: categories is present and non-null, sharingScope is present and non-empty
+	if _, ok := receivedBody["categories"]; !ok || receivedBody["categories"] == nil {
+		t.Fatalf("expected categories to be non-null in PATCH payload: %v", receivedBody)
+	}
+	if v, ok := receivedBody["sharingScope"].(string); !ok || v != "company" {
+		t.Fatalf("expected sharingScope to be 'company' in PATCH payload: %v", receivedBody)
+	}
+
+	// 2. UpdateSkill with nil categories and empty sharingScope (GUS-416-R2-F1: must NOT send null or empty string)
+	receivedBody = nil
+	updMinimal, err := cli.UpdateSkill(ctx, "comp-1", "sk-all", PaperclipSkill{
+		Description: "Minimal",
+		Content:     "# New Content",
+	})
+	if err != nil || updMinimal == nil {
+		t.Fatalf("UpdateSkill minimal failed: %v", err)
+	}
+	if _, ok := receivedBody["categories"]; ok {
+		t.Fatalf("categories must be omitted from PATCH payload when unset: %v", receivedBody)
+	}
+	if _, ok := receivedBody["sharingScope"]; ok {
+		t.Fatalf("sharingScope must be omitted from PATCH payload when unset: %v", receivedBody)
+	}
+
+	// 3. Error branches
+	if _, err := cli.UpdateSkill(ctx, "comp-1", "sk-err", PaperclipSkill{}); err == nil {
+		t.Fatal("expected error when PATCH fails")
+	}
+	if _, err := cli.UpdateSkill(ctx, "comp-1", "sk-file-err", PaperclipSkill{Content: "fail"}); err == nil {
+		t.Fatal("expected error when file upload fails")
+	}
+}
