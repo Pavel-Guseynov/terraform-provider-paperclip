@@ -432,6 +432,8 @@ func TestAllResourcesBadPlanStateAndConfigure(t *testing.T) {
 		NewPaperclipStdioTemplateResource(),
 		NewPaperclipConnectionInstallResource(),
 		NewPaperclipAppPermissionResource(),
+		NewPaperclipSkillAssignmentResource(),
+		NewPaperclipSkillPolicyResource(),
 	}
 
 	for _, r := range resources {
@@ -532,6 +534,19 @@ func TestProjectExecutionWorkspacePolicyAndUpgradeState(t *testing.T) {
 	upgrader.StateUpgrader(ctx, resource.UpgradeStateRequest{State: &goodPrior}, &upRespGood)
 	if upRespGood.Diagnostics.HasError() {
 		t.Fatalf("unexpected upgrade error: %v", upRespGood.Diagnostics)
+	}
+
+	skillRes := NewPaperclipSkillResource().(*PaperclipSkillResource)
+	skillUpgraders := skillRes.UpgradeState(ctx)
+	skillUp0, ok := skillUpgraders[0]
+	if !ok {
+		t.Fatal("expected skill upgrader 0")
+	}
+	badSkillPrior := tfsdk.State{Schema: *skillUp0.PriorSchema, Raw: tftypes.NewValue(tftypes.String, "invalid")}
+	var upRespSkillBad resource.UpgradeStateResponse
+	skillUp0.StateUpgrader(ctx, resource.UpgradeStateRequest{State: &badSkillPrior}, &upRespSkillBad)
+	if !upRespSkillBad.Diagnostics.HasError() {
+		t.Fatal("expected error on bad skill prior state")
 	}
 }
 

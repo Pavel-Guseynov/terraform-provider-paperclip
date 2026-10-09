@@ -194,6 +194,9 @@ func syncBudgetPolicyAliases(m *PaperclipBudgetPolicyResourceModel) {
 		m.WindowKind = m.Window
 	} else if !m.WindowKind.IsNull() && !m.WindowKind.IsUnknown() && m.WindowKind.ValueString() != "" {
 		m.Window = m.WindowKind
+	} else if m.Window.IsUnknown() || m.WindowKind.IsUnknown() {
+		m.Window = types.StringUnknown()
+		m.WindowKind = types.StringUnknown()
 	} else {
 		m.WindowKind = types.StringValue("calendar_month_utc")
 		m.Window = types.StringValue("calendar_month_utc")
@@ -268,10 +271,10 @@ func (r *PaperclipBudgetPolicyResource) checkDuplicatePolicyIdentity(ctx context
 	}
 	policies, err := r.client.ListBudgetPolicies(ctx, companyID)
 	if err != nil {
-		return nil
+		return fmt.Errorf("failed to list budget policies to verify single ownership: %w", err)
 	}
 	for _, p := range policies {
-		if p.ScopeType == scopeType && p.ScopeID == scopeID && p.WindowKind == windowKind && p.IsActive {
+		if p.ScopeType == scopeType && p.ScopeID == scopeID && p.WindowKind == windowKind {
 			if currentPolicyID == "" || p.PolicyID != currentPolicyID {
 				return fmt.Errorf("a budget policy for company %s, scope %s (%s), and window %s already exists (policy ID %s); a second owner of the same policy identity is rejected", companyID, scopeType, scopeID, windowKind, p.PolicyID)
 			}
@@ -415,11 +418,6 @@ func (r *PaperclipBudgetPolicyResource) Read(ctx context.Context, req resource.R
 		return
 	}
 
-	// Deactivation works as retirement: inactive policies are removed from state
-	if !summary.IsActive {
-		resp.State.RemoveResource(ctx)
-		return
-	}
 
 	state.ID = types.StringValue(summary.PolicyID)
 	state.CompanyID = types.StringValue(summary.CompanyID)

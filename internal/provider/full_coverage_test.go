@@ -952,6 +952,9 @@ func TestFullCoverageSkillRemaining(t *testing.T) {
 		Description:   types.StringValue("Custom desc"),
 		SchemaVersion: types.Int64Value(2),
 		Content:       types.StringValue("Skill markdown"),
+		Categories:    types.ListNull(types.StringType),
+		Files:         types.MapNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
 	})
 	var createResp resource.CreateResponse
 	createResp.State = tfsdk.State{Schema: schema}

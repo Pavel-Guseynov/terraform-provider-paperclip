@@ -31,6 +31,12 @@ func TestRegressionSkillRenameSendsNameAndSlug(t *testing.T) {
 				"slug":        "renamed-slug",
 				"description": "Renamed description",
 			})
+		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-1/skills/skill-1/rename":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"skill": map[string]interface{}{
+					"id": "skill-1", "companyId": "comp-1", "name": "renamed-skill", "slug": "renamed-slug",
+				},
+			})
 		case req.Method == http.MethodPatch && req.URL.Path == "/api/companies/comp-1/skills/skill-1/files":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"skillId": "skill-1",
@@ -68,6 +74,9 @@ func TestRegressionSkillRenameSendsNameAndSlug(t *testing.T) {
 		Content:       types.StringValue("# Updated Content"),
 		SchemaVersion: types.Int64Value(1),
 		Metadata:      types.StringValue(`{"author":"antigravity"}`),
+		Categories:    types.ListNull(types.StringType),
+		Files:         types.MapNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
 	})
 	state := tfsdk.State{Schema: schemaResp.Schema}
 	_ = state.Set(ctx, &PaperclipSkillResourceModel{
@@ -78,6 +87,9 @@ func TestRegressionSkillRenameSendsNameAndSlug(t *testing.T) {
 		Description:   types.StringValue("Old description"),
 		Content:       types.StringValue("# Old Content"),
 		SchemaVersion: types.Int64Value(1),
+		Categories:    types.ListNull(types.StringType),
+		Files:         types.MapNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
 	})
 
 	var updateResp resource.UpdateResponse
@@ -146,19 +158,25 @@ func TestRegressionSkillContentCanBeCleared(t *testing.T) {
 
 	plan := tfsdk.Plan{Schema: schemaResp.Schema}
 	_ = plan.Set(ctx, &PaperclipSkillResourceModel{
-		ID:          types.StringValue("skill-1"),
-		CompanyID:   types.StringValue("comp-1"),
-		Name:        types.StringValue("skill-1"),
-		Description: types.StringValue("Cleared content"),
-		Content:     types.StringValue(""),
+		ID:            types.StringValue("skill-1"),
+		CompanyID:     types.StringValue("comp-1"),
+		Name:          types.StringValue("skill-1"),
+		Description:   types.StringValue("Cleared content"),
+		Content:       types.StringValue(""),
+		Categories:    types.ListNull(types.StringType),
+		Files:         types.MapNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
 	})
 	state := tfsdk.State{Schema: schemaResp.Schema}
 	_ = state.Set(ctx, &PaperclipSkillResourceModel{
-		ID:          types.StringValue("skill-1"),
-		CompanyID:   types.StringValue("comp-1"),
-		Name:        types.StringValue("skill-1"),
-		Description: types.StringValue("Previous content"),
-		Content:     types.StringValue("# Old content to clear"),
+		ID:            types.StringValue("skill-1"),
+		CompanyID:     types.StringValue("comp-1"),
+		Name:          types.StringValue("skill-1"),
+		Description:   types.StringValue("Previous content"),
+		Content:       types.StringValue("# Old content to clear"),
+		Categories:    types.ListNull(types.StringType),
+		Files:         types.MapNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
 	})
 
 	var updateResp resource.UpdateResponse

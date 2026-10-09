@@ -169,13 +169,16 @@ func (r *PaperclipGoalResource) validateGoalHierarchy(ctx context.Context, goalI
 			seen[curr] = true
 			ancestor, err := r.client.GetGoal(ctx, curr)
 			if err != nil {
-				break
+				return fmt.Errorf("failed to validate ancestor goal %s: %w", curr, err)
 			}
 			if ancestor.CompanyID != companyID {
 				return fmt.Errorf("ancestor goal %s belongs to company %s, expected %s", curr, ancestor.CompanyID, companyID)
 			}
 			curr = ancestor.ParentID
 			depth++
+		}
+		if curr != "" && depth >= 100 {
+			return fmt.Errorf("goal hierarchy validation exceeded maximum depth (%d) at ancestor %s without reaching root", 100, curr)
 		}
 	}
 
@@ -336,10 +339,10 @@ func (r *PaperclipGoalResource) Read(ctx context.Context, req resource.ReadReque
 	state.OwnerAgentID = stringOrNull(goal.OwnerAgentID)
 
 	if state.CancelOnDestroy.IsNull() || state.CancelOnDestroy.IsUnknown() {
-		state.CancelOnDestroy = types.BoolValue(true)
+		state.CancelOnDestroy = types.BoolValue(false)
 	}
 	if state.Retirement.IsNull() || state.Retirement.IsUnknown() {
-		state.Retirement = types.StringValue("cancel")
+		state.Retirement = types.StringValue("fail")
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)

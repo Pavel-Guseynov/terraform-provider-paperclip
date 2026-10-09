@@ -3,8 +3,10 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -429,7 +431,7 @@ func TestGoalResourceFull(t *testing.T) {
 	}
 	var readImportState PaperclipGoalResourceModel
 	_ = readImportSuccess.State.Get(ctx, &readImportState)
-	if !readImportState.CancelOnDestroy.ValueBool() || readImportState.Retirement.ValueString() != "cancel" {
+	if readImportState.CancelOnDestroy.ValueBool() || readImportState.Retirement.ValueString() != "fail" {
 		t.Fatalf("expected cancel_on_destroy and retirement defaulted, got %+v", readImportState)
 	}
 
@@ -819,15 +821,25 @@ func TestBudgetPolicyResourceFull(t *testing.T) {
 		t.Fatalf("expected same ID to be permitted, got %v", err)
 	}
 
-	// distinct windowKind -> permitted
-	if err := r.checkDuplicatePolicyIdentity(ctx, "comp-1", "company", "comp-1", "lifetime", ""); err != nil {
-		t.Fatalf("expected distinct windowKind to be permitted, got %v", err)
+	// duplicate inactive policy found with same ID -> permitted (e.g. reactivating imported inactive policy)
+	if err := r.checkDuplicatePolicyIdentity(ctx, "comp-1", "company", "comp-1", "lifetime", "pol-inactive"); err != nil {
+		t.Fatalf("expected same ID for inactive policy to be permitted, got %v", err)
 	}
 
-	// failList -> returns nil
+	// duplicate inactive policy with different ID -> rejected
+	if err := r.checkDuplicatePolicyIdentity(ctx, "comp-1", "company", "comp-1", "lifetime", ""); err == nil {
+		t.Fatal("expected duplicate policy identity error for inactive policy")
+	}
+
+	// distinct scope -> permitted
+	if err := r.checkDuplicatePolicyIdentity(ctx, "comp-1", "agent", "agent-1", "calendar_month_utc", ""); err != nil {
+		t.Fatalf("expected distinct scope to be permitted, got %v", err)
+	}
+
+	// failList -> returns error (fail closed)
 	failList = true
-	if err := r.checkDuplicatePolicyIdentity(ctx, "comp-1", "company", "comp-1", "calendar_month_utc", ""); err != nil {
-		t.Fatal("expected nil when ListBudgetPolicies fails in duplicate check")
+	if err := r.checkDuplicatePolicyIdentity(ctx, "comp-1", "company", "comp-1", "calendar_month_utc", ""); err == nil {
+		t.Fatal("expected error when ListBudgetPolicies fails in duplicate check")
 	}
 	failList = false
 
@@ -966,6 +978,24 @@ func TestBudgetPolicyResourceFull(t *testing.T) {
 		t.Fatal("expected duplicate identity error in Create")
 	}
 
+	// Duplicate inactive identity error in Create
+	planModelDupInactive := PaperclipBudgetPolicyResourceModel{
+		CompanyID:   types.StringValue("comp-1"),
+		ScopeType:   types.StringValue("company"),
+		ScopeID:     types.StringValue("comp-1"),
+		WindowKind:  types.StringValue("lifetime"),
+		Amount:      types.Int64Value(100),
+		WarnPercent: types.Int64Value(80),
+	}
+	planDupInactive := tfsdk.Plan{Schema: schema}
+	_ = planDupInactive.Set(ctx, &planModelDupInactive)
+	var createDupInactive resource.CreateResponse
+	createDupInactive.State = tfsdk.State{Schema: schema}
+	r.Create(ctx, resource.CreateRequest{Plan: planDupInactive}, &createDupInactive)
+	if !createDupInactive.Diagnostics.HasError() {
+		t.Fatal("expected duplicate inactive identity error in Create")
+	}
+
 	// Upsert failure in Create
 	failUpsert = true
 	planModelValid := PaperclipBudgetPolicyResourceModel{
@@ -985,6 +1015,16 @@ func TestBudgetPolicyResourceFull(t *testing.T) {
 		t.Fatal("expected error on failed upsert in Create")
 	}
 	failUpsert = false
+
+	// List policies error in Create (fail closed)
+	failList = true
+	var createListFail resource.CreateResponse
+	createListFail.State = tfsdk.State{Schema: schema}
+	r.Create(ctx, resource.CreateRequest{Plan: planValid}, &createListFail)
+	if !createListFail.Diagnostics.HasError() {
+		t.Fatal("expected error on ListBudgetPolicies failure in Create")
+	}
+	failList = false
 
 	// Create success
 	var createSuccess resource.CreateResponse
@@ -1032,7 +1072,7 @@ func TestBudgetPolicyResourceFull(t *testing.T) {
 	}
 	failList = false
 
-	// Inactive policy removes resource (deactivation as retirement)
+	// Inactive policy preserved in state with active = false (not removed from state)
 	stateInactiveModel := PaperclipBudgetPolicyResourceModel{
 		ID:        types.StringValue("pol-inactive"),
 		CompanyID: types.StringValue("comp-1"),
@@ -1042,8 +1082,16 @@ func TestBudgetPolicyResourceFull(t *testing.T) {
 	var readInactive resource.ReadResponse
 	readInactive.State = tfsdk.State{Schema: schema}
 	r.Read(ctx, resource.ReadRequest{State: stateInactive}, &readInactive)
-	if readInactive.Diagnostics.HasError() || !readInactive.State.Raw.IsNull() {
-		t.Fatal("expected inactive policy to be removed from state on Read")
+	if readInactive.Diagnostics.HasError() {
+		t.Fatalf("unexpected error reading inactive policy: %v", readInactive.Diagnostics)
+	}
+	var readInactiveState PaperclipBudgetPolicyResourceModel
+	_ = readInactive.State.Get(ctx, &readInactiveState)
+	if readInactiveState.Active.ValueBool() || readInactiveState.IsActive.ValueBool() {
+		t.Fatal("expected inactive policy to have active = false in state")
+	}
+	if readInactiveState.ID.ValueString() != "pol-inactive" {
+		t.Fatalf("expected inactive policy preserved in state, got ID %s", readInactiveState.ID.ValueString())
 	}
 
 	// Read success
@@ -1303,9 +1351,26 @@ func TestGoalBudgetRemainingCoverageBranches(t *testing.T) {
 		},
 	}
 
+	var postMutations, patchMutations int
+
 	goalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodPost:
+			postMutations++
+			http.Error(w, "unexpected post mutation", http.StatusInternalServerError)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/anc-500":
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/anc-403":
+			http.Error(w, "forbidden", http.StatusForbidden)
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/goals/deep-"):
+			idStr := strings.TrimPrefix(r.URL.Path, "/api/goals/deep-")
+			id, _ := strconv.Atoi(idStr)
+			_ = json.NewEncoder(w).Encode(client.PaperclipGoal{
+				ID:        fmt.Sprintf("deep-%d", id),
+				CompanyID: "comp-1",
+				ParentID:  fmt.Sprintf("deep-%d", id+1),
+			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/anc-1":
 			_ = json.NewEncoder(w).Encode(goalsDB["anc-1"])
 		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/anc-2":
@@ -1331,6 +1396,7 @@ func TestGoalBudgetRemainingCoverageBranches(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/agents/agent-other":
 			_ = json.NewEncoder(w).Encode(agentsDB["agent-other"])
 		case r.Method == http.MethodPatch && r.URL.Path == "/api/goals/goal-target":
+			patchMutations++
 			var patch map[string]interface{}
 			_ = json.NewDecoder(r.Body).Decode(&patch)
 			g := goalsDB["goal-target"]
@@ -1354,15 +1420,18 @@ func TestGoalBudgetRemainingCoverageBranches(t *testing.T) {
 			}
 			goalsDB["goal-target"] = g
 			_ = json.NewEncoder(w).Encode(g)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/budgets/policies":
-			_ = json.NewEncoder(w).Encode([]client.PaperclipBudgetPolicySummary{
-				{
-					PolicyID:   "pol-existing",
-					CompanyID:  "comp-1",
-					ScopeType:  "company",
-					ScopeID:    "comp-1",
-					WindowKind: "calendar_month_utc",
-					Amount:     1000,
+		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/budgets/overview":
+			_ = json.NewEncoder(w).Encode(client.PaperclipBudgetOverview{
+				Policies: []client.PaperclipBudgetPolicySummary{
+					{
+						PolicyID:   "pol-existing",
+						CompanyID:  "comp-1",
+						ScopeType:  "company",
+						ScopeID:    "comp-1",
+						WindowKind: "calendar_month_utc",
+						Amount:     1000,
+						IsActive:   true,
+					},
 				},
 			})
 		default:
@@ -1382,9 +1451,55 @@ func TestGoalBudgetRemainingCoverageBranches(t *testing.T) {
 		t.Fatal("expected cycle error among ancestors with empty goalID")
 	}
 
-	// Test validateGoalHierarchy: ancestor error (break on ancestor not found)
-	if err := rGoal.validateGoalHierarchy(ctx, "", "comp-1", "anc-with-missing", ""); err != nil {
-		t.Fatalf("expected break on missing ancestor, got %v", err)
+	// Test validateGoalHierarchy: ancestor 404 error (fail closed on missing ancestor)
+	if err := rGoal.validateGoalHierarchy(ctx, "", "comp-1", "anc-with-missing", ""); err == nil {
+		t.Fatal("expected error on missing ancestor")
+	}
+
+	// Test validateGoalHierarchy: ancestor 500 error
+	if err := rGoal.validateGoalHierarchy(ctx, "", "comp-1", "anc-500", ""); err == nil {
+		t.Fatal("expected error on 500 ancestor")
+	}
+
+	// Test validateGoalHierarchy: ancestor 403 error
+	if err := rGoal.validateGoalHierarchy(ctx, "", "comp-1", "anc-403", ""); err == nil {
+		t.Fatal("expected error on 403 ancestor")
+	}
+
+	// Test validateGoalHierarchy: depth exceeding 100 without reaching root
+	if err := rGoal.validateGoalHierarchy(ctx, "", "comp-1", "deep-1", ""); err == nil || !strings.Contains(err.Error(), "exceeded maximum depth (100)") {
+		t.Fatalf("expected max depth exceeded error, got %v", err)
+	}
+
+	// Test Create fails closed on unreadable ancestor and does not execute POST mutation
+	postBefore := postMutations
+	badParentPlanModel := PaperclipGoalResourceModel{
+		CompanyID: types.StringValue("comp-1"),
+		Title:     types.StringValue("Create Bad Ancestor Goal"),
+		ParentID:  types.StringValue("anc-with-missing"),
+	}
+	badParentPlan := tfsdk.Plan{Schema: goalSchema}
+	_ = badParentPlan.Set(ctx, &badParentPlanModel)
+	var createBadHier resource.CreateResponse
+	createBadHier.State = tfsdk.State{Schema: goalSchema}
+	rGoal.Create(ctx, resource.CreateRequest{Plan: badParentPlan}, &createBadHier)
+	if !createBadHier.Diagnostics.HasError() {
+		t.Fatal("expected error on Create with unreadable ancestor")
+	}
+	if postMutations != postBefore {
+		t.Fatalf("expected no POST mutation on Create hierarchy failure, got %d vs %d", postMutations, postBefore)
+	}
+
+	// Test Update fails closed on unreadable ancestor and does not execute PATCH mutation
+	patchBefore := patchMutations
+	var updateBadHier resource.UpdateResponse
+	updateBadHier.State = tfsdk.State{Schema: goalSchema}
+	rGoal.Update(ctx, resource.UpdateRequest{Plan: badParentPlan, State: updateBadHier.State}, &updateBadHier)
+	if !updateBadHier.Diagnostics.HasError() {
+		t.Fatal("expected error on Update with unreadable ancestor")
+	}
+	if patchMutations != patchBefore {
+		t.Fatalf("expected no PATCH mutation on Update hierarchy failure, got %d vs %d", patchMutations, patchBefore)
 	}
 
 	// Test validateGoalHierarchy: valid parent with empty goalID
@@ -1601,7 +1716,7 @@ func TestCompanyUpdateNullBoth(t *testing.T) {
 	stateModel := PaperclipCompanyResourceModel{
 		ID:                       types.StringValue("comp-1"),
 		Name:                     types.StringValue("Corp"),
-		DefaultResponsibleUserID: types.StringNull(),
+		DefaultResponsibleUserID: types.StringValue("user-1"),
 		LogoAssetID:              types.StringNull(),
 	}
 	planModel := PaperclipCompanyResourceModel{
