@@ -434,6 +434,14 @@ func TestAllResourcesBadPlanStateAndConfigure(t *testing.T) {
 		NewPaperclipAppPermissionResource(),
 		NewPaperclipSkillAssignmentResource(),
 		NewPaperclipSkillPolicyResource(),
+		NewPaperclipInvitationResource(),
+		NewPaperclipInviteResource(),
+		NewPaperclipMembershipResource(),
+		NewPaperclipPermissionGrantsResource(),
+		NewPaperclipMemberPermissionsResource(),
+		NewPaperclipInstanceAdminResource(),
+		NewPaperclipUserCompanyAccessResource(),
+		NewPaperclipUserInstanceAccessResource(),
 	}
 
 	for _, r := range resources {
@@ -465,6 +473,8 @@ func TestAllResourcesBadPlanStateAndConfigure(t *testing.T) {
 		NewPaperclipProjectDataSource(),
 		NewPaperclipAgentDataSource(),
 		NewPaperclipSkillDataSource(),
+		NewPaperclipUserDataSource(),
+		NewPaperclipUsersDataSource(),
 	}
 
 	for _, d := range dataSources {

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	ephemeralschema "github.com/hashicorp/terraform-plugin-framework/ephemeral/schema"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -1036,8 +1037,8 @@ func TestProviderStructure(t *testing.T) {
 	}
 
 	res := p.Resources(ctx)
-	if len(res) != 18 {
-		t.Fatalf("expected exactly 18 resources, got %d", len(res))
+	if len(res) != 26 {
+		t.Fatalf("expected exactly 26 resources, got %d", len(res))
 	}
 	for _, rFn := range res {
 		r := rFn()
@@ -1069,8 +1070,16 @@ func TestProviderStructure(t *testing.T) {
 	}
 
 	ds := p.DataSources(ctx)
-	if len(ds) != 4 {
-		t.Fatalf("expected exactly 4 data sources, got %d", len(ds))
+	if len(ds) != 6 {
+		t.Fatalf("expected exactly 6 data sources, got %d", len(ds))
+	}
+	for _, dsFn := range ds {
+		d := dsFn()
+		var dSchemaResp datasource.SchemaResponse
+		d.Schema(ctx, datasource.SchemaRequest{}, &dSchemaResp)
+		if dSchemaResp.Diagnostics.HasError() {
+			t.Fatalf("data source schema error: %v", dSchemaResp.Diagnostics)
+		}
 	}
 }
 

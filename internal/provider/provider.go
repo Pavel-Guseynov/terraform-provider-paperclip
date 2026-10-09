@@ -257,6 +257,14 @@ func (p *PaperclipProvider) Resources(ctx context.Context) []func() resource.Res
 		NewPaperclipSkillPolicyResource,
 		NewPaperclipGoalResource,
 		NewPaperclipBudgetPolicyResource,
+		NewPaperclipInvitationResource,
+		NewPaperclipInviteResource,
+		NewPaperclipMembershipResource,
+		NewPaperclipPermissionGrantsResource,
+		NewPaperclipMemberPermissionsResource,
+		NewPaperclipInstanceAdminResource,
+		NewPaperclipUserCompanyAccessResource,
+		NewPaperclipUserInstanceAccessResource,
 	}
 }
 
@@ -266,5 +274,7 @@ func (p *PaperclipProvider) DataSources(ctx context.Context) []func() datasource
 		NewPaperclipProjectDataSource,
 		NewPaperclipAgentDataSource,
 		NewPaperclipSkillDataSource,
+		NewPaperclipUserDataSource,
+		NewPaperclipUsersDataSource,
 	}
 }
