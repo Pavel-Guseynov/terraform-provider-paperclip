@@ -298,6 +298,63 @@ type PaperclipCompany struct {
 	LogoAssetID                      string                 `json:"logoAssetId,omitempty"`
 }
 
+type PaperclipGoal struct {
+	ID           string `json:"id,omitempty"`
+	CompanyID    string `json:"companyId,omitempty"`
+	Title        string `json:"title"`
+	Description  string `json:"description,omitempty"`
+	Level        string `json:"level,omitempty"`
+	Status       string `json:"status,omitempty"`
+	ParentID     string `json:"parentId,omitempty"`
+	OwnerAgentID string `json:"ownerAgentId,omitempty"`
+	CreatedAt    string `json:"createdAt,omitempty"`
+	UpdatedAt    string `json:"updatedAt,omitempty"`
+}
+
+type PaperclipBudgetPolicy struct {
+	ScopeType       string `json:"scopeType"`
+	ScopeID         string `json:"scopeId"`
+	Metric          string `json:"metric"`
+	WindowKind      string `json:"windowKind"`
+	Amount          int64  `json:"amount"`
+	WarnPercent     int64  `json:"warnPercent"`
+	HardStopEnabled bool   `json:"hardStopEnabled"`
+	NotifyEnabled   bool   `json:"notifyEnabled"`
+	IsActive        bool   `json:"isActive"`
+}
+
+type PaperclipBudgetPolicySummary struct {
+	PolicyID           string  `json:"policyId"`
+	CompanyID          string  `json:"companyId"`
+	ScopeType          string  `json:"scopeType"`
+	ScopeID            string  `json:"scopeId"`
+	ScopeName          string  `json:"scopeName,omitempty"`
+	Metric             string  `json:"metric"`
+	WindowKind         string  `json:"windowKind"`
+	Amount             int64   `json:"amount"`
+	ObservedAmount     int64   `json:"observedAmount"`
+	RemainingAmount    int64   `json:"remainingAmount"`
+	UtilizationPercent float64 `json:"utilizationPercent"`
+	WarnPercent        int64   `json:"warnPercent"`
+	HardStopEnabled    bool    `json:"hardStopEnabled"`
+	NotifyEnabled      bool    `json:"notifyEnabled"`
+	IsActive           bool    `json:"isActive"`
+	Status             string  `json:"status,omitempty"`
+	Paused             bool    `json:"paused,omitempty"`
+	PauseReason        string  `json:"pauseReason,omitempty"`
+	WindowStart        string  `json:"windowStart,omitempty"`
+	WindowEnd          string  `json:"windowEnd,omitempty"`
+}
+
+type PaperclipBudgetOverview struct {
+	CompanyID            string                         `json:"companyId"`
+	Policies             []PaperclipBudgetPolicySummary `json:"policies"`
+	ActiveIncidents      []interface{}                  `json:"activeIncidents,omitempty"`
+	PausedAgentCount     int                            `json:"pausedAgentCount,omitempty"`
+	PausedProjectCount   int                            `json:"pausedProjectCount,omitempty"`
+	PendingApprovalCount int                            `json:"pendingApprovalCount,omitempty"`
+}
+
 type PaperclipProject struct {
 	ID                       string                 `json:"id,omitempty"`
 	CompanyID                string                 `json:"companyId,omitempty"`
@@ -2068,3 +2125,150 @@ func (c *Client) ReconcileAskFirstPolicies(ctx context.Context, companyID, conne
 	}
 	return nil
 }
+
+func (c *Client) CreateGoal(ctx context.Context, companyID string, goal PaperclipGoal) (*PaperclipGoal, error) {
+	body := map[string]interface{}{
+		"title": goal.Title,
+	}
+	if goal.Description != "" {
+		body["description"] = goal.Description
+	}
+	if goal.Level != "" {
+		body["level"] = goal.Level
+	}
+	if goal.Status != "" {
+		body["status"] = goal.Status
+	}
+	if goal.ParentID != "" {
+		body["parentId"] = goal.ParentID
+	}
+	if goal.OwnerAgentID != "" {
+		body["ownerAgentId"] = goal.OwnerAgentID
+	}
+
+	var res PaperclipGoal
+	path := fmt.Sprintf("/api/companies/%s/goals", url.PathEscape(companyID))
+	if err := c.paperclipRequest(ctx, http.MethodPost, path, body, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) GetGoal(ctx context.Context, goalID string) (*PaperclipGoal, error) {
+	var res PaperclipGoal
+	path := fmt.Sprintf("/api/goals/%s", url.PathEscape(goalID))
+	if err := c.paperclipRequest(ctx, http.MethodGet, path, nil, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) UpdateGoal(ctx context.Context, goalID string, patch map[string]interface{}) (*PaperclipGoal, error) {
+	var res PaperclipGoal
+	path := fmt.Sprintf("/api/goals/%s", url.PathEscape(goalID))
+	if err := c.paperclipRequest(ctx, http.MethodPatch, path, patch, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) DeleteGoal(ctx context.Context, goalID string) error {
+	path := fmt.Sprintf("/api/goals/%s", url.PathEscape(goalID))
+	return c.paperclipRequest(ctx, http.MethodDelete, path, nil, nil)
+}
+
+func (c *Client) ListGoals(ctx context.Context, companyID string) ([]PaperclipGoal, error) {
+	var res []PaperclipGoal
+	path := fmt.Sprintf("/api/companies/%s/goals", url.PathEscape(companyID))
+	if err := c.paperclipRequest(ctx, http.MethodGet, path, nil, &res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (c *Client) UpsertBudgetPolicy(ctx context.Context, companyID string, policy PaperclipBudgetPolicy) (*PaperclipBudgetPolicySummary, error) {
+	metric := policy.Metric
+	if metric == "" {
+		metric = "billed_cents"
+	}
+	windowKind := policy.WindowKind
+	if windowKind == "" {
+		windowKind = "calendar_month_utc"
+	}
+	body := map[string]interface{}{
+		"scopeType":       policy.ScopeType,
+		"scopeId":         policy.ScopeID,
+		"metric":          metric,
+		"windowKind":      windowKind,
+		"amount":          policy.Amount,
+		"warnPercent":     policy.WarnPercent,
+		"hardStopEnabled": policy.HardStopEnabled,
+		"notifyEnabled":   policy.NotifyEnabled,
+		"isActive":        policy.IsActive,
+	}
+
+	var res PaperclipBudgetPolicySummary
+	path := fmt.Sprintf("/api/companies/%s/budgets/policies", url.PathEscape(companyID))
+	if err := c.paperclipRequest(ctx, http.MethodPost, path, body, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) GetBudgetOverview(ctx context.Context, companyID string) (*PaperclipBudgetOverview, error) {
+	var res PaperclipBudgetOverview
+	path := fmt.Sprintf("/api/companies/%s/budgets/overview", url.PathEscape(companyID))
+	if err := c.paperclipRequest(ctx, http.MethodGet, path, nil, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) ListBudgetPolicies(ctx context.Context, companyID string) ([]PaperclipBudgetPolicySummary, error) {
+	overview, err := c.GetBudgetOverview(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	return overview.Policies, nil
+}
+
+func (c *Client) GetBudgetPolicy(ctx context.Context, companyID, policyID string) (*PaperclipBudgetPolicySummary, error) {
+	policies, err := c.ListBudgetPolicies(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	for _, pol := range policies {
+		if pol.PolicyID == policyID {
+			return &pol, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (c *Client) FindBudgetPolicy(ctx context.Context, companyID, scopeType, scopeID, windowKind string) (*PaperclipBudgetPolicySummary, error) {
+	policies, err := c.ListBudgetPolicies(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	for _, pol := range policies {
+		if pol.ScopeType == scopeType && pol.ScopeID == scopeID && pol.WindowKind == windowKind {
+			return &pol, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (c *Client) FindBudgetPolicyByID(ctx context.Context, policyID string) (*PaperclipBudgetPolicySummary, error) {
+	companies, err := c.ListCompanies(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, comp := range companies {
+		pol, err := c.GetBudgetPolicy(ctx, comp.ID, policyID)
+		if err == nil && pol != nil {
+			return pol, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+

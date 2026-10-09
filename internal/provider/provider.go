@@ -253,6 +253,8 @@ func (p *PaperclipProvider) Resources(ctx context.Context) []func() resource.Res
 		NewPaperclipStdioTemplateResource,
 		NewPaperclipConnectionInstallResource,
 		NewPaperclipAppPermissionResource,
+		NewPaperclipGoalResource,
+		NewPaperclipBudgetPolicyResource,
 	}
 }
 
