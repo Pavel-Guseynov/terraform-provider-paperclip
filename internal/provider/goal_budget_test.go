@@ -11,11 +11,35 @@ import (
 	"testing"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
+
+func assertDiagContains(t *testing.T, diags diag.Diagnostics, summary, detailSubstring string) {
+	t.Helper()
+	if !diags.HasError() {
+		t.Fatalf("expected error diagnostics, got none")
+	}
+	foundSummary := false
+	foundDetail := false
+	for _, d := range diags.Errors() {
+		if strings.Contains(d.Summary(), summary) {
+			foundSummary = true
+		}
+		if strings.Contains(d.Detail(), detailSubstring) {
+			foundDetail = true
+		}
+	}
+	if !foundSummary {
+		t.Fatalf("expected diagnostic summary containing %q, got: %v", summary, diags)
+	}
+	if !foundDetail {
+		t.Fatalf("expected diagnostic detail containing %q, got: %v", detailSubstring, diags)
+	}
+}
 
 func TestGoalResourceFull(t *testing.T) {
 	ctx := context.Background()
@@ -893,6 +917,7 @@ func TestBudgetPolicyResourceFull(t *testing.T) {
 	if !modRespWarnLow.Diagnostics.HasError() {
 		t.Fatal("expected error on warn percent < 1")
 	}
+	assertDiagContains(t, modRespWarnLow.Diagnostics, "Invalid Warn Percent", "warn_percent must be between 1 and 99")
 
 	planModelWarnHigh := PaperclipBudgetPolicyResourceModel{
 		CompanyID:   types.StringValue("comp-1"),
@@ -908,6 +933,97 @@ func TestBudgetPolicyResourceFull(t *testing.T) {
 	r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: planWarnHigh}, &modRespWarnHigh)
 	if !modRespWarnHigh.Diagnostics.HasError() {
 		t.Fatal("expected error on warn percent > 99")
+	}
+	assertDiagContains(t, modRespWarnHigh.Diagnostics, "Invalid Warn Percent", "warn_percent must be between 1 and 99")
+
+	// Valid boundary warn percent (1 and 99)
+	planModelWarnMin := PaperclipBudgetPolicyResourceModel{
+		CompanyID:   types.StringValue("comp-1"),
+		ScopeType:   types.StringValue("agent"),
+		ScopeID:     types.StringValue("agent-1"),
+		WindowKind:  types.StringValue("lifetime"),
+		Amount:      types.Int64Value(100),
+		WarnPercent: types.Int64Value(1),
+	}
+	planWarnMin := tfsdk.Plan{Schema: schema}
+	_ = planWarnMin.Set(ctx, &planModelWarnMin)
+	var modRespWarnMin resource.ModifyPlanResponse
+	modRespWarnMin.Plan = planWarnMin
+	r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: planWarnMin}, &modRespWarnMin)
+	if modRespWarnMin.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on warn_percent = 1: %v", modRespWarnMin.Diagnostics)
+	}
+
+	planModelWarnMax := PaperclipBudgetPolicyResourceModel{
+		CompanyID:   types.StringValue("comp-1"),
+		ScopeType:   types.StringValue("agent"),
+		ScopeID:     types.StringValue("agent-1"),
+		WindowKind:  types.StringValue("lifetime"),
+		Amount:      types.Int64Value(100),
+		WarnPercent: types.Int64Value(99),
+	}
+	planWarnMax := tfsdk.Plan{Schema: schema}
+	_ = planWarnMax.Set(ctx, &planModelWarnMax)
+	var modRespWarnMax resource.ModifyPlanResponse
+	modRespWarnMax.Plan = planWarnMax
+	r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: planWarnMax}, &modRespWarnMax)
+	if modRespWarnMax.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on warn_percent = 99: %v", modRespWarnMax.Diagnostics)
+	}
+
+	// Documented defaults (window_kind = "calendar_month_utc", warn_percent = 80) and alias (window = "lifetime")
+	planModelDefaults := PaperclipBudgetPolicyResourceModel{
+		CompanyID:   types.StringValue("comp-1"),
+		ScopeType:   types.StringValue("agent"),
+		ScopeID:     types.StringValue("agent-1"),
+		Amount:      types.Int64Value(100),
+		WarnPercent: types.Int64Null(),
+		WindowKind:  types.StringNull(),
+		Window:      types.StringNull(),
+	}
+	planDefaults := tfsdk.Plan{Schema: schema}
+	_ = planDefaults.Set(ctx, &planModelDefaults)
+	var modRespDefaults resource.ModifyPlanResponse
+	modRespDefaults.Plan = planDefaults
+	r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: planDefaults}, &modRespDefaults)
+	if modRespDefaults.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on defaults: %v", modRespDefaults.Diagnostics)
+	}
+	var resDefaults PaperclipBudgetPolicyResourceModel
+	_ = modRespDefaults.Plan.Get(ctx, &resDefaults)
+	if resDefaults.WarnPercent.ValueInt64() != 80 {
+		t.Fatalf("expected default warn_percent 80, got %d", resDefaults.WarnPercent.ValueInt64())
+	}
+	if resDefaults.WindowKind.ValueString() != "calendar_month_utc" {
+		t.Fatalf("expected default window_kind 'calendar_month_utc', got %s", resDefaults.WindowKind.ValueString())
+	}
+	if resDefaults.Window.ValueString() != "calendar_month_utc" {
+		t.Fatalf("expected default window 'calendar_month_utc', got %s", resDefaults.Window.ValueString())
+	}
+
+	planModelWindowAlias := PaperclipBudgetPolicyResourceModel{
+		CompanyID:   types.StringValue("comp-1"),
+		ScopeType:   types.StringValue("agent"),
+		ScopeID:     types.StringValue("agent-1"),
+		Amount:      types.Int64Value(100),
+		Window:      types.StringValue("lifetime"),
+		WindowKind:  types.StringNull(),
+	}
+	planWindowAlias := tfsdk.Plan{Schema: schema}
+	_ = planWindowAlias.Set(ctx, &planModelWindowAlias)
+	var modRespWindowAlias resource.ModifyPlanResponse
+	modRespWindowAlias.Plan = planWindowAlias
+	r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: planWindowAlias}, &modRespWindowAlias)
+	if modRespWindowAlias.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on window alias: %v", modRespWindowAlias.Diagnostics)
+	}
+	var resWindowAlias PaperclipBudgetPolicyResourceModel
+	_ = modRespWindowAlias.Plan.Get(ctx, &resWindowAlias)
+	if resWindowAlias.WindowKind.ValueString() != "lifetime" {
+		t.Fatalf("expected window_kind 'lifetime' from window alias, got %s", resWindowAlias.WindowKind.ValueString())
+	}
+	if resWindowAlias.Window.ValueString() != "lifetime" {
+		t.Fatalf("expected window 'lifetime', got %s", resWindowAlias.Window.ValueString())
 	}
 
 	// Duplicate identity in ModifyPlan
@@ -1303,6 +1419,21 @@ func TestGoalBudgetRemainingCoverageBranches(t *testing.T) {
 			CompanyID: "comp-1",
 			ParentID:  "anc-nonexistent",
 		},
+		"parent-with-anc-500": {
+			ID:        "parent-with-anc-500",
+			CompanyID: "comp-1",
+			ParentID:  "anc-500",
+		},
+		"parent-with-anc-403": {
+			ID:        "parent-with-anc-403",
+			CompanyID: "comp-1",
+			ParentID:  "anc-403",
+		},
+		"parent-with-anc-deep": {
+			ID:        "parent-with-anc-deep",
+			CompanyID: "comp-1",
+			ParentID:  "deep-1",
+		},
 		"parent-valid": {
 			ID:        "parent-valid",
 			CompanyID: "comp-1",
@@ -1352,9 +1483,14 @@ func TestGoalBudgetRemainingCoverageBranches(t *testing.T) {
 	}
 
 	var postMutations, patchMutations int
+	ancestorRequests := make(map[string]int)
 
 	goalServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/goals/") {
+			target := strings.TrimPrefix(r.URL.Path, "/api/goals/")
+			ancestorRequests[target]++
+		}
 		switch {
 		case r.Method == http.MethodPost:
 			postMutations++
@@ -1371,26 +1507,13 @@ func TestGoalBudgetRemainingCoverageBranches(t *testing.T) {
 				CompanyID: "comp-1",
 				ParentID:  fmt.Sprintf("deep-%d", id+1),
 			})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/anc-1":
-			_ = json.NewEncoder(w).Encode(goalsDB["anc-1"])
-		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/anc-2":
-			_ = json.NewEncoder(w).Encode(goalsDB["anc-2"])
-		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/anc-with-missing":
-			_ = json.NewEncoder(w).Encode(goalsDB["anc-with-missing"])
-		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/parent-valid":
-			_ = json.NewEncoder(w).Encode(goalsDB["parent-valid"])
-		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/parent-chain":
-			_ = json.NewEncoder(w).Encode(goalsDB["parent-chain"])
-		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/parent-diff-comp-ancestor":
-			_ = json.NewEncoder(w).Encode(goalsDB["parent-diff-comp-ancestor"])
-		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/anc-diff-comp":
-			_ = json.NewEncoder(w).Encode(goalsDB["anc-diff-comp"])
-		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/anc-mid":
-			_ = json.NewEncoder(w).Encode(goalsDB["anc-mid"])
-		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/anc-root":
-			_ = json.NewEncoder(w).Encode(goalsDB["anc-root"])
-		case r.Method == http.MethodGet && r.URL.Path == "/api/goals/goal-target":
-			_ = json.NewEncoder(w).Encode(goalsDB["goal-target"])
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/goals/"):
+			target := strings.TrimPrefix(r.URL.Path, "/api/goals/")
+			if g, ok := goalsDB[target]; ok {
+				_ = json.NewEncoder(w).Encode(g)
+				return
+			}
+			http.NotFound(w, r)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/agents/agent-valid":
 			_ = json.NewEncoder(w).Encode(agentsDB["agent-valid"])
 		case r.Method == http.MethodGet && r.URL.Path == "/api/agents/agent-other":
@@ -1472,7 +1595,42 @@ func TestGoalBudgetRemainingCoverageBranches(t *testing.T) {
 	}
 
 	// Test Create fails closed on unreadable ancestor and does not execute POST mutation
+	// a. Ancestor 500 error
 	postBefore := postMutations
+	createModel500 := PaperclipGoalResourceModel{
+		CompanyID: types.StringValue("comp-1"),
+		Title:     types.StringValue("Create Goal with 500 Ancestor"),
+		ParentID:  types.StringValue("parent-with-anc-500"),
+	}
+	createPlan500 := tfsdk.Plan{Schema: goalSchema}
+	_ = createPlan500.Set(ctx, &createModel500)
+	var createResp500 resource.CreateResponse
+	createResp500.State = tfsdk.State{Schema: goalSchema}
+	rGoal.Create(ctx, resource.CreateRequest{Plan: createPlan500}, &createResp500)
+	assertDiagContains(t, createResp500.Diagnostics, "Invalid Goal Hierarchy", "failed to validate ancestor goal anc-500")
+	if postMutations != postBefore {
+		t.Fatalf("expected no POST mutation on Create hierarchy failure (500 ancestor), got %d vs %d", postMutations, postBefore)
+	}
+
+	// b. Ancestor 403 error
+	postBefore = postMutations
+	createModel403 := PaperclipGoalResourceModel{
+		CompanyID: types.StringValue("comp-1"),
+		Title:     types.StringValue("Create Goal with 403 Ancestor"),
+		ParentID:  types.StringValue("parent-with-anc-403"),
+	}
+	createPlan403 := tfsdk.Plan{Schema: goalSchema}
+	_ = createPlan403.Set(ctx, &createModel403)
+	var createResp403 resource.CreateResponse
+	createResp403.State = tfsdk.State{Schema: goalSchema}
+	rGoal.Create(ctx, resource.CreateRequest{Plan: createPlan403}, &createResp403)
+	assertDiagContains(t, createResp403.Diagnostics, "Invalid Goal Hierarchy", "failed to validate ancestor goal anc-403")
+	if postMutations != postBefore {
+		t.Fatalf("expected no POST mutation on Create hierarchy failure (403 ancestor), got %d vs %d", postMutations, postBefore)
+	}
+
+	// c. Ancestor 404 error (anc-with-missing)
+	postBefore = postMutations
 	badParentPlanModel := PaperclipGoalResourceModel{
 		CompanyID: types.StringValue("comp-1"),
 		Title:     types.StringValue("Create Bad Ancestor Goal"),
@@ -1483,23 +1641,136 @@ func TestGoalBudgetRemainingCoverageBranches(t *testing.T) {
 	var createBadHier resource.CreateResponse
 	createBadHier.State = tfsdk.State{Schema: goalSchema}
 	rGoal.Create(ctx, resource.CreateRequest{Plan: badParentPlan}, &createBadHier)
-	if !createBadHier.Diagnostics.HasError() {
-		t.Fatal("expected error on Create with unreadable ancestor")
-	}
+	assertDiagContains(t, createBadHier.Diagnostics, "Invalid Goal Hierarchy", "failed to validate ancestor goal anc-nonexistent")
 	if postMutations != postBefore {
 		t.Fatalf("expected no POST mutation on Create hierarchy failure, got %d vs %d", postMutations, postBefore)
 	}
 
+	// Initialize valid existing state for Update tests
+	existingStateModel := PaperclipGoalResourceModel{
+		ID:              types.StringValue("goal-target"),
+		CompanyID:       types.StringValue("comp-1"),
+		Title:           types.StringValue("Target"),
+		Description:     types.StringNull(),
+		Level:           types.StringNull(),
+		Status:          types.StringNull(),
+		ParentID:        types.StringNull(),
+		OwnerAgentID:    types.StringNull(),
+		CancelOnDestroy: types.BoolValue(false),
+		Retirement:      types.StringValue("fail"),
+	}
+	stateUpd := tfsdk.State{Schema: goalSchema}
+	if diags := stateUpd.Set(ctx, &existingStateModel); diags.HasError() {
+		t.Fatalf("failed to initialize existing goal state: %v", diags)
+	}
+
 	// Test Update fails closed on unreadable ancestor and does not execute PATCH mutation
+	// a. Ancestor 500 error: parent succeeds, ancestor returns 500
 	patchBefore := patchMutations
-	var updateBadHier resource.UpdateResponse
-	updateBadHier.State = tfsdk.State{Schema: goalSchema}
-	rGoal.Update(ctx, resource.UpdateRequest{Plan: badParentPlan, State: updateBadHier.State}, &updateBadHier)
-	if !updateBadHier.Diagnostics.HasError() {
-		t.Fatal("expected error on Update with unreadable ancestor")
+	anc500ReqBefore := ancestorRequests["anc-500"]
+	updateModel500 := PaperclipGoalResourceModel{
+		ID:              types.StringValue("goal-target"),
+		CompanyID:       types.StringValue("comp-1"),
+		Title:           types.StringValue("Updated Target Title"),
+		Description:     types.StringNull(),
+		Level:           types.StringNull(),
+		Status:          types.StringNull(),
+		ParentID:        types.StringValue("parent-with-anc-500"),
+		OwnerAgentID:    types.StringNull(),
+		CancelOnDestroy: types.BoolValue(false),
+		Retirement:      types.StringValue("fail"),
+	}
+	updatePlan500 := tfsdk.Plan{Schema: goalSchema}
+	_ = updatePlan500.Set(ctx, &updateModel500)
+	var updateResp500 resource.UpdateResponse
+	updateResp500.State = stateUpd
+	rGoal.Update(ctx, resource.UpdateRequest{Plan: updatePlan500, State: stateUpd}, &updateResp500)
+	assertDiagContains(t, updateResp500.Diagnostics, "Invalid Goal Hierarchy", "failed to validate ancestor goal anc-500")
+	if ancestorRequests["anc-500"] <= anc500ReqBefore {
+		t.Fatalf("expected ancestor HTTP request for anc-500 to be observed, got count %d", ancestorRequests["anc-500"])
 	}
 	if patchMutations != patchBefore {
-		t.Fatalf("expected no PATCH mutation on Update hierarchy failure, got %d vs %d", patchMutations, patchBefore)
+		t.Fatalf("expected no PATCH mutation on Update hierarchy failure (500 ancestor), got %d vs %d", patchMutations, patchBefore)
+	}
+
+	// b. Ancestor 403 error: parent succeeds, ancestor returns 403
+	patchBefore = patchMutations
+	anc403ReqBefore := ancestorRequests["anc-403"]
+	updateModel403 := PaperclipGoalResourceModel{
+		ID:              types.StringValue("goal-target"),
+		CompanyID:       types.StringValue("comp-1"),
+		Title:           types.StringValue("Updated Target Title"),
+		Description:     types.StringNull(),
+		Level:           types.StringNull(),
+		Status:          types.StringNull(),
+		ParentID:        types.StringValue("parent-with-anc-403"),
+		OwnerAgentID:    types.StringNull(),
+		CancelOnDestroy: types.BoolValue(false),
+		Retirement:      types.StringValue("fail"),
+	}
+	updatePlan403 := tfsdk.Plan{Schema: goalSchema}
+	_ = updatePlan403.Set(ctx, &updateModel403)
+	var updateResp403 resource.UpdateResponse
+	updateResp403.State = stateUpd
+	rGoal.Update(ctx, resource.UpdateRequest{Plan: updatePlan403, State: stateUpd}, &updateResp403)
+	assertDiagContains(t, updateResp403.Diagnostics, "Invalid Goal Hierarchy", "failed to validate ancestor goal anc-403")
+	if ancestorRequests["anc-403"] <= anc403ReqBefore {
+		t.Fatalf("expected ancestor HTTP request for anc-403 to be observed, got count %d", ancestorRequests["anc-403"])
+	}
+	if patchMutations != patchBefore {
+		t.Fatalf("expected no PATCH mutation on Update hierarchy failure (403 ancestor), got %d vs %d", patchMutations, patchBefore)
+	}
+
+	// c. Ancestor 404 error: parent succeeds, ancestor returns 404
+	patchBefore = patchMutations
+	ancMissingReqBefore := ancestorRequests["anc-nonexistent"]
+	updateModel404 := PaperclipGoalResourceModel{
+		ID:              types.StringValue("goal-target"),
+		CompanyID:       types.StringValue("comp-1"),
+		Title:           types.StringValue("Updated Target Title"),
+		Description:     types.StringNull(),
+		Level:           types.StringNull(),
+		Status:          types.StringNull(),
+		ParentID:        types.StringValue("anc-with-missing"),
+		OwnerAgentID:    types.StringNull(),
+		CancelOnDestroy: types.BoolValue(false),
+		Retirement:      types.StringValue("fail"),
+	}
+	updatePlan404 := tfsdk.Plan{Schema: goalSchema}
+	_ = updatePlan404.Set(ctx, &updateModel404)
+	var updateResp404 resource.UpdateResponse
+	updateResp404.State = stateUpd
+	rGoal.Update(ctx, resource.UpdateRequest{Plan: updatePlan404, State: stateUpd}, &updateResp404)
+	assertDiagContains(t, updateResp404.Diagnostics, "Invalid Goal Hierarchy", "failed to validate ancestor goal anc-nonexistent")
+	if ancestorRequests["anc-nonexistent"] <= ancMissingReqBefore {
+		t.Fatalf("expected ancestor HTTP request for anc-nonexistent to be observed, got count %d", ancestorRequests["anc-nonexistent"])
+	}
+	if patchMutations != patchBefore {
+		t.Fatalf("expected no PATCH mutation on Update hierarchy failure (404 ancestor), got %d vs %d", patchMutations, patchBefore)
+	}
+
+	// d. Ancestor max depth exceeded: chain exceeds depth 100
+	patchBefore = patchMutations
+	updateModelDeep := PaperclipGoalResourceModel{
+		ID:              types.StringValue("goal-target"),
+		CompanyID:       types.StringValue("comp-1"),
+		Title:           types.StringValue("Updated Target Title"),
+		Description:     types.StringNull(),
+		Level:           types.StringNull(),
+		Status:          types.StringNull(),
+		ParentID:        types.StringValue("parent-with-anc-deep"),
+		OwnerAgentID:    types.StringNull(),
+		CancelOnDestroy: types.BoolValue(false),
+		Retirement:      types.StringValue("fail"),
+	}
+	updatePlanDeep := tfsdk.Plan{Schema: goalSchema}
+	_ = updatePlanDeep.Set(ctx, &updateModelDeep)
+	var updateRespDeep resource.UpdateResponse
+	updateRespDeep.State = stateUpd
+	rGoal.Update(ctx, resource.UpdateRequest{Plan: updatePlanDeep, State: stateUpd}, &updateRespDeep)
+	assertDiagContains(t, updateRespDeep.Diagnostics, "Invalid Goal Hierarchy", "exceeded maximum depth (100)")
+	if patchMutations != patchBefore {
+		t.Fatalf("expected no PATCH mutation on Update hierarchy failure (max depth exceeded), got %d vs %d", patchMutations, patchBefore)
 	}
 
 	// Test validateGoalHierarchy: valid parent with empty goalID
@@ -1580,7 +1851,7 @@ func TestGoalBudgetRemainingCoverageBranches(t *testing.T) {
 	}
 	planUpd := tfsdk.Plan{Schema: goalSchema}
 	_ = planUpd.Set(ctx, &updatePlanModelWithParentAndAgent)
-	stateUpd := tfsdk.State{Schema: goalSchema}
+	stateUpd = tfsdk.State{Schema: goalSchema}
 	_ = stateUpd.Set(ctx, &PaperclipGoalResourceModel{
 		ID:        types.StringValue("goal-target"),
 		CompanyID: types.StringValue("comp-1"),
