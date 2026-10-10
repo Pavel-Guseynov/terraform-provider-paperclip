@@ -207,8 +207,12 @@ func (r *PaperclipUserInstanceAccessResource) Delete(ctx context.Context, req re
 	}
 
 	uid := state.UserID.ValueString()
-	_ = r.client.DemoteInstanceAdmin(ctx, uid)
-	_, _ = r.client.SetUserCompanyAccess(ctx, uid, []string{})
+	if err := r.client.DemoteInstanceAdmin(ctx, uid); err != nil && !errors.Is(err, client.ErrNotFound) {
+		resp.Diagnostics.AddError("Error demoting instance admin on destroy", err.Error())
+	}
+	if _, err := r.client.SetUserCompanyAccess(ctx, uid, []string{}); err != nil && !errors.Is(err, client.ErrNotFound) {
+		resp.Diagnostics.AddError("Error clearing user company access on destroy", err.Error())
+	}
 }
 
 func (r *PaperclipUserInstanceAccessResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

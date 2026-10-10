@@ -728,6 +728,7 @@ func TestHumanAccessProviderResourcesAndDataSources(t *testing.T) {
 		rInstAccess.Schema(ctx, resource.SchemaRequest{}, &schemaInst)
 
 		isAdm := false
+		currentAccess := []string{"comp-1"}
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			switch {
@@ -740,29 +741,33 @@ func TestHumanAccessProviderResourcesAndDataSources(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 			case req.Method == http.MethodGet && req.URL.Path == "/api/admin/users/user-1/company-access":
-				_ = json.NewEncoder(w).Encode(map[string]interface{}{
-					"user": map[string]interface{}{
-						"id":              "user-1",
-						"isInstanceAdmin": isAdm,
-					},
-					"companyAccess": []map[string]interface{}{
-						{"companyId": "comp-1"},
-					},
-				})
-			case req.Method == http.MethodPut && req.URL.Path == "/api/admin/users/user-1/company-access":
-				var body map[string]interface{}
-				_ = json.NewDecoder(req.Body).Decode(&body)
-				cids, _ := body["companyIds"].([]interface{})
-				accessList := []map[string]interface{}{}
-				for _, cid := range cids {
-					accessList = append(accessList, map[string]interface{}{"companyId": cid})
+				cAccess := make([]map[string]interface{}, 0, len(currentAccess))
+				for _, cid := range currentAccess {
+					cAccess = append(cAccess, map[string]interface{}{"companyId": cid})
 				}
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
 					"user": map[string]interface{}{
 						"id":              "user-1",
 						"isInstanceAdmin": isAdm,
 					},
-					"companyAccess": accessList,
+					"companyAccess": cAccess,
+				})
+			case req.Method == http.MethodPut && req.URL.Path == "/api/admin/users/user-1/company-access":
+				var body map[string]interface{}
+				_ = json.NewDecoder(req.Body).Decode(&body)
+				cids, _ := body["companyIds"].([]interface{})
+				currentAccess = nil
+				cAccess := make([]map[string]interface{}, 0, len(cids))
+				for _, cid := range cids {
+					currentAccess = append(currentAccess, cid.(string))
+					cAccess = append(cAccess, map[string]interface{}{"companyId": cid})
+				}
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"user": map[string]interface{}{
+						"id":              "user-1",
+						"isInstanceAdmin": isAdm,
+					},
+					"companyAccess": cAccess,
 				})
 			default:
 				http.NotFound(w, req)
@@ -908,6 +913,15 @@ func TestHumanAccessProviderResourcesAndDataSources(t *testing.T) {
 
 		var delInstResp resource.DeleteResponse
 		rInstAccess.Delete(ctx, resource.DeleteRequest{State: stateInst}, &delInstResp)
+		if delInstResp.Diagnostics.HasError() {
+			t.Fatalf("unexpected error deleting inst access: %v", delInstResp.Diagnostics)
+		}
+		if isAdm {
+			t.Fatal("expected isAdm to be false after successful Delete of user instance access")
+		}
+		if len(currentAccess) != 0 {
+			t.Fatalf("expected currentAccess to be empty after Delete, got %v", currentAccess)
+		}
 
 		var impInstResp resource.ImportStateResponse
 		impInstResp.State = tfsdk.State{Schema: schemaInst.Schema}
@@ -1972,6 +1986,225 @@ func TestHumanAccessBranchCoverage(t *testing.T) {
 		dUsers.Read(ctx, datasource.ReadRequest{Config: tfsdk.Config{Schema: sUsersResp.Schema, Raw: planUsersAdminOk.Raw}}, &rUsersAdminOk)
 		if rUsersAdminOk.Diagnostics.HasError() {
 			t.Fatalf("unexpected error: %v", rUsersAdminOk.Diagnostics)
+		}
+	})
+}
+
+func TestUserInstanceAccessDeleteRetirementContract(t *testing.T) {
+	ctx := context.Background()
+	r := NewPaperclipUserInstanceAccessResource().(*PaperclipUserInstanceAccessResource)
+	var sResp resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sResp)
+
+	t.Run("Failed Demote Returns Diagnostic And Retains State", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if strings.Contains(req.URL.Path, "demote-instance-admin") {
+				http.Error(w, `{"error":"internal failure demoting instance admin"}`, http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"user": map[string]interface{}{"id": "user-1", "isInstanceAdmin": true}, "companyAccess": []map[string]interface{}{}})
+		}))
+		defer server.Close()
+
+		cli, _ := client.NewClient(server.URL, "token")
+		r.client = cli
+
+		state := tfsdk.State{Schema: sResp.Schema}
+		_ = state.Set(ctx, &PaperclipUserInstanceAccessResourceModel{
+			ID:              types.StringValue("user-1"),
+			UserID:          types.StringValue("user-1"),
+			IsInstanceAdmin: types.BoolValue(true),
+			CompanyIDs:      types.ListNull(types.StringType),
+		})
+
+		var delResp resource.DeleteResponse
+		delResp.State = state
+		r.Delete(ctx, resource.DeleteRequest{State: state}, &delResp)
+		if !delResp.Diagnostics.HasError() {
+			t.Fatal("expected error diagnostic when demoting instance admin fails")
+		}
+		var found bool
+		for _, d := range delResp.Diagnostics.Errors() {
+			if strings.Contains(d.Summary(), "Error demoting instance admin on destroy") && strings.Contains(d.Detail(), "internal failure demoting instance admin") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected demote error diagnostic with safe API context, got: %v", delResp.Diagnostics)
+		}
+		var retainedState PaperclipUserInstanceAccessResourceModel
+		if err := delResp.State.Get(ctx, &retainedState); err != nil || retainedState.UserID.ValueString() != "user-1" {
+			t.Fatalf("expected state to be retained after failed destroy, got: %+v", retainedState)
+		}
+	})
+
+	t.Run("Failed Company Access Clear Returns Diagnostic And Retains State", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if strings.Contains(req.URL.Path, "demote-instance-admin") {
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+				return
+			}
+			if req.Method == http.MethodPut && strings.Contains(req.URL.Path, "company-access") {
+				http.Error(w, `{"error":"internal failure clearing company access"}`, http.StatusInternalServerError)
+				return
+			}
+			http.NotFound(w, req)
+		}))
+		defer server.Close()
+
+		cli, _ := client.NewClient(server.URL, "token")
+		r.client = cli
+
+		state := tfsdk.State{Schema: sResp.Schema}
+		_ = state.Set(ctx, &PaperclipUserInstanceAccessResourceModel{
+			ID:              types.StringValue("user-1"),
+			UserID:          types.StringValue("user-1"),
+			IsInstanceAdmin: types.BoolValue(true),
+			CompanyIDs:      stringSliceToTypesList(ctx, []string{"comp-1"}),
+		})
+
+		var delResp resource.DeleteResponse
+		delResp.State = state
+		r.Delete(ctx, resource.DeleteRequest{State: state}, &delResp)
+		if !delResp.Diagnostics.HasError() {
+			t.Fatal("expected error diagnostic when clearing user company access fails")
+		}
+		var found bool
+		for _, d := range delResp.Diagnostics.Errors() {
+			if strings.Contains(d.Summary(), "Error clearing user company access on destroy") && strings.Contains(d.Detail(), "internal failure clearing company access") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected clear company access error diagnostic with safe API context, got: %v", delResp.Diagnostics)
+		}
+		var retainedState PaperclipUserInstanceAccessResourceModel
+		if err := delResp.State.Get(ctx, &retainedState); err != nil || retainedState.UserID.ValueString() != "user-1" {
+			t.Fatalf("expected state to be retained after failed destroy, got: %+v", retainedState)
+		}
+	})
+
+	t.Run("Hidden Instance Access Rejection On Destroy", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			http.Error(w, `{"error":"instance user administration is managed by the hosting operator on this instance (instance.access hidden)"}`, http.StatusForbidden)
+		}))
+		defer server.Close()
+
+		cli, _ := client.NewClient(server.URL, "token")
+		r.client = cli
+
+		state := tfsdk.State{Schema: sResp.Schema}
+		_ = state.Set(ctx, &PaperclipUserInstanceAccessResourceModel{
+			ID:              types.StringValue("user-1"),
+			UserID:          types.StringValue("user-1"),
+			IsInstanceAdmin: types.BoolValue(true),
+			CompanyIDs:      stringSliceToTypesList(ctx, []string{"comp-1"}),
+		})
+
+		var delResp resource.DeleteResponse
+		delResp.State = state
+		r.Delete(ctx, resource.DeleteRequest{State: state}, &delResp)
+		if !delResp.Diagnostics.HasError() {
+			t.Fatal("expected error diagnostic when instance.access is hidden on destroy")
+		}
+		var demoteHiddenFound, clearHiddenFound bool
+		for _, d := range delResp.Diagnostics.Errors() {
+			if strings.Contains(d.Summary(), "Error demoting instance admin on destroy") && strings.Contains(d.Detail(), "instance user administration is managed by the hosting operator") {
+				demoteHiddenFound = true
+			}
+			if strings.Contains(d.Summary(), "Error clearing user company access on destroy") && strings.Contains(d.Detail(), "instance user administration is managed by the hosting operator") {
+				clearHiddenFound = true
+			}
+		}
+		if !demoteHiddenFound || !clearHiddenFound {
+			t.Fatalf("expected hidden instance.access error diagnostics for both demote and clear, got: %v", delResp.Diagnostics)
+		}
+		var retainedState PaperclipUserInstanceAccessResourceModel
+		if err := delResp.State.Get(ctx, &retainedState); err != nil || retainedState.UserID.ValueString() != "user-1" {
+			t.Fatalf("expected state to be retained after failed destroy, got: %+v", retainedState)
+		}
+	})
+
+	t.Run("Explicit Not Found Semantics On Destroy", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			http.NotFound(w, req)
+		}))
+		defer server.Close()
+
+		cli, _ := client.NewClient(server.URL, "token")
+		r.client = cli
+
+		state := tfsdk.State{Schema: sResp.Schema}
+		_ = state.Set(ctx, &PaperclipUserInstanceAccessResourceModel{
+			ID:              types.StringValue("user-not-found"),
+			UserID:          types.StringValue("user-not-found"),
+			IsInstanceAdmin: types.BoolValue(true),
+			CompanyIDs:      stringSliceToTypesList(ctx, []string{"comp-1"}),
+		})
+
+		var delResp resource.DeleteResponse
+		r.Delete(ctx, resource.DeleteRequest{State: state}, &delResp)
+		if delResp.Diagnostics.HasError() {
+			t.Fatalf("expected clean retirement without error on 404 not found, got: %v", delResp.Diagnostics)
+		}
+	})
+
+	t.Run("Successful Retirement Revokes Privileges", func(t *testing.T) {
+		isAdm := true
+		companyAccess := []string{"comp-1", "comp-2"}
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if strings.Contains(req.URL.Path, "demote-instance-admin") && req.Method == http.MethodPost {
+				isAdm = false
+				w.WriteHeader(http.StatusOK)
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+				return
+			}
+			if req.Method == http.MethodPut && strings.Contains(req.URL.Path, "company-access") {
+				var body map[string]interface{}
+				_ = json.NewDecoder(req.Body).Decode(&body)
+				cids, _ := body["companyIds"].([]interface{})
+				companyAccess = nil
+				for _, cid := range cids {
+					companyAccess = append(companyAccess, cid.(string))
+				}
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"user":          map[string]interface{}{"id": "user-1", "isInstanceAdmin": isAdm},
+					"companyAccess": []map[string]interface{}{},
+				})
+				return
+			}
+			http.NotFound(w, req)
+		}))
+		defer server.Close()
+
+		cli, _ := client.NewClient(server.URL, "token")
+		r.client = cli
+
+		state := tfsdk.State{Schema: sResp.Schema}
+		_ = state.Set(ctx, &PaperclipUserInstanceAccessResourceModel{
+			ID:              types.StringValue("user-1"),
+			UserID:          types.StringValue("user-1"),
+			IsInstanceAdmin: types.BoolValue(true),
+			CompanyIDs:      stringSliceToTypesList(ctx, []string{"comp-1", "comp-2"}),
+		})
+
+		var delResp resource.DeleteResponse
+		r.Delete(ctx, resource.DeleteRequest{State: state}, &delResp)
+		if delResp.Diagnostics.HasError() {
+			t.Fatalf("unexpected error on successful delete: %v", delResp.Diagnostics)
+		}
+		if isAdm {
+			t.Fatal("expected isInstanceAdmin to be false after successful retirement")
+		}
+		if len(companyAccess) != 0 {
+			t.Fatalf("expected companyAccess to be empty after successful retirement, got: %v", companyAccess)
 		}
 	})
 }
