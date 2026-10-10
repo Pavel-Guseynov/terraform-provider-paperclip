@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -258,29 +257,33 @@ func (r *PaperclipAgentKeyResource) Create(ctx context.Context, req resource.Cre
 		return
 	}
 
-	scope, err := scopeModelToClient(ctx, plan.Scope)
-	if err != nil {
-		resp.Diagnostics.AddError("Invalid agent key scope", err.Error())
-		return
+	keyID := ""
+	if kID, _, ok := r.client.GetMintedKeyForName(plan.Name.ValueString(), false, plan.AgentID.ValueString()); ok && kID != "" {
+		keyID = kID
 	}
 
-	key, err := r.client.CreateAgentKey(ctx, plan.AgentID.ValueString(), plan.Name.ValueString(), scope)
-	if err != nil {
-		resp.Diagnostics.AddError("Error creating Paperclip agent key", err.Error())
-		return
+	if keyID == "" {
+		scope, err := scopeModelToClient(ctx, plan.Scope)
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid agent key scope", err.Error())
+			return
+		}
+
+		key, err := r.client.CreateAgentKey(ctx, plan.AgentID.ValueString(), plan.Name.ValueString(), scope)
+		if err != nil {
+			resp.Diagnostics.AddError("Error creating Paperclip agent key", err.Error())
+			return
+		}
+		keyID = key.ID
+		r.client.RegisterMintedKey(key.ID, key.Token, plan.Name.ValueString(), false, plan.AgentID.ValueString())
 	}
 
-	r.client.RegisterMintedAgentKey(plan.AgentID.ValueString(), key.ID, key.Token)
+	r.client.AcknowledgeKeyDelivery(keyID)
+	r.client.RecordDeliveredGeneration(plan.Name.ValueString(), false, plan.AgentID.ValueString(), plan.Generation.ValueInt64(), keyID)
 
-	plan.ID = types.StringValue(key.ID)
-	plan.KeyID = types.StringValue(key.ID)
-	plan.DeliveryState = types.StringValue("pending")
-
-	if key.Scope != nil {
-		modelScope, d := clientScopeToModel(ctx, key.Scope, plan.Scope)
-		resp.Diagnostics.Append(d...)
-		plan.Scope = modelScope
-	}
+	plan.ID = types.StringValue(keyID)
+	plan.KeyID = types.StringValue(keyID)
+	plan.DeliveryState = types.StringValue("delivered")
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -304,11 +307,6 @@ func (r *PaperclipAgentKeyResource) Read(ctx context.Context, req resource.ReadR
 	key, err := r.client.GetAgentKey(ctx, state.AgentID.ValueString(), keyID)
 	if err != nil {
 		if errors.Is(err, client.ErrNotFound) {
-			if state.DeliveryState.ValueString() == "pending" {
-				state.KeyID = types.StringNull()
-				resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
-				return
-			}
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -324,10 +322,16 @@ func (r *PaperclipAgentKeyResource) Read(ctx context.Context, req resource.ReadR
 		resp.Diagnostics.Append(d...)
 		state.Scope = modelScope
 	}
-	if _, ok := r.client.GetMintedToken(keyID); !ok {
+
+	// Preserve delivery_state from durable state without deriving it from in-process memory.
+	if state.DeliveryState.IsNull() || state.DeliveryState.IsUnknown() || state.DeliveryState.ValueString() == "" {
 		state.DeliveryState = types.StringValue("delivered")
-		r.client.MarkTokenDelivered(keyID)
 	}
+
+	if r.client != nil && key.ID != "" {
+		r.client.RecordDeliveredGeneration(key.Name, false, state.AgentID.ValueString(), state.Generation.ValueInt64(), key.ID)
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -341,12 +345,6 @@ func (r *PaperclipAgentKeyResource) Update(ctx context.Context, req resource.Upd
 	}
 
 	oldKeyID := state.KeyID.ValueString()
-	if oldKeyID == "" && req.Private != nil {
-		superBytes, _ := req.Private.GetKey(ctx, "superseded_key_id")
-		if len(superBytes) > 0 {
-			_ = json.Unmarshal(superBytes, &oldKeyID)
-		}
-	}
 	if oldKeyID == "" {
 		oldKeyID = state.ID.ValueString()
 	}
@@ -354,35 +352,47 @@ func (r *PaperclipAgentKeyResource) Update(ctx context.Context, req resource.Upd
 	shouldRotate := !plan.Generation.Equal(state.Generation) || plan.KeyID.IsUnknown() || state.KeyID.IsNull()
 
 	if shouldRotate {
-		scope, err := scopeModelToClient(ctx, plan.Scope)
-		if err != nil {
-			resp.Diagnostics.AddError("Invalid agent key scope", err.Error())
-			return
+		newKeyID := ""
+		if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() && plan.KeyID.ValueString() != "" && plan.KeyID.ValueString() != oldKeyID {
+			newKeyID = plan.KeyID.ValueString()
+		} else if kID, _, ok := r.client.GetMintedKeyForName(plan.Name.ValueString(), false, plan.AgentID.ValueString()); ok && kID != "" && kID != oldKeyID {
+			newKeyID = kID
 		}
 
-		newKey, err := r.client.CreateAgentKey(ctx, plan.AgentID.ValueString(), plan.Name.ValueString(), scope)
-		if err != nil {
-			resp.Diagnostics.AddError("Error rotating Paperclip agent key", err.Error())
-			return
+		if newKeyID == "" {
+			scope, err := scopeModelToClient(ctx, plan.Scope)
+			if err != nil {
+				resp.Diagnostics.AddError("Invalid agent key scope", err.Error())
+				return
+			}
+
+			newKey, err := r.client.CreateAgentKey(ctx, plan.AgentID.ValueString(), plan.Name.ValueString(), scope)
+			if err != nil {
+				resp.Diagnostics.AddError("Error rotating Paperclip agent key", err.Error())
+				return
+			}
+			newKeyID = newKey.ID
+			r.client.RegisterMintedKey(newKey.ID, newKey.Token, plan.Name.ValueString(), false, plan.AgentID.ValueString())
 		}
 
-		r.client.RegisterMintedAgentKey(plan.AgentID.ValueString(), newKey.ID, newKey.Token)
-		if oldKeyID != "" && oldKeyID != newKey.ID {
-			r.client.RecordSupersededKey(newKey.ID, oldKeyID, false, plan.AgentID.ValueString())
-			if resp.Private != nil {
-				superBytes, _ := json.Marshal(oldKeyID)
-				resp.Diagnostics.Append(resp.Private.SetKey(ctx, "superseded_key_id", superBytes)...)
+		if oldKeyID != "" && oldKeyID != newKeyID {
+			if err := r.client.RevokeAgentKey(ctx, state.AgentID.ValueString(), oldKeyID); err != nil {
+				resp.Diagnostics.AddError("Error revoking superseded agent key", err.Error())
+				return
 			}
 		}
 
-		plan.ID = types.StringValue(newKey.ID)
-		plan.KeyID = types.StringValue(newKey.ID)
-		plan.DeliveryState = types.StringValue("pending")
-		if newKey.Scope != nil {
-			modelScope, d := clientScopeToModel(ctx, newKey.Scope, plan.Scope)
-			resp.Diagnostics.Append(d...)
-			plan.Scope = modelScope
+		r.client.AcknowledgeKeyDelivery(newKeyID)
+		r.client.RecordDeliveredGeneration(plan.Name.ValueString(), false, plan.AgentID.ValueString(), plan.Generation.ValueInt64(), newKeyID)
+
+		if err := r.client.ReconcileUnconfirmedAgentKeys(ctx, plan.AgentID.ValueString(), plan.Name.ValueString(), newKeyID); err != nil {
+			resp.Diagnostics.AddError("Error reconciling unconfirmed agent keys", err.Error())
+			return
 		}
+
+		plan.ID = types.StringValue(newKeyID)
+		plan.KeyID = types.StringValue(newKeyID)
+		plan.DeliveryState = types.StringValue("delivered")
 
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 		return

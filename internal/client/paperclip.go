@@ -1102,11 +1102,19 @@ func (c *Client) RevokeBoardKey(ctx context.Context, keyID string) error {
 	return nil
 }
 
+func lookupKey(name string, isBoard bool, agentID string) string {
+	if isBoard {
+		return "board:" + name
+	}
+	return "agent:" + agentID + ":" + name
+}
+
 func (c *Client) RegisterMintedToken(keyID, token string) {
 	c.credMu.Lock()
 	defer c.credMu.Unlock()
 	c.mintedTokens[keyID] = token
 	delete(c.deliveredTokens, keyID)
+	c.acknowledgedDeliveries[keyID] = false
 }
 
 func (c *Client) RegisterMintedAgentKey(agentID, keyID, token string) {
@@ -1117,6 +1125,156 @@ func (c *Client) RegisterMintedAgentKey(agentID, keyID, token string) {
 	}
 	c.agentKeyAgents[keyID] = agentID
 	delete(c.deliveredTokens, keyID)
+	c.acknowledgedDeliveries[keyID] = false
+}
+
+func (c *Client) RegisterMintedKey(keyID, token, name string, isBoard bool, agentID string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	if token != "" {
+		c.mintedTokens[keyID] = token
+	}
+	if agentID != "" {
+		c.agentKeyAgents[keyID] = agentID
+	}
+	rec := mintedKeyRecord{
+		keyID:   keyID,
+		token:   token,
+		name:    name,
+		isBoard: isBoard,
+		agentID: agentID,
+	}
+	c.mintedKeys[keyID] = rec
+	c.mintedKeysByName[lookupKey(name, isBoard, agentID)] = keyID
+	delete(c.deliveredTokens, keyID)
+	c.acknowledgedDeliveries[keyID] = false
+}
+
+func (c *Client) GetMintedKeyForName(name string, isBoard bool, agentID string) (string, string, bool) {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	keyID, ok := c.mintedKeysByName[lookupKey(name, isBoard, agentID)]
+	if !ok {
+		return "", "", false
+	}
+	rec := c.mintedKeys[keyID]
+	return rec.keyID, rec.token, true
+}
+
+func (c *Client) AcknowledgeKeyDelivery(keyID string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	c.acknowledgedDeliveries[keyID] = true
+	c.deliveredTokens[keyID] = true
+}
+
+func (c *Client) IsKeyDeliveryAcknowledged(keyID string) bool {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	return c.acknowledgedDeliveries[keyID]
+}
+
+func (c *Client) RecordDeliveredGeneration(name string, isBoard bool, agentID string, generation int64, keyID string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	c.deliveredGenerations[lookupKey(name, isBoard, agentID)] = generation
+	if keyID != "" {
+		c.acknowledgedDeliveries[keyID] = true
+		c.deliveredTokens[keyID] = true
+	}
+}
+
+func (c *Client) IsGenerationDelivered(name string, isBoard bool, agentID string, generation int64) bool {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	gen, ok := c.deliveredGenerations[lookupKey(name, isBoard, agentID)]
+	return ok && gen == generation
+}
+
+func (c *Client) ListBoardAPIKeys(ctx context.Context) ([]PaperclipBoardKey, error) {
+	var keys []PaperclipBoardKey
+	if err := c.paperclipRequest(ctx, http.MethodGet, "/api/board-api-keys?includeInactive=true", nil, &keys); err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	var active []PaperclipBoardKey
+	for _, key := range keys {
+		if key.RevokedAt != nil && *key.RevokedAt != "" {
+			continue
+		}
+		if key.ExpiresAt != nil && key.ExpiresAt.Before(now) {
+			continue
+		}
+		active = append(active, key)
+	}
+	return active, nil
+}
+
+func (c *Client) ListAgentKeys(ctx context.Context, agentID string) ([]PaperclipAgentKey, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent ID is required")
+	}
+	var keys []PaperclipAgentKey
+	reqPath := fmt.Sprintf("/api/agents/%s/keys", url.PathEscape(agentID))
+	if err := c.paperclipRequest(ctx, http.MethodGet, reqPath, nil, &keys); err != nil {
+		return nil, err
+	}
+	var active []PaperclipAgentKey
+	for _, key := range keys {
+		if key.RevokedAt != nil && *key.RevokedAt != "" {
+			continue
+		}
+		if key.AgentID == "" {
+			key.AgentID = agentID
+		}
+		active = append(active, key)
+	}
+	return active, nil
+}
+
+func (c *Client) ReconcileUnconfirmedBoardKeys(ctx context.Context, name, currentKeyID string) error {
+	keys, err := c.ListBoardAPIKeys(ctx)
+	if err != nil {
+		return err
+	}
+	var toRevoke []string
+	c.credMu.RLock()
+	for _, k := range keys {
+		if k.Name == name && k.ID != currentKeyID && !c.acknowledgedDeliveries[k.ID] {
+			toRevoke = append(toRevoke, k.ID)
+		}
+	}
+	c.credMu.RUnlock()
+
+	for _, id := range toRevoke {
+		if err := c.RevokeBoardKey(ctx, id); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *Client) ReconcileUnconfirmedAgentKeys(ctx context.Context, agentID, name, currentKeyID string) error {
+	keys, err := c.ListAgentKeys(ctx, agentID)
+	if err != nil {
+		return err
+	}
+	var toRevoke []string
+	c.credMu.RLock()
+	for _, k := range keys {
+		if k.Name == name && k.ID != currentKeyID && !c.acknowledgedDeliveries[k.ID] {
+			toRevoke = append(toRevoke, k.ID)
+		}
+	}
+	c.credMu.RUnlock()
+
+	for _, id := range toRevoke {
+		if err := c.RevokeAgentKey(ctx, agentID, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Client) GetAgentIDForKey(keyID string) (string, bool) {
@@ -1139,9 +1297,9 @@ func (c *Client) ClearMintedToken(keyID string) {
 	delete(c.mintedTokens, keyID)
 	delete(c.supersededKeys, keyID)
 	delete(c.agentKeyAgents, keyID)
-	delete(c.failedDeliveries, keyID)
-	if c.activeEphemeralKeyID == keyID {
-		c.activeEphemeralKeyID = ""
+	if rec, ok := c.mintedKeys[keyID]; ok {
+		delete(c.mintedKeysByName, lookupKey(rec.name, rec.isBoard, rec.agentID))
+		delete(c.mintedKeys, keyID)
 	}
 }
 
@@ -1182,42 +1340,8 @@ func (c *Client) MarkTokenDelivered(keyID string) {
 	c.credMu.Lock()
 	defer c.credMu.Unlock()
 	c.deliveredTokens[keyID] = true
+	c.acknowledgedDeliveries[keyID] = true
 	delete(c.mintedTokens, keyID)
-}
-
-func (c *Client) SetActiveEphemeralKey(keyID string) {
-	c.credMu.Lock()
-	defer c.credMu.Unlock()
-	c.activeEphemeralKeyID = keyID
-}
-
-func (c *Client) RecordConsumerFailure() {
-	c.credMu.Lock()
-	keyID := c.activeEphemeralKeyID
-	if keyID == "" {
-		c.credMu.Unlock()
-		return
-	}
-	c.failedDeliveries[keyID] = true
-	agentID := c.agentKeyAgents[keyID]
-	delete(c.mintedTokens, keyID)
-	c.activeEphemeralKeyID = ""
-	c.credMu.Unlock()
-
-	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if agentID != "" {
-		_ = c.RevokeAgentKey(cleanupCtx, agentID, keyID)
-	} else {
-		_ = c.RevokeBoardKey(cleanupCtx, keyID)
-	}
-}
-
-func (c *Client) IsDeliveryFailed(keyID string) bool {
-	c.credMu.RLock()
-	defer c.credMu.RUnlock()
-	return c.failedDeliveries[keyID]
 }
 
 func (c *Client) FindActiveBoardKeyByName(ctx context.Context, name string) (*PaperclipBoardKey, error) {
@@ -1913,7 +2037,6 @@ func (c *Client) CreateSecret(ctx context.Context, companyID, name, description,
 	}
 	var resp PaperclipSecret
 	if err := c.paperclipSecretRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/secrets", url.PathEscape(companyID)), payload, &resp); err != nil {
-		c.RecordConsumerFailure()
 		return nil, err
 	}
 	if resp.CompanyID == "" {
@@ -1955,7 +2078,6 @@ func (c *Client) RotateSecret(ctx context.Context, secretID, value string) (*Pap
 	payload := map[string]interface{}{"value": value}
 	var resp PaperclipSecret
 	if err := c.paperclipSecretRequest(ctx, http.MethodPost, fmt.Sprintf("/api/secrets/%s/rotate", url.PathEscape(secretID)), payload, &resp); err != nil {
-		c.RecordConsumerFailure()
 		return nil, err
 	}
 	resp.Value = value

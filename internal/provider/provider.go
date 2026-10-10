@@ -154,13 +154,19 @@ func (p *PaperclipProvider) Configure(ctx context.Context, req provider.Configur
 }
 
 type PaperclipBoardKeyEphemeralResource struct {
-	client *client.Client
-	keyID  string
+	client   *client.Client
+	keyID    string
+	isLookup bool
 }
 
 type PaperclipBoardKeyEphemeralResourceModel struct {
-	KeyID types.String `tfsdk:"key_id"`
-	Token types.String `tfsdk:"token"`
+	Name               types.String `tfsdk:"name"`
+	Generation         types.Int64  `tfsdk:"generation"`
+	ExpiresAt          types.String `tfsdk:"expires_at"`
+	RequestedCompanyID types.String `tfsdk:"requested_company_id"`
+	KeyID              types.String `tfsdk:"key_id"`
+	Token              types.String `tfsdk:"token"`
+	Applying           types.Bool   `tfsdk:"applying"`
 }
 
 func NewPaperclipBoardKeyEphemeralResource() ephemeral.EphemeralResource {
@@ -175,14 +181,35 @@ func (r *PaperclipBoardKeyEphemeralResource) Schema(ctx context.Context, req eph
 	resp.Schema = ephemeralschema.Schema{
 		Description: "Produces a Paperclip board key token only during apply for ephemeral or write-only delivery.",
 		Attributes: map[string]ephemeralschema.Attribute{
+			"name": ephemeralschema.StringAttribute{
+				Description: "Board key name.",
+				Optional:    true,
+			},
+			"generation": ephemeralschema.Int64Attribute{
+				Description: "Monotonic generation number.",
+				Optional:    true,
+			},
+			"expires_at": ephemeralschema.StringAttribute{
+				Description: "Optional RFC3339 expiration timestamp.",
+				Optional:    true,
+			},
+			"requested_company_id": ephemeralschema.StringAttribute{
+				Description: "Optional company ID to scope board key activity records.",
+				Optional:    true,
+			},
 			"key_id": ephemeralschema.StringAttribute{
 				Description: "Managed Paperclip board key ID.",
-				Required:    true,
+				Optional:    true,
+				Computed:    true,
 			},
 			"token": ephemeralschema.StringAttribute{
 				Description: "Ephemeral bearer token delivered only to an ephemeral or write-only consumer.",
 				Computed:    true,
 				Sensitive:   true,
+			},
+			"applying": ephemeralschema.BoolAttribute{
+				Description: "Indicates whether the apply phase is actively running (e.g. tofu.applying). When false, credential minting is deferred.",
+				Optional:    true,
 			},
 		},
 	}
@@ -214,48 +241,109 @@ func (r *PaperclipBoardKeyEphemeralResource) Open(ctx context.Context, req ephem
 		return
 	}
 
-	if data.KeyID.IsNull() || data.KeyID.IsUnknown() || data.KeyID.ValueString() == "" {
-		if req.ClientCapabilities.DeferralAllowed {
-			resp.Deferred = &ephemeral.Deferred{
-				Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
-			}
-			return
-		}
-		resp.Diagnostics.AddError("Missing key_id", "A valid managed key_id is required to deliver the ephemeral board key token.")
+	name := data.Name.ValueString()
+	gen := int64(1)
+	if !data.Generation.IsNull() && !data.Generation.IsUnknown() {
+		gen = data.Generation.ValueInt64()
+	}
+	// 0. Plan-phase deferral when applying is false (e.g. via tofu.applying)
+	if !data.Applying.IsNull() && !data.Applying.IsUnknown() && !data.Applying.ValueBool() {
+		data.KeyID = types.StringValue(fmt.Sprintf("(plan-board-key-id-%d)", gen))
+		data.Token = types.StringValue(fmt.Sprintf("(plan-board-token-%d)", gen))
+		resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 		return
 	}
 
-	keyID := data.KeyID.ValueString()
-	token, ok := r.client.GetMintedToken(keyID)
-	if !ok {
-		if r.client.IsTokenDelivered(keyID) {
-			data.Token = types.StringNull()
-			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
-			return
-		}
-		if req.ClientCapabilities.DeferralAllowed {
-			resp.Deferred = &ephemeral.Deferred{
-				Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
+	// 1. If key_id is provided directly without name, handle key_id lookup
+	if name == "" && !data.KeyID.IsNull() && !data.KeyID.IsUnknown() && data.KeyID.ValueString() != "" {
+		keyID := data.KeyID.ValueString()
+		token, ok := r.client.GetMintedToken(keyID)
+		if !ok {
+			if r.client.IsTokenDelivered(keyID) {
+				data.Token = types.StringNull()
+				resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+				return
 			}
+			if req.ClientCapabilities.DeferralAllowed {
+				resp.Deferred = &ephemeral.Deferred{
+					Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
+				}
+				return
+			}
+			resp.Diagnostics.AddError(
+				"Token Unavailable",
+				fmt.Sprintf("The bearer token for board key %q is unavailable. Tokens are only delivered during the initial apply or generation rotation in which they are minted.", keyID),
+			)
 			return
 		}
-		resp.Diagnostics.AddError(
-			"Token Unavailable",
-			fmt.Sprintf("The bearer token for board key %q is unavailable. Tokens are only delivered during the initial apply or generation rotation in which they are minted.", keyID),
-		)
+		data.Token = types.StringValue(token)
+		r.keyID = keyID
+		r.isLookup = true
+		if resp.Private != nil {
+			keyBytes, _ := json.Marshal(keyID)
+			resp.Diagnostics.Append(resp.Private.SetKey(ctx, "key_id", keyBytes)...)
+			lookupBytes, _ := json.Marshal(true)
+			resp.Diagnostics.Append(resp.Private.SetKey(ctx, "is_lookup", lookupBytes)...)
+		}
+		resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 		return
 	}
 
-	data.Token = types.StringValue(token)
-	r.keyID = keyID
-	r.client.SetActiveEphemeralKey(keyID)
+	if name == "" {
+		if req.ClientCapabilities.DeferralAllowed {
+			resp.Deferred = &ephemeral.Deferred{
+				Reason: ephemeral.DeferredReasonUnknown,
+			}
+			return
+		}
+		resp.Diagnostics.AddError("Missing name", "A valid name or key_id is required for ephemeral board key.")
+		return
+	}
+
+	// 2. Check if this generation is already delivered
+	if r.client.IsGenerationDelivered(name, true, "", gen) {
+		data.Token = types.StringNull()
+		if keyID, _, ok := r.client.GetMintedKeyForName(name, true, ""); ok && keyID != "" {
+			data.KeyID = types.StringValue(keyID)
+		}
+		resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+		return
+	}
+
+	// 3. Defer during plan so plan never mints
+	if req.ClientCapabilities.DeferralAllowed {
+		resp.Deferred = &ephemeral.Deferred{
+			Reason: ephemeral.DeferredReasonUnknown,
+		}
+		return
+	}
+
+	// 4. Mint key at apply time
+	var expiresAt *time.Time
+	if !data.ExpiresAt.IsNull() && !data.ExpiresAt.IsUnknown() && data.ExpiresAt.ValueString() != "" {
+		t, err := time.Parse(time.RFC3339, data.ExpiresAt.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid expires_at format", fmt.Sprintf("expires_at must be RFC3339 format: %s", err))
+			return
+		}
+		expiresAt = &t
+	}
+
+	newKey, err := r.client.CreateBoardKey(ctx, name, expiresAt, data.RequestedCompanyID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Error minting Paperclip board key", err.Error())
+		return
+	}
+
+	r.client.RegisterMintedKey(newKey.ID, newKey.Token, name, true, "")
+	r.keyID = newKey.ID
+
+	data.KeyID = types.StringValue(newKey.ID)
+	data.Token = types.StringValue(newKey.Token)
+
 	if resp.Private != nil {
-		keyBytes, _ := json.Marshal(keyID)
+		keyBytes, _ := json.Marshal(newKey.ID)
 		resp.Diagnostics.Append(resp.Private.SetKey(ctx, "key_id", keyBytes)...)
-		if superID, ok := r.client.GetSupersededKey(keyID); ok && superID != "" {
-			superBytes, _ := json.Marshal(superID)
-			resp.Diagnostics.Append(resp.Private.SetKey(ctx, "superseded_key_id", superBytes)...)
-		}
 	}
 
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
@@ -266,34 +354,36 @@ func (r *PaperclipBoardKeyEphemeralResource) Close(ctx context.Context, req ephe
 		return
 	}
 	var keyID string
-	var supersededKeyID string
+	var isLookup bool
 	if req.Private != nil {
 		keyIDBytes, diags := req.Private.GetKey(ctx, "key_id")
 		resp.Diagnostics.Append(diags...)
 		if len(keyIDBytes) > 0 {
 			_ = json.Unmarshal(keyIDBytes, &keyID)
 		}
-
-		superBytes, diags := req.Private.GetKey(ctx, "superseded_key_id")
-		resp.Diagnostics.Append(diags...)
-		if len(superBytes) > 0 {
-			_ = json.Unmarshal(superBytes, &supersededKeyID)
+		lookupBytes, diagsLookup := req.Private.GetKey(ctx, "is_lookup")
+		resp.Diagnostics.Append(diagsLookup...)
+		if len(lookupBytes) > 0 {
+			_ = json.Unmarshal(lookupBytes, &isLookup)
 		}
 	}
 	if keyID == "" {
 		keyID = r.keyID
 	}
+	if !isLookup {
+		isLookup = r.isLookup
+	}
 	if keyID == "" {
 		return
 	}
-	if supersededKeyID == "" {
-		if sID, ok := r.client.GetSupersededKey(keyID); ok {
-			supersededKeyID = sID
-		}
+
+	if isLookup {
+		r.client.MarkTokenDelivered(keyID)
+		r.client.ClearMintedToken(keyID)
+		return
 	}
 
-	isFailed := ctx.Err() != nil || r.client.IsDeliveryFailed(keyID)
-	if isFailed {
+	if !r.client.IsKeyDeliveryAcknowledged(keyID) {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		if err := r.client.RevokeBoardKey(cleanupCtx, keyID); err != nil {
@@ -302,12 +392,7 @@ func (r *PaperclipBoardKeyEphemeralResource) Close(ctx context.Context, req ephe
 		return
 	}
 
-	r.client.MarkTokenDelivered(keyID)
-	if supersededKeyID != "" {
-		if err := r.client.RevokeBoardKey(ctx, supersededKeyID); err != nil {
-			resp.Diagnostics.AddError("Error revoking superseded board key", err.Error())
-		}
-	}
+	r.client.ClearMintedToken(keyID)
 }
 
 

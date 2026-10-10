@@ -316,10 +316,15 @@ func TestClientCredentialRegistry(t *testing.T) {
 	ctx := context.Background()
 	revokedBoardKeys := []string{}
 	revokedAgentKeys := []string{}
+	var failDelete bool
 
 	stringPtr := func(s string) *string { return &s }
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodDelete {
+			if failDelete {
+				http.Error(w, "delete failure", http.StatusInternalServerError)
+				return
+			}
 			if len(r.URL.Path) > len("/api/board-api-keys/") && r.URL.Path[:len("/api/board-api-keys/")] == "/api/board-api-keys/" {
 				keyID := r.URL.Path[len("/api/board-api-keys/"):]
 				revokedBoardKeys = append(revokedBoardKeys, keyID)
@@ -398,36 +403,74 @@ func TestClientCredentialRegistry(t *testing.T) {
 		t.Fatal("expected false for nonexistent superseded key")
 	}
 
-	// SetActiveEphemeralKey, RecordConsumerFailure, and IsDeliveryFailed
-	cli.SetActiveEphemeralKey("eph-1")
-	if cli.IsDeliveryFailed("eph-1") {
-		t.Fatal("expected delivery not failed initially")
+	// RegisterMintedKey, GetMintedKeyForName, AcknowledgeKeyDelivery, IsKeyDeliveryAcknowledged
+	cli.RegisterMintedKey("m-bk-1", "tok-1", "board-test", true, "")
+	if kID, tok, ok := cli.GetMintedKeyForName("board-test", true, ""); !ok || kID != "m-bk-1" || tok != "tok-1" {
+		t.Fatalf("expected m-bk-1 and tok-1, got %s, %s, %v", kID, tok, ok)
 	}
-	cli.RecordConsumerFailure()
-	if !cli.IsDeliveryFailed("eph-1") {
-		t.Fatal("expected delivery to be marked failed")
+	if cli.IsKeyDeliveryAcknowledged("m-bk-1") {
+		t.Fatal("expected delivery not acknowledged initially")
 	}
-	cli.SetActiveEphemeralKey("")
-	cli.RecordConsumerFailure()
+	cli.AcknowledgeKeyDelivery("m-bk-1")
+	if !cli.IsKeyDeliveryAcknowledged("m-bk-1") {
+		t.Fatal("expected delivery to be acknowledged")
+	}
 
-	// RecordConsumerFailure with agent key
-	cli.RegisterMintedAgentKey("ag-1", "eph-ak-1", "token-ak-fail")
-	cli.SetActiveEphemeralKey("eph-ak-1")
-	cli.RecordConsumerFailure()
-	if !cli.IsDeliveryFailed("eph-ak-1") {
-		t.Fatal("expected eph-ak-1 delivery to be marked failed")
+	// Agent key variant
+	cli.RegisterMintedKey("m-ak-1", "tok-ak-1", "agent-test", false, "ag-1")
+	if kID, tok, ok := cli.GetMintedKeyForName("agent-test", false, "ag-1"); !ok || kID != "m-ak-1" || tok != "tok-ak-1" {
+		t.Fatalf("expected m-ak-1 and tok-ak-1, got %s, %s, %v", kID, tok, ok)
 	}
+	if _, _, ok := cli.GetMintedKeyForName("nonexistent", true, ""); ok {
+		t.Fatal("expected false for nonexistent key name")
+	}
+
+	// RecordDeliveredGeneration and IsGenerationDelivered
+	if cli.IsGenerationDelivered("board-test", true, "", 1) {
+		t.Fatal("expected generation 1 not delivered initially")
+	}
+	cli.RecordDeliveredGeneration("board-test", true, "", 1, "m-bk-1")
+	if !cli.IsGenerationDelivered("board-test", true, "", 1) {
+		t.Fatal("expected generation 1 to be delivered")
+	}
+
+	// ListBoardAPIKeys and ListAgentKeys
+	bKeys, err := cli.ListBoardAPIKeys(ctx)
+	if err != nil || len(bKeys) == 0 {
+		t.Fatalf("expected active board keys, got %v, err=%v", bKeys, err)
+	}
+	aKeys, err := cli.ListAgentKeys(ctx, "ag-1")
+	if err != nil || len(aKeys) == 0 {
+		t.Fatalf("expected active agent keys, got %v, err=%v", aKeys, err)
+	}
+	if _, err := cli.ListAgentKeys(ctx, ""); err == nil {
+		t.Fatal("expected error for empty agentID in ListAgentKeys")
+	}
+
+	// ReconcileUnconfirmedBoardKeys and ReconcileUnconfirmedAgentKeys
+	if err := cli.ReconcileUnconfirmedBoardKeys(ctx, "my-board-key", "different-bk-id"); err != nil {
+		t.Fatalf("unexpected error in ReconcileUnconfirmedBoardKeys: %v", err)
+	}
+	if err := cli.ReconcileUnconfirmedAgentKeys(ctx, "ag-1", "my-agent-key", "different-ak-id"); err != nil {
+		t.Fatalf("unexpected error in ReconcileUnconfirmedAgentKeys: %v", err)
+	}
+	failDelete = true
+	if err := cli.ReconcileUnconfirmedBoardKeys(ctx, "my-board-key", "different-bk-id"); err == nil {
+		t.Fatal("expected error in ReconcileUnconfirmedBoardKeys when delete fails")
+	}
+	if err := cli.ReconcileUnconfirmedAgentKeys(ctx, "ag-1", "my-agent-key", "different-ak-id"); err == nil {
+		t.Fatal("expected error in ReconcileUnconfirmedAgentKeys when delete fails")
+	}
+	failDelete = false
 
 	// ClearMintedToken
-	cli.SetActiveEphemeralKey("bk-1")
-	cli.ClearMintedToken("bk-1")
-	if _, ok := cli.GetMintedToken("bk-1"); ok {
-		t.Fatal("expected bk-1 to be cleared")
+	cli.ClearMintedToken("m-bk-1")
+	if _, ok := cli.GetMintedToken("m-bk-1"); ok {
+		t.Fatal("expected m-bk-1 to be cleared")
 	}
-	cli.SetActiveEphemeralKey("other-key")
-	cli.ClearMintedToken("ak-1")
-	if _, ok := cli.GetAgentIDForKey("ak-1"); ok {
-		t.Fatal("expected ak-1 agentID to be cleared")
+	cli.ClearMintedToken("m-ak-1")
+	if _, ok := cli.GetAgentIDForKey("m-ak-1"); ok {
+		t.Fatal("expected m-ak-1 agentID to be cleared")
 	}
 
 
@@ -471,12 +514,24 @@ func TestClientCredentialRegistry(t *testing.T) {
 		t.Fatalf("expected ErrNotFound for nonexistent agent key, got %v", err)
 	}
 
-	// Connection failure branches for FindActive*
+	// Connection failure branches for FindActive* and List/Reconcile
 	failCli, _ := NewClient("http://127.0.0.1:1", "test-token")
 	if _, err := failCli.FindActiveBoardKeyByName(ctx, "my-board-key"); err == nil {
 		t.Fatal("expected error on connection failure in FindActiveBoardKeyByName")
 	}
 	if _, err := failCli.FindActiveAgentKeyByName(ctx, "ag-1", "my-agent-key"); err == nil {
 		t.Fatal("expected error on connection failure in FindActiveAgentKeyByName")
+	}
+	if _, err := failCli.ListBoardAPIKeys(ctx); err == nil {
+		t.Fatal("expected error on connection failure in ListBoardAPIKeys")
+	}
+	if _, err := failCli.ListAgentKeys(ctx, "ag-1"); err == nil {
+		t.Fatal("expected error on connection failure in ListAgentKeys")
+	}
+	if err := failCli.ReconcileUnconfirmedBoardKeys(ctx, "my-board-key", "active-bk-find"); err == nil {
+		t.Fatal("expected error on connection failure in ReconcileUnconfirmedBoardKeys")
+	}
+	if err := failCli.ReconcileUnconfirmedAgentKeys(ctx, "ag-1", "my-agent-key", "active-ak-find"); err == nil {
+		t.Fatal("expected error on connection failure in ReconcileUnconfirmedAgentKeys")
 	}
 }

@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -116,30 +115,38 @@ func (r *PaperclipBoardKeyResource) Create(ctx context.Context, req resource.Cre
 		return
 	}
 
-	var expiresAt *time.Time
-	if !plan.ExpiresAt.IsNull() && !plan.ExpiresAt.IsUnknown() && plan.ExpiresAt.ValueString() != "" {
-		t, err := time.Parse(time.RFC3339, plan.ExpiresAt.ValueString())
+	keyID := ""
+	if kID, _, ok := r.client.GetMintedKeyForName(plan.Name.ValueString(), true, ""); ok && kID != "" {
+		keyID = kID
+	}
+
+	if keyID == "" {
+		var expiresAt *time.Time
+		if !plan.ExpiresAt.IsNull() && !plan.ExpiresAt.IsUnknown() && plan.ExpiresAt.ValueString() != "" {
+			t, err := time.Parse(time.RFC3339, plan.ExpiresAt.ValueString())
+			if err != nil {
+				resp.Diagnostics.AddError("Invalid expires_at format", fmt.Sprintf("expires_at must be RFC3339 format: %s", err))
+				return
+			}
+			expiresAt = &t
+		}
+
+		key, err := r.client.CreateBoardKey(ctx, plan.Name.ValueString(), expiresAt, plan.RequestedCompanyID.ValueString())
 		if err != nil {
-			resp.Diagnostics.AddError("Invalid expires_at format", fmt.Sprintf("expires_at must be RFC3339 format: %s", err))
+			resp.Diagnostics.AddError("Error creating Paperclip board key", err.Error())
 			return
 		}
-		expiresAt = &t
+		keyID = key.ID
+		r.client.RegisterMintedKey(key.ID, key.Token, plan.Name.ValueString(), true, "")
 	}
 
-	key, err := r.client.CreateBoardKey(ctx, plan.Name.ValueString(), expiresAt, plan.RequestedCompanyID.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("Error creating Paperclip board key", err.Error())
-		return
-	}
+	r.client.AcknowledgeKeyDelivery(keyID)
+	r.client.RecordDeliveredGeneration(plan.Name.ValueString(), true, "", plan.Generation.ValueInt64(), keyID)
 
-	r.client.RegisterMintedToken(key.ID, key.Token)
-
-	plan.ID = types.StringValue(key.ID)
-	plan.KeyID = types.StringValue(key.ID)
-	plan.DeliveryState = types.StringValue("pending")
-	if key.ExpiresAt != nil {
-		plan.ExpiresAt = types.StringValue(key.ExpiresAt.Format(time.RFC3339))
-	} else {
+	plan.ID = types.StringValue(keyID)
+	plan.KeyID = types.StringValue(keyID)
+	plan.DeliveryState = types.StringValue("delivered")
+	if plan.ExpiresAt.IsUnknown() {
 		plan.ExpiresAt = types.StringNull()
 	}
 
@@ -165,11 +172,6 @@ func (r *PaperclipBoardKeyResource) Read(ctx context.Context, req resource.ReadR
 	key, err := r.client.GetBoardKey(ctx, keyID)
 	if err != nil {
 		if errors.Is(err, client.ErrNotFound) {
-			if state.DeliveryState.ValueString() == "pending" {
-				state.KeyID = types.StringNull()
-				resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
-				return
-			}
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -185,10 +187,16 @@ func (r *PaperclipBoardKeyResource) Read(ctx context.Context, req resource.ReadR
 	} else {
 		state.ExpiresAt = types.StringNull()
 	}
-	if _, ok := r.client.GetMintedToken(keyID); !ok {
+
+	// Preserve delivery_state from durable state without deriving it from in-process memory.
+	if state.DeliveryState.IsNull() || state.DeliveryState.IsUnknown() || state.DeliveryState.ValueString() == "" {
 		state.DeliveryState = types.StringValue("delivered")
-		r.client.MarkTokenDelivered(keyID)
 	}
+
+	if r.client != nil && key.ID != "" {
+		r.client.RecordDeliveredGeneration(key.Name, true, "", state.Generation.ValueInt64(), key.ID)
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -202,12 +210,6 @@ func (r *PaperclipBoardKeyResource) Update(ctx context.Context, req resource.Upd
 	}
 
 	oldKeyID := state.KeyID.ValueString()
-	if oldKeyID == "" && req.Private != nil {
-		superBytes, _ := req.Private.GetKey(ctx, "superseded_key_id")
-		if len(superBytes) > 0 {
-			_ = json.Unmarshal(superBytes, &oldKeyID)
-		}
-	}
 	if oldKeyID == "" {
 		oldKeyID = state.ID.ValueString()
 	}
@@ -215,37 +217,52 @@ func (r *PaperclipBoardKeyResource) Update(ctx context.Context, req resource.Upd
 	shouldRotate := !plan.Generation.Equal(state.Generation) || plan.KeyID.IsUnknown() || state.KeyID.IsNull()
 
 	if shouldRotate {
-		var expiresAt *time.Time
-		if !plan.ExpiresAt.IsNull() && !plan.ExpiresAt.IsUnknown() && plan.ExpiresAt.ValueString() != "" {
-			t, err := time.Parse(time.RFC3339, plan.ExpiresAt.ValueString())
-			if err != nil {
-				resp.Diagnostics.AddError("Invalid expires_at format", fmt.Sprintf("expires_at must be RFC3339 format: %s", err))
-				return
-			}
-			expiresAt = &t
+		newKeyID := ""
+		if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() && plan.KeyID.ValueString() != "" && plan.KeyID.ValueString() != oldKeyID {
+			newKeyID = plan.KeyID.ValueString()
+		} else if kID, _, ok := r.client.GetMintedKeyForName(plan.Name.ValueString(), true, ""); ok && kID != "" && kID != oldKeyID {
+			newKeyID = kID
 		}
 
-		newKey, err := r.client.CreateBoardKey(ctx, plan.Name.ValueString(), expiresAt, plan.RequestedCompanyID.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError("Error rotating Paperclip board key", err.Error())
+		if newKeyID == "" {
+			var expiresAt *time.Time
+			if !plan.ExpiresAt.IsNull() && !plan.ExpiresAt.IsUnknown() && plan.ExpiresAt.ValueString() != "" {
+				t, err := time.Parse(time.RFC3339, plan.ExpiresAt.ValueString())
+				if err != nil {
+					resp.Diagnostics.AddError("Invalid expires_at format", fmt.Sprintf("expires_at must be RFC3339 format: %s", err))
+					return
+				}
+				expiresAt = &t
+			}
+
+			newKey, err := r.client.CreateBoardKey(ctx, plan.Name.ValueString(), expiresAt, plan.RequestedCompanyID.ValueString())
+			if err != nil {
+				resp.Diagnostics.AddError("Error rotating Paperclip board key", err.Error())
+				return
+			}
+			newKeyID = newKey.ID
+			r.client.RegisterMintedKey(newKey.ID, newKey.Token, plan.Name.ValueString(), true, "")
+		}
+
+		if oldKeyID != "" && oldKeyID != newKeyID {
+			if err := r.client.RevokeBoardKey(ctx, oldKeyID); err != nil {
+				resp.Diagnostics.AddError("Error revoking superseded board key", err.Error())
+				return
+			}
+		}
+
+		r.client.AcknowledgeKeyDelivery(newKeyID)
+		r.client.RecordDeliveredGeneration(plan.Name.ValueString(), true, "", plan.Generation.ValueInt64(), newKeyID)
+
+		if err := r.client.ReconcileUnconfirmedBoardKeys(ctx, plan.Name.ValueString(), newKeyID); err != nil {
+			resp.Diagnostics.AddError("Error reconciling unconfirmed board keys", err.Error())
 			return
 		}
 
-		r.client.RegisterMintedToken(newKey.ID, newKey.Token)
-		if oldKeyID != "" && oldKeyID != newKey.ID {
-			r.client.RecordSupersededKey(newKey.ID, oldKeyID, true, "")
-			if resp.Private != nil {
-				superBytes, _ := json.Marshal(oldKeyID)
-				resp.Diagnostics.Append(resp.Private.SetKey(ctx, "superseded_key_id", superBytes)...)
-			}
-		}
-
-		plan.ID = types.StringValue(newKey.ID)
-		plan.KeyID = types.StringValue(newKey.ID)
-		plan.DeliveryState = types.StringValue("pending")
-		if newKey.ExpiresAt != nil {
-			plan.ExpiresAt = types.StringValue(newKey.ExpiresAt.Format(time.RFC3339))
-		} else {
+		plan.ID = types.StringValue(newKeyID)
+		plan.KeyID = types.StringValue(newKeyID)
+		plan.DeliveryState = types.StringValue("delivered")
+		if plan.ExpiresAt.IsUnknown() {
 			plan.ExpiresAt = types.StringNull()
 		}
 

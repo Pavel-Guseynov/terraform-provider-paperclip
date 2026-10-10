@@ -48,18 +48,28 @@ type supersededKeyRecord struct {
 	agentID  string
 }
 
+type mintedKeyRecord struct {
+	keyID   string
+	token   string
+	name    string
+	isBoard bool
+	agentID string
+}
+
 type Client struct {
 	Endpoint   string
 	Token      string
 	HTTPClient *http.Client
 
-	credMu               sync.RWMutex
-	mintedTokens         map[string]string // keyID -> token
-	deliveredTokens      map[string]bool   // keyID -> true (delivery confirmed)
-	supersededKeys       map[string]supersededKeyRecord
-	agentKeyAgents       map[string]string // keyID -> agentID
-	activeEphemeralKeyID string
-	failedDeliveries     map[string]bool
+	credMu                 sync.RWMutex
+	mintedTokens           map[string]string // keyID -> token
+	deliveredTokens        map[string]bool   // keyID -> true (delivery confirmed)
+	supersededKeys         map[string]supersededKeyRecord
+	agentKeyAgents         map[string]string // keyID -> agentID
+	mintedKeys             map[string]mintedKeyRecord
+	mintedKeysByName       map[string]string // lookupKey -> keyID
+	acknowledgedDeliveries map[string]bool   // keyID -> true
+	deliveredGenerations   map[string]int64  // lookupKey -> generation
 }
 
 type HealthResponse struct {
@@ -82,11 +92,14 @@ func NewClient(endpoint, token string) (*Client, error) {
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		mintedTokens:     make(map[string]string),
-		deliveredTokens:  make(map[string]bool),
-		supersededKeys:   make(map[string]supersededKeyRecord),
-		agentKeyAgents:   make(map[string]string),
-		failedDeliveries: make(map[string]bool),
+		mintedTokens:           make(map[string]string),
+		deliveredTokens:        make(map[string]bool),
+		supersededKeys:         make(map[string]supersededKeyRecord),
+		agentKeyAgents:         make(map[string]string),
+		mintedKeys:             make(map[string]mintedKeyRecord),
+		mintedKeysByName:       make(map[string]string),
+		acknowledgedDeliveries: make(map[string]bool),
+		deliveredGenerations:   make(map[string]int64),
 	}
 	return c, nil
 }
