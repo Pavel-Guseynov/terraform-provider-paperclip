@@ -398,11 +398,33 @@ func TestClientCredentialRegistry(t *testing.T) {
 		t.Fatal("expected false for nonexistent superseded key")
 	}
 
+	// SetActiveEphemeralKey, RecordConsumerFailure, and IsDeliveryFailed
+	cli.SetActiveEphemeralKey("eph-1")
+	if cli.IsDeliveryFailed("eph-1") {
+		t.Fatal("expected delivery not failed initially")
+	}
+	cli.RecordConsumerFailure()
+	if !cli.IsDeliveryFailed("eph-1") {
+		t.Fatal("expected delivery to be marked failed")
+	}
+	cli.SetActiveEphemeralKey("")
+	cli.RecordConsumerFailure()
+
+	// RecordConsumerFailure with agent key
+	cli.RegisterMintedAgentKey("ag-1", "eph-ak-1", "token-ak-fail")
+	cli.SetActiveEphemeralKey("eph-ak-1")
+	cli.RecordConsumerFailure()
+	if !cli.IsDeliveryFailed("eph-ak-1") {
+		t.Fatal("expected eph-ak-1 delivery to be marked failed")
+	}
+
 	// ClearMintedToken
+	cli.SetActiveEphemeralKey("bk-1")
 	cli.ClearMintedToken("bk-1")
 	if _, ok := cli.GetMintedToken("bk-1"); ok {
 		t.Fatal("expected bk-1 to be cleared")
 	}
+	cli.SetActiveEphemeralKey("other-key")
 	cli.ClearMintedToken("ak-1")
 	if _, ok := cli.GetAgentIDForKey("ak-1"); ok {
 		t.Fatal("expected ak-1 agentID to be cleared")

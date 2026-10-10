@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
@@ -97,14 +98,6 @@ func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephem
 			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 			return
 		}
-		if agentID, ok := r.client.GetAgentIDForKey(keyID); ok && agentID != "" {
-			if key, err := r.client.GetAgentKey(ctx, agentID, keyID); err == nil && key != nil {
-				r.client.MarkTokenDelivered(keyID)
-				data.Token = types.StringNull()
-				resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
-				return
-			}
-		}
 		if req.ClientCapabilities.DeferralAllowed {
 			resp.Deferred = &ephemeral.Deferred{
 				Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
@@ -120,6 +113,7 @@ func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephem
 
 	data.Token = types.StringValue(token)
 	r.keyID = keyID
+	r.client.SetActiveEphemeralKey(keyID)
 	if resp.Private != nil {
 		keyBytes, _ := json.Marshal(keyID)
 		resp.Diagnostics.Append(resp.Private.SetKey(ctx, "key_id", keyBytes)...)
@@ -177,6 +171,18 @@ func (r *PaperclipAgentKeyEphemeralResource) Close(ctx context.Context, req ephe
 		if id, ok := r.client.GetAgentIDForKey(keyID); ok {
 			agentID = id
 		}
+	}
+
+	isFailed := ctx.Err() != nil || r.client.IsDeliveryFailed(keyID)
+	if isFailed {
+		if agentID != "" {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := r.client.RevokeAgentKey(cleanupCtx, agentID, keyID); err != nil {
+				resp.Diagnostics.AddError("Error revoking unconfirmed agent key", err.Error())
+			}
+		}
+		return
 	}
 
 	r.client.MarkTokenDelivered(keyID)

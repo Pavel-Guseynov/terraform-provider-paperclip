@@ -1139,6 +1139,10 @@ func (c *Client) ClearMintedToken(keyID string) {
 	delete(c.mintedTokens, keyID)
 	delete(c.supersededKeys, keyID)
 	delete(c.agentKeyAgents, keyID)
+	delete(c.failedDeliveries, keyID)
+	if c.activeEphemeralKeyID == keyID {
+		c.activeEphemeralKeyID = ""
+	}
 }
 
 func (c *Client) RecordSupersededKey(newKeyID, oldKeyID string, isBoard bool, agentID string) {
@@ -1179,6 +1183,41 @@ func (c *Client) MarkTokenDelivered(keyID string) {
 	defer c.credMu.Unlock()
 	c.deliveredTokens[keyID] = true
 	delete(c.mintedTokens, keyID)
+}
+
+func (c *Client) SetActiveEphemeralKey(keyID string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	c.activeEphemeralKeyID = keyID
+}
+
+func (c *Client) RecordConsumerFailure() {
+	c.credMu.Lock()
+	keyID := c.activeEphemeralKeyID
+	if keyID == "" {
+		c.credMu.Unlock()
+		return
+	}
+	c.failedDeliveries[keyID] = true
+	agentID := c.agentKeyAgents[keyID]
+	delete(c.mintedTokens, keyID)
+	c.activeEphemeralKeyID = ""
+	c.credMu.Unlock()
+
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if agentID != "" {
+		_ = c.RevokeAgentKey(cleanupCtx, agentID, keyID)
+	} else {
+		_ = c.RevokeBoardKey(cleanupCtx, keyID)
+	}
+}
+
+func (c *Client) IsDeliveryFailed(keyID string) bool {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	return c.failedDeliveries[keyID]
 }
 
 func (c *Client) FindActiveBoardKeyByName(ctx context.Context, name string) (*PaperclipBoardKey, error) {
@@ -1874,6 +1913,7 @@ func (c *Client) CreateSecret(ctx context.Context, companyID, name, description,
 	}
 	var resp PaperclipSecret
 	if err := c.paperclipSecretRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/secrets", url.PathEscape(companyID)), payload, &resp); err != nil {
+		c.RecordConsumerFailure()
 		return nil, err
 	}
 	if resp.CompanyID == "" {
@@ -1915,6 +1955,7 @@ func (c *Client) RotateSecret(ctx context.Context, secretID, value string) (*Pap
 	payload := map[string]interface{}{"value": value}
 	var resp PaperclipSecret
 	if err := c.paperclipSecretRequest(ctx, http.MethodPost, fmt.Sprintf("/api/secrets/%s/rotate", url.PathEscape(secretID)), payload, &resp); err != nil {
+		c.RecordConsumerFailure()
 		return nil, err
 	}
 	resp.Value = value

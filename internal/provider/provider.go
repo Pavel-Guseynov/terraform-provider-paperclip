@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -232,12 +233,6 @@ func (r *PaperclipBoardKeyEphemeralResource) Open(ctx context.Context, req ephem
 			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 			return
 		}
-		if key, err := r.client.GetBoardKey(ctx, keyID); err == nil && key != nil {
-			r.client.MarkTokenDelivered(keyID)
-			data.Token = types.StringNull()
-			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
-			return
-		}
 		if req.ClientCapabilities.DeferralAllowed {
 			resp.Deferred = &ephemeral.Deferred{
 				Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
@@ -253,6 +248,7 @@ func (r *PaperclipBoardKeyEphemeralResource) Open(ctx context.Context, req ephem
 
 	data.Token = types.StringValue(token)
 	r.keyID = keyID
+	r.client.SetActiveEphemeralKey(keyID)
 	if resp.Private != nil {
 		keyBytes, _ := json.Marshal(keyID)
 		resp.Diagnostics.Append(resp.Private.SetKey(ctx, "key_id", keyBytes)...)
@@ -294,6 +290,16 @@ func (r *PaperclipBoardKeyEphemeralResource) Close(ctx context.Context, req ephe
 		if sID, ok := r.client.GetSupersededKey(keyID); ok {
 			supersededKeyID = sID
 		}
+	}
+
+	isFailed := ctx.Err() != nil || r.client.IsDeliveryFailed(keyID)
+	if isFailed {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := r.client.RevokeBoardKey(cleanupCtx, keyID); err != nil {
+			resp.Diagnostics.AddError("Error revoking unconfirmed board key", err.Error())
+		}
+		return
 	}
 
 	r.client.MarkTokenDelivered(keyID)

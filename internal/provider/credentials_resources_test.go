@@ -43,6 +43,30 @@ func initCloseRequestPrivate(req *ephemeral.CloseRequest, private any) {
 	}
 }
 
+func initUpdateResponsePrivate(resp *resource.UpdateResponse) any {
+	f, ok := reflect.TypeOf(resource.UpdateResponse{}).FieldByName("Private")
+	if !ok {
+		return nil
+	}
+	val := reflect.New(f.Type.Elem())
+	reflect.ValueOf(resp).Elem().FieldByName("Private").Set(val)
+	return val.Interface()
+}
+
+func initUpdateRequestPrivate(req *resource.UpdateRequest, private any) {
+	if private == nil {
+		return
+	}
+	f, ok := reflect.TypeOf(resource.UpdateRequest{}).FieldByName("Private")
+	if !ok {
+		return
+	}
+	val := reflect.ValueOf(private)
+	if val.Type() == f.Type {
+		reflect.ValueOf(req).Elem().FieldByName("Private").Set(val)
+	}
+}
+
 func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	t.Setenv("PAPERCLIP_SCRATCH_DIR", t.TempDir())
 	ctx := context.Background()
@@ -306,6 +330,23 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	}
 	delete(mockState.revokedKeys, "bk-1")
 
+	// Read - Not found when delivery_state is pending sets KeyID to null instead of removing resource
+	pendingModel := createdModel
+	pendingModel.DeliveryState = types.StringValue("pending")
+	pendingModel.KeyID = types.StringValue("bk-pending-rev")
+	mockState.revokedKeys["bk-pending-rev"] = true
+	var pendingState tfsdk.State = tfsdk.State{Schema: schema}
+	_ = pendingState.Set(ctx, &pendingModel)
+	var pendingReadResp resource.ReadResponse
+	pendingReadResp.State = pendingState
+	r.Read(ctx, resource.ReadRequest{State: pendingState}, &pendingReadResp)
+	var pendingCheck PaperclipBoardKeyResourceModel
+	_ = pendingReadResp.State.Get(ctx, &pendingCheck)
+	if !pendingCheck.KeyID.IsNull() {
+		t.Fatal("expected KeyID to be null when revoked while pending")
+	}
+	delete(mockState.revokedKeys, "bk-pending-rev")
+
 	// Update - Unchanged generation (no rotation)
 	unchangedModel := createdModel
 	unchangedModel.Name = types.StringValue("renamed-no-rot")
@@ -405,6 +446,41 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	r.Update(ctx, resource.UpdateRequest{Plan: rotNoExpPlan, State: rotNoExpState}, &rotNoExpUpdateResp)
 	if rotNoExpUpdateResp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error on rotation update without expires_at: %v", rotNoExpUpdateResp.Diagnostics)
+	}
+
+	// Update - With Private state tracking superseded key across generations
+	var privResp resource.UpdateResponse
+	privResp.State = tfsdk.State{Schema: schema}
+	privData := initUpdateResponsePrivate(&privResp)
+	rotWithPrivPlan := tfsdk.Plan{Schema: schema}
+	rotWithPrivModel := createdModel
+	rotWithPrivModel.Name = types.StringValue("rot-with-priv")
+	rotWithPrivModel.Generation = types.Int64Value(4)
+	_ = rotWithPrivPlan.Set(ctx, &rotWithPrivModel)
+	r.Update(ctx, resource.UpdateRequest{Plan: rotWithPrivPlan, State: rotUpdateResp.State}, &privResp)
+	if privResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on rot with priv: %v", privResp.Diagnostics)
+	}
+
+	// Update - When KeyID is null and ID is null, but req.Private provides superseded_key_id
+	var nullState tfsdk.State = tfsdk.State{Schema: schema}
+	nullModel := createdModel
+	nullModel.KeyID = types.StringNull()
+	nullModel.ID = types.StringNull()
+	_ = nullState.Set(ctx, &nullModel)
+	var recovPlan tfsdk.Plan = tfsdk.Plan{Schema: schema}
+	recovModel := createdModel
+	recovModel.Generation = types.Int64Value(5)
+	_ = recovPlan.Set(ctx, &recovModel)
+	var recovReq resource.UpdateRequest
+	recovReq.Plan = recovPlan
+	recovReq.State = nullState
+	initUpdateRequestPrivate(&recovReq, privData)
+	var recovResp resource.UpdateResponse
+	recovResp.State = tfsdk.State{Schema: schema}
+	r.Update(ctx, recovReq, &recovResp)
+	if recovResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on recovery update with private: %v", recovResp.Diagnostics)
 	}
 
 	// Delete - API failure
@@ -828,6 +904,23 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	}
 	delete(mockState.revokedKeys, "ak-1")
 
+	// Read - Not found when delivery_state is pending sets KeyID to null instead of removing resource
+	pendingAgentModel := createdModel
+	pendingAgentModel.DeliveryState = types.StringValue("pending")
+	pendingAgentModel.KeyID = types.StringValue("ak-pending-rev")
+	mockState.revokedKeys["ak-pending-rev"] = true
+	var pendingAgentState tfsdk.State = tfsdk.State{Schema: schema}
+	_ = pendingAgentState.Set(ctx, &pendingAgentModel)
+	var pendingAgentReadResp resource.ReadResponse
+	pendingAgentReadResp.State = pendingAgentState
+	r.Read(ctx, resource.ReadRequest{State: pendingAgentState}, &pendingAgentReadResp)
+	var pendingAgentCheck PaperclipAgentKeyResourceModel
+	_ = pendingAgentReadResp.State.Get(ctx, &pendingAgentCheck)
+	if !pendingAgentCheck.KeyID.IsNull() {
+		t.Fatal("expected KeyID to be null when revoked while pending")
+	}
+	delete(mockState.revokedKeys, "ak-pending-rev")
+
 	// Update - Unchanged generation (no rotation)
 	unchangedModel := createdModel
 	unchangedModel.Name = types.StringValue("renamed-no-rot")
@@ -928,6 +1021,41 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	r.Update(ctx, resource.UpdateRequest{Plan: rotAkNoKeyIDPlan, State: rotAkState}, &rotAkUpdateResp)
 	if rotAkUpdateResp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error on rotation update with empty KeyID: %v", rotAkUpdateResp.Diagnostics)
+	}
+
+	// Update - With Private state tracking superseded key across generations
+	var privAgentResp resource.UpdateResponse
+	privAgentResp.State = tfsdk.State{Schema: schema}
+	privAgentData := initUpdateResponsePrivate(&privAgentResp)
+	rotWithPrivAgentPlan := tfsdk.Plan{Schema: schema}
+	rotWithPrivAgentModel := createdModel
+	rotWithPrivAgentModel.Name = types.StringValue("rot-ak-with-priv")
+	rotWithPrivAgentModel.Generation = types.Int64Value(4)
+	_ = rotWithPrivAgentPlan.Set(ctx, &rotWithPrivAgentModel)
+	r.Update(ctx, resource.UpdateRequest{Plan: rotWithPrivAgentPlan, State: rotUpdateResp.State}, &privAgentResp)
+	if privAgentResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on rot ak with priv: %v", privAgentResp.Diagnostics)
+	}
+
+	// Update - When KeyID is null and ID is null, but req.Private provides superseded_key_id
+	var nullAgentState tfsdk.State = tfsdk.State{Schema: schema}
+	nullAgentModel := createdModel
+	nullAgentModel.KeyID = types.StringNull()
+	nullAgentModel.ID = types.StringNull()
+	_ = nullAgentState.Set(ctx, &nullAgentModel)
+	var recovAgentPlan tfsdk.Plan = tfsdk.Plan{Schema: schema}
+	recovAgentModel := createdModel
+	recovAgentModel.Generation = types.Int64Value(5)
+	_ = recovAgentPlan.Set(ctx, &recovAgentModel)
+	var recovAgentReq resource.UpdateRequest
+	recovAgentReq.Plan = recovAgentPlan
+	recovAgentReq.State = nullAgentState
+	initUpdateRequestPrivate(&recovAgentReq, privAgentData)
+	var recovAgentResp resource.UpdateResponse
+	recovAgentResp.State = tfsdk.State{Schema: schema}
+	r.Update(ctx, recovAgentReq, &recovAgentResp)
+	if recovAgentResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on recovery update with private: %v", recovAgentResp.Diagnostics)
 	}
 
 	// Delete - API failure
@@ -1085,7 +1213,8 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 			t.Fatalf("unexpected error when token present: %v", hitResp.Diagnostics)
 		}
 
-		// Existing active key on server: token set to null
+		// Existing delivered key in durable state: token set to null
+		cli.MarkTokenDelivered("bk-existing")
 		existModel := PaperclipBoardKeyEphemeralResourceModel{
 			KeyID: types.StringValue("bk-existing"),
 		}
@@ -1144,6 +1273,40 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 		failRes.Close(ctx, ephemeral.CloseRequest{}, &failCloseResp)
 		if !failCloseResp.Diagnostics.HasError() {
 			t.Fatal("expected error diagnostic on failed close revoking superseded board key")
+		}
+
+		// Close when delivery failed: unconfirmed newly-minted key is revoked and superseded key is NOT revoked
+		goodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodDelete && r.URL.Path == "/api/board-api-keys/bk-del-fail" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer goodServer.Close()
+		goodCli, _ := client.NewClient(goodServer.URL, "test-token")
+		goodCli.RecordSupersededKey("bk-del-fail", "bk-predecessor", true, "")
+		goodCli.SetActiveEphemeralKey("bk-del-fail")
+		goodCli.RecordConsumerFailure()
+		delFailRes := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
+		delFailRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: goodCli}, &confResp)
+		delFailRes.keyID = "bk-del-fail"
+		var delFailCloseResp ephemeral.CloseResponse
+		delFailRes.Close(ctx, ephemeral.CloseRequest{}, &delFailCloseResp)
+		if delFailCloseResp.Diagnostics.HasError() {
+			t.Fatalf("unexpected error on failed delivery close: %v", delFailCloseResp.Diagnostics)
+		}
+		if goodCli.IsTokenDelivered("bk-del-fail") {
+			t.Fatal("failed key should not be marked delivered")
+		}
+
+		// Close when delivery failed and RevokeBoardKey fails
+		failCli.SetActiveEphemeralKey("bk-fail-new")
+		failCli.RecordConsumerFailure()
+		var failUnconfirmedCloseResp ephemeral.CloseResponse
+		failRes.Close(ctx, ephemeral.CloseRequest{}, &failUnconfirmedCloseResp)
+		if !failUnconfirmedCloseResp.Diagnostics.HasError() {
+			t.Fatal("expected error diagnostic when revoking unconfirmed board key fails")
 		}
 
 		// KeyID empty / null
@@ -1229,8 +1392,8 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 			t.Fatalf("unexpected error when agent token present: %v", hitResp.Diagnostics)
 		}
 
-		// Existing active key on server: token set to null
-		cli.RegisterMintedAgentKey("ag-1", "ak-existing", "")
+		// Existing delivered key in durable state: token set to null
+		cli.MarkTokenDelivered("ak-existing")
 		existModel := PaperclipAgentKeyEphemeralResourceModel{
 			KeyID: types.StringValue("ak-existing"),
 		}
@@ -1290,6 +1453,53 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 		failRes.Close(ctx, ephemeral.CloseRequest{}, &failCloseResp)
 		if !failCloseResp.Diagnostics.HasError() {
 			t.Fatal("expected error diagnostic on failed close revoking superseded agent key")
+		}
+
+		// Close when delivery failed: unconfirmed newly-minted key is revoked and superseded key is NOT revoked
+		goodAkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodDelete && r.URL.Path == "/api/agents/agent-1/keys/ak-del-fail" {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer goodAkServer.Close()
+		goodAkCli, _ := client.NewClient(goodAkServer.URL, "test-token")
+		goodAkCli.RegisterMintedAgentKey("agent-1", "ak-del-fail", "tok-1")
+		goodAkCli.RecordSupersededKey("ak-del-fail", "ak-predecessor", false, "agent-1")
+		goodAkCli.SetActiveEphemeralKey("ak-del-fail")
+		goodAkCli.RecordConsumerFailure()
+		delFailAkRes := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
+		delFailAkRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: goodAkCli}, &confResp)
+		delFailAkRes.keyID = "ak-del-fail"
+		var delFailAkCloseResp ephemeral.CloseResponse
+		delFailAkRes.Close(ctx, ephemeral.CloseRequest{}, &delFailAkCloseResp)
+		if delFailAkCloseResp.Diagnostics.HasError() {
+			t.Fatalf("unexpected error on failed delivery agent close: %v", delFailAkCloseResp.Diagnostics)
+		}
+		if goodAkCli.IsTokenDelivered("ak-del-fail") {
+			t.Fatal("failed key should not be marked delivered")
+		}
+
+		// Close when delivery failed and RevokeAgentKey fails
+		failCli.SetActiveEphemeralKey("ak-fail-new")
+		failCli.RecordConsumerFailure()
+		var failUnconfirmedAkCloseResp ephemeral.CloseResponse
+		failRes.Close(ctx, ephemeral.CloseRequest{}, &failUnconfirmedAkCloseResp)
+		if !failUnconfirmedAkCloseResp.Diagnostics.HasError() {
+			t.Fatal("expected error diagnostic when revoking unconfirmed agent key fails")
+		}
+
+		// Close when delivery failed with empty agentID
+		goodAkCli.SetActiveEphemeralKey("ak-no-agent")
+		goodAkCli.RecordConsumerFailure()
+		delNoAgentRes := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
+		delNoAgentRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: goodAkCli}, &confResp)
+		delNoAgentRes.keyID = "ak-no-agent"
+		var noAgentCloseResp ephemeral.CloseResponse
+		delNoAgentRes.Close(ctx, ephemeral.CloseRequest{}, &noAgentCloseResp)
+		if noAgentCloseResp.Diagnostics.HasError() {
+			t.Fatalf("unexpected error on close without agentID: %v", noAgentCloseResp.Diagnostics)
 		}
 
 		// KeyID is empty / null

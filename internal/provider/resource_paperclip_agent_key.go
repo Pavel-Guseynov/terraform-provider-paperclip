@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -303,6 +304,11 @@ func (r *PaperclipAgentKeyResource) Read(ctx context.Context, req resource.ReadR
 	key, err := r.client.GetAgentKey(ctx, state.AgentID.ValueString(), keyID)
 	if err != nil {
 		if errors.Is(err, client.ErrNotFound) {
+			if state.DeliveryState.ValueString() == "pending" {
+				state.KeyID = types.StringNull()
+				resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+				return
+			}
 			resp.State.RemoveResource(ctx)
 			return
 		}
@@ -318,8 +324,9 @@ func (r *PaperclipAgentKeyResource) Read(ctx context.Context, req resource.ReadR
 		resp.Diagnostics.Append(d...)
 		state.Scope = modelScope
 	}
-	if r.client.IsTokenDelivered(keyID) {
+	if _, ok := r.client.GetMintedToken(keyID); !ok {
 		state.DeliveryState = types.StringValue("delivered")
+		r.client.MarkTokenDelivered(keyID)
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -334,11 +341,17 @@ func (r *PaperclipAgentKeyResource) Update(ctx context.Context, req resource.Upd
 	}
 
 	oldKeyID := state.KeyID.ValueString()
+	if oldKeyID == "" && req.Private != nil {
+		superBytes, _ := req.Private.GetKey(ctx, "superseded_key_id")
+		if len(superBytes) > 0 {
+			_ = json.Unmarshal(superBytes, &oldKeyID)
+		}
+	}
 	if oldKeyID == "" {
 		oldKeyID = state.ID.ValueString()
 	}
 
-	shouldRotate := !plan.Generation.Equal(state.Generation) || plan.KeyID.IsUnknown()
+	shouldRotate := !plan.Generation.Equal(state.Generation) || plan.KeyID.IsUnknown() || state.KeyID.IsNull()
 
 	if shouldRotate {
 		scope, err := scopeModelToClient(ctx, plan.Scope)
@@ -356,6 +369,10 @@ func (r *PaperclipAgentKeyResource) Update(ctx context.Context, req resource.Upd
 		r.client.RegisterMintedAgentKey(plan.AgentID.ValueString(), newKey.ID, newKey.Token)
 		if oldKeyID != "" && oldKeyID != newKey.ID {
 			r.client.RecordSupersededKey(newKey.ID, oldKeyID, false, plan.AgentID.ValueString())
+			if resp.Private != nil {
+				superBytes, _ := json.Marshal(oldKeyID)
+				resp.Diagnostics.Append(resp.Private.SetKey(ctx, "superseded_key_id", superBytes)...)
+			}
 		}
 
 		plan.ID = types.StringValue(newKey.ID)
@@ -424,7 +441,7 @@ func (r *PaperclipAgentKeyResource) ModifyPlan(ctx context.Context, req resource
 		return
 	}
 
-	if !plan.Generation.Equal(state.Generation) {
+	if !plan.Generation.Equal(state.Generation) || state.KeyID.IsNull() {
 		plan.ID = types.StringUnknown()
 		plan.KeyID = types.StringUnknown()
 		plan.DeliveryState = types.StringUnknown()
