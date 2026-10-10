@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -16,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -53,7 +55,16 @@ func (r *PaperclipAppPermissionResource) Schema(ctx context.Context, req resourc
 			"id":                          schema.StringAttribute{Computed: true, PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
 			"company_id":                  schema.StringAttribute{Required: true, PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
 			"connection_id":               schema.StringAttribute{Required: true, PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()}},
-			"tool_selection":              schema.StringAttribute{Required: true, Description: "JSON registry tool names, writes approval mode, and explicit per-tool approval overrides."},
+			"tool_selection": schema.StringAttribute{
+				Required:    true,
+				Description: "JSON registry tool names, writes approval mode, and explicit per-tool approval overrides.",
+				Validators: []validator.String{
+					JSONAttributeValidator(),
+				},
+				PlanModifiers: []planmodifier.String{
+					SemanticJSONPlanModifier(),
+				},
+			},
 			"enabled_catalog_entry_ids":   schema.ListAttribute{ElementType: types.StringType, Computed: true},
 			"ask_first_catalog_entry_ids": schema.ListAttribute{ElementType: types.StringType, Computed: true},
 			"reviewed_catalog_entry_ids":  schema.ListAttribute{ElementType: types.StringType, Computed: true},
@@ -76,7 +87,7 @@ func (r *PaperclipAppPermissionResource) Configure(ctx context.Context, req reso
 }
 
 func (r *PaperclipAppPermissionResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
-	if req.Plan.Raw.IsNull() {
+	if r.client == nil || req.Plan.Raw.IsNull() {
 		return
 	}
 	var plan PaperclipAppPermissionResourceModel
@@ -129,6 +140,50 @@ func stringListsEqual(left, right []string) bool {
 	sort.Strings(a)
 	sort.Strings(b)
 	return reflect.DeepEqual(a, b)
+}
+
+func reconstructToolSelection(catalog []map[string]interface{}, enabledIDs, askFirstIDs []string) string {
+	idToName := make(map[string]string)
+	idToReadOnly := make(map[string]bool)
+	for _, entry := range catalog {
+		if id, ok := entry["id"].(string); ok {
+			if name, ok := entry["toolName"].(string); ok {
+				idToName[id] = name
+				readOnly := entry["isReadOnly"] == true && entry["isWrite"] != true && entry["isDestructive"] != true
+				idToReadOnly[id] = readOnly
+			}
+		}
+	}
+	enabledNames := make([]string, 0, len(enabledIDs))
+	askFirstSet := make(map[string]bool, len(askFirstIDs))
+	for _, id := range askFirstIDs {
+		askFirstSet[id] = true
+	}
+	overrides := make(map[string]string)
+	for _, id := range enabledIDs {
+		name, ok := idToName[id]
+		if !ok {
+			continue
+		}
+		enabledNames = append(enabledNames, name)
+		defaultAskFirst := !idToReadOnly[id]
+		actualAskFirst := askFirstSet[id]
+		if defaultAskFirst && !actualAskFirst {
+			overrides[name] = "auto"
+		} else if !defaultAskFirst && actualAskFirst {
+			overrides[name] = "writes"
+		}
+	}
+	sort.Strings(enabledNames)
+	sel := client.PaperclipToolSelection{
+		ApprovalMode: "writes",
+		EnabledTools: enabledNames,
+	}
+	if len(overrides) > 0 {
+		sel.ToolApprovalModes = overrides
+	}
+	data, _ := json.Marshal(sel)
+	return string(data)
 }
 
 // revoke removes all App access to the connection: emptying its native profile
@@ -334,6 +389,16 @@ func (r *PaperclipAppPermissionResource) Read(ctx context.Context, req resource.
 		state.AgentIDs, _ = types.ListValueFrom(ctx, types.StringType, actual.AgentIDs)
 	}
 	state.ID = types.StringValue(state.ConnectionID.ValueString())
+
+	catalog, catErr := r.client.GetConnectionCatalog(ctx, state.ConnectionID.ValueString())
+	if catErr == nil && len(catalog) > 0 {
+		if state.ToolSelection.IsNull() || state.ToolSelection.IsUnknown() || state.ToolSelection.ValueString() == "" {
+			if reconstructed := reconstructToolSelection(catalog, actual.EnabledIDs, actual.AskFirstIDs); reconstructed != "" {
+				state.ToolSelection = types.StringValue(reconstructed)
+			}
+		}
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 

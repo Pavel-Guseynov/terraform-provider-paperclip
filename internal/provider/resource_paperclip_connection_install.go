@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -127,6 +128,15 @@ func (r *PaperclipConnectionInstallResource) Create(ctx context.Context, req res
 	}
 
 	plan.ID = types.StringValue(plan.ConnectionID.ValueString())
+	if plan.AgentIDs.IsUnknown() {
+		plan.AgentIDs = types.ListNull(types.StringType)
+	}
+	if plan.TargetType.IsUnknown() {
+		plan.TargetType = types.StringValue("agent")
+	}
+	if plan.CompanyID.IsUnknown() {
+		plan.CompanyID = types.StringNull()
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -139,6 +149,10 @@ func (r *PaperclipConnectionInstallResource) Read(ctx context.Context, req resou
 
 	installs, err := r.client.GetConnectionInstalls(ctx, state.ConnectionID.ValueString())
 	if err != nil {
+		if errors.Is(err, client.ErrNotFound) {
+			resp.State.RemoveResource(ctx)
+			return
+		}
 		resp.Diagnostics.AddError("Error reading Paperclip connection installs", err.Error())
 		return
 	}
@@ -155,7 +169,6 @@ func (r *PaperclipConnectionInstallResource) Read(ctx context.Context, req resou
 		}
 	}
 
-	state.ID = types.StringValue(state.ConnectionID.ValueString())
 	var priorAgents []string
 	if !state.AgentIDs.IsNull() && !state.AgentIDs.IsUnknown() {
 		resp.Diagnostics.Append(state.AgentIDs.ElementsAs(ctx, &priorAgents, false)...)
@@ -163,13 +176,21 @@ func (r *PaperclipConnectionInstallResource) Read(ctx context.Context, req resou
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	if !stringListsEqual(priorAgents, agentIDs) || state.AgentIDs.IsUnknown() {
+
+	state.ID = types.StringValue(state.ConnectionID.ValueString())
+	if len(agentIDs) == 0 && (state.AgentIDs.IsNull() || state.AgentIDs.IsUnknown()) {
+		state.AgentIDs = types.ListNull(types.StringType)
+	} else if !stringListsEqual(priorAgents, agentIDs) || state.AgentIDs.IsNull() || state.AgentIDs.IsUnknown() {
 		listVal, diags := types.ListValueFrom(ctx, types.StringType, agentIDs)
 		resp.Diagnostics.Append(diags...)
 		state.AgentIDs = listVal
 	}
 	if foundCompanyID != "" {
 		state.CompanyID = types.StringValue(foundCompanyID)
+		state.TargetType = types.StringValue("company")
+	} else {
+		state.CompanyID = types.StringNull()
+		state.TargetType = types.StringValue("agent")
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -217,6 +238,15 @@ func (r *PaperclipConnectionInstallResource) Update(ctx context.Context, req res
 	}
 
 	plan.ID = types.StringValue(plan.ConnectionID.ValueString())
+	if plan.AgentIDs.IsUnknown() {
+		plan.AgentIDs = types.ListNull(types.StringType)
+	}
+	if plan.TargetType.IsUnknown() {
+		plan.TargetType = types.StringValue("agent")
+	}
+	if plan.CompanyID.IsUnknown() {
+		plan.CompanyID = types.StringNull()
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -227,14 +257,28 @@ func (r *PaperclipConnectionInstallResource) Delete(ctx context.Context, req res
 		return
 	}
 
-	_, _ = r.client.UpdateConnectionInstalls(ctx, state.ConnectionID.ValueString(), []map[string]interface{}{})
+	if _, err := r.client.UpdateConnectionInstalls(ctx, state.ConnectionID.ValueString(), []map[string]interface{}{}); err != nil {
+		if !errors.Is(err, client.ErrNotFound) {
+			resp.Diagnostics.AddError("Error removing Paperclip connection installs", err.Error())
+			return
+		}
+	}
 }
 
 func (r *PaperclipConnectionInstallResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	id := req.ID
 	if strings.Contains(id, "/") {
 		parts := strings.SplitN(id, "/", 2)
-		id = parts[1]
+		if parts[0] != "" && parts[1] != "" {
+			id = parts[1]
+		} else {
+			resp.Diagnostics.AddError("Invalid Connection Install Import ID", "Expected <connection_id> or <company_id>/<connection_id>")
+			return
+		}
+	}
+	if id == "" {
+		resp.Diagnostics.AddError("Invalid Connection Install Import ID", "Expected <connection_id> or <company_id>/<connection_id>")
+		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("connection_id"), id)...)

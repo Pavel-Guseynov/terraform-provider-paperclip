@@ -182,6 +182,10 @@ func (r *PaperclipStdioTemplateResource) Create(ctx context.Context, req resourc
 	}
 	plan.TemplateID = types.StringValue(created.TemplateID)
 	plan.Name = types.StringValue(created.Name)
+	plan.Description = stringOrNull(created.Description)
+	plan.Command = types.StringValue(created.Command)
+	plan.Args = templateListState(ctx, plan.Args, created.Args)
+	plan.EnvKeys = templateListState(ctx, plan.EnvKeys, created.EnvKeys)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -219,9 +223,7 @@ func (r *PaperclipStdioTemplateResource) Read(ctx context.Context, req resource.
 	}
 	state.TemplateID = types.StringValue(tpl.TemplateID)
 	state.Name = types.StringValue(tpl.Name)
-	if tpl.Description != "" {
-		state.Description = types.StringValue(tpl.Description)
-	}
+	state.Description = stringOrNull(tpl.Description)
 	state.Command = types.StringValue(tpl.Command)
 	state.Args = templateListState(ctx, state.Args, tpl.Args)
 	state.EnvKeys = templateListState(ctx, state.EnvKeys, tpl.EnvKeys)
@@ -260,10 +262,15 @@ func (r *PaperclipStdioTemplateResource) ImportState(ctx context.Context, req re
 	id := req.ID
 	if strings.Contains(id, "/") {
 		parts := strings.SplitN(id, "/", 2)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("template_id"), parts[1])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
-		return
+		if parts[0] != "" && parts[1] != "" {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("template_id"), parts[1])...)
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+			return
+		}
 	}
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	resp.Diagnostics.AddError(
+		"Invalid Stdio Template Import ID",
+		fmt.Sprintf("Expected <company_id>/<template_id>, got %q", id),
+	)
 }

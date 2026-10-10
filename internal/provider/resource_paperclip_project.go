@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -69,17 +70,15 @@ func (r *PaperclipProjectResource) Schema(ctx context.Context, req resource.Sche
 			"description": schema.StringAttribute{
 				Description: "Optional project description.",
 				Optional:    true,
-				Computed:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
-				},
 			},
 			"execution_workspace_policy": schema.StringAttribute{
 				Description: "Project-owned Paperclip execution workspace policy as a JSON object.",
 				Optional:    true,
-				Computed:    true,
+				Validators: []validator.String{
+					JSONAttributeValidator(),
+				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+					SemanticJSONPlanModifier(),
 				},
 			},
 		},
@@ -183,7 +182,7 @@ func (r *PaperclipProjectResource) Create(ctx context.Context, req resource.Crea
 	plan.CompanyID = types.StringValue(proj.CompanyID)
 	plan.Name = types.StringValue(proj.Name)
 	plan.Description = stringOrNull(proj.Description)
-	plan.ExecutionWorkspacePolicy = jsonStringOrNull(proj.ExecutionWorkspacePolicy)
+	plan.ExecutionWorkspacePolicy = refreshSemanticJSON(plan.ExecutionWorkspacePolicy, proj.ExecutionWorkspacePolicy)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -211,7 +210,7 @@ func (r *PaperclipProjectResource) Read(ctx context.Context, req resource.ReadRe
 	}
 	state.Name = types.StringValue(proj.Name)
 	state.Description = stringOrNull(proj.Description)
-	state.ExecutionWorkspacePolicy = jsonStringOrNull(proj.ExecutionWorkspacePolicy)
+	state.ExecutionWorkspacePolicy = refreshSemanticJSON(state.ExecutionWorkspacePolicy, proj.ExecutionWorkspacePolicy)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -246,7 +245,7 @@ func (r *PaperclipProjectResource) Update(ctx context.Context, req resource.Upda
 	plan.ID = types.StringValue(proj.ID)
 	plan.Name = types.StringValue(proj.Name)
 	plan.Description = stringOrNull(proj.Description)
-	plan.ExecutionWorkspacePolicy = jsonStringOrNull(proj.ExecutionWorkspacePolicy)
+	plan.ExecutionWorkspacePolicy = refreshSemanticJSON(plan.ExecutionWorkspacePolicy, proj.ExecutionWorkspacePolicy)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -270,11 +269,19 @@ func (r *PaperclipProjectResource) ImportState(ctx context.Context, req resource
 	id := req.ID
 	if strings.Contains(id, "/") {
 		parts := strings.SplitN(id, "/", 2)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+		if parts[0] != "" && parts[1] != "" {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+			return
+		}
+	} else if id != "" {
+		resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 		return
 	}
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	resp.Diagnostics.AddError(
+		"Invalid Project Import ID",
+		fmt.Sprintf("Expected <company_id>/<project_id> or <project_id>, got %q", id),
+	)
 }
 
 // PaperclipProjectLeadResource separates assignment from project creation so
@@ -423,6 +430,17 @@ func (r *PaperclipProjectLeadResource) Delete(ctx context.Context, req resource.
 }
 
 func (r *PaperclipProjectLeadResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project_id"), req.ID)...)
+	id := req.ID
+	if strings.Contains(id, "/") {
+		parts := strings.SplitN(id, "/", 2)
+		if parts[1] != "" {
+			id = parts[1]
+		}
+	}
+	if id == "" {
+		resp.Diagnostics.AddError("Invalid Project Lead Import ID", "Expected non-empty project_id")
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("project_id"), id)...)
 }

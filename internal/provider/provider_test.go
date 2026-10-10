@@ -1036,8 +1036,8 @@ func TestProviderStructure(t *testing.T) {
 	}
 
 	res := p.Resources(ctx)
-	if len(res) != 16 {
-		t.Fatalf("expected exactly 16 resources, got %d", len(res))
+	if len(res) != 20 {
+		t.Fatalf("expected exactly 20 resources, got %d", len(res))
 	}
 	for _, rFn := range res {
 		r := rFn()
@@ -1149,8 +1149,7 @@ func TestPaperclipBoardKeyEphemeralResource(t *testing.T) {
 		t.Fatalf("unexpected ephemeral result: %#v", result)
 	}
 
-	// Consumer records delivery success, then Close confirms delivery
-	cli.RecordTokenDeliverySuccess("pcp_board_value")
+	// Close marks delivery and revokes superseded key
 	var closeResp ephemeral.CloseResponse
 	r.Close(ctx, ephemeral.CloseRequest{}, &closeResp)
 	if closeResp.Diagnostics.HasError() {
@@ -1253,8 +1252,7 @@ func TestPaperclipAgentKeyEphemeralResource(t *testing.T) {
 		t.Fatalf("unexpected ephemeral result: %#v", result)
 	}
 
-	// Consumer records delivery success, then Close confirms delivery
-	cli.RecordTokenDeliverySuccess("pcp_agent_value")
+	// Close marks delivery and revokes superseded key
 	var closeResp ephemeral.CloseResponse
 	r.Close(ctx, ephemeral.CloseRequest{}, &closeResp)
 	if closeResp.Diagnostics.HasError() {
@@ -1404,13 +1402,22 @@ func TestAgentSchemaIdentityAttributes(t *testing.T) {
 		t.Fatalf("name must be required: %+v", nameAttr)
 	}
 
-	for _, field := range []string{"role", "adapter_type", "title", "runtime_config", "adapter_config", "metadata", "instructions"} {
+	for _, field := range []string{"role", "adapter_type", "adapter_config"} {
 		attr, ok := resp.Schema.Attributes[field].(schema.StringAttribute)
 		if !ok {
 			t.Fatalf("%s attribute missing or not a string attribute", field)
 		}
 		if attr.Required || !attr.Optional || !attr.Computed {
 			t.Fatalf("%s must be optional and computed to allow identity-only declarations: %+v", field, attr)
+		}
+	}
+	for _, field := range []string{"title", "runtime_config", "metadata", "instructions"} {
+		attr, ok := resp.Schema.Attributes[field].(schema.StringAttribute)
+		if !ok {
+			t.Fatalf("%s attribute missing or not a string attribute", field)
+		}
+		if attr.Required || !attr.Optional || attr.Computed {
+			t.Fatalf("%s must be optional and non-computed to allow explicit clearing: %+v", field, attr)
 		}
 	}
 
@@ -1485,16 +1492,16 @@ func TestAgentPermissionReconciliation(t *testing.T) {
 	// Declared values that differ are written once, carrying the undeclared flag
 	// back unchanged because the route replaces all of them, and proven by a read.
 	expected := []map[string]bool{{"canCreateAgents": false, "canCreateSkills": true, "canAssignTasks": true}}
-	if err := r.reconcilePermissions(ctx, "agent-1", true, false); err != nil || !reflect.DeepEqual(*writes, expected) {
+	if err := r.reconcilePermissions(ctx, "agent-1", true, false, true, "", nil); err != nil || !reflect.DeepEqual(*writes, expected) {
 		t.Fatalf("drifted create-agents flag must be written once with the other flags preserved: err %v writes %v", err, *writes)
 	}
 	// Declared values the board already reports write nothing.
-	if err := r.reconcilePermissions(ctx, "agent-1", true, false); err != nil || len(*writes) != 1 {
+	if err := r.reconcilePermissions(ctx, "agent-1", true, false, true, "", nil); err != nil || len(*writes) != 1 {
 		t.Fatalf("converged values must not be rewritten: err %v writes %v", err, *writes)
 	}
 	// A changed task-assignment declaration keeps the declared create-agents value.
 	expected = append(expected, map[string]bool{"canCreateAgents": false, "canCreateSkills": true, "canAssignTasks": false})
-	if err := r.reconcilePermissions(ctx, "agent-1", false, false); err != nil || !reflect.DeepEqual(*writes, expected) {
+	if err := r.reconcilePermissions(ctx, "agent-1", false, false, true, "", nil); err != nil || !reflect.DeepEqual(*writes, expected) {
 		t.Fatalf("task assignment must be written with the declared create-agents value: err %v writes %v", err, *writes)
 	}
 }
@@ -1503,14 +1510,14 @@ func TestAgentPermissionReconciliationRefusesUnprovenState(t *testing.T) {
 	ctx := context.Background()
 	t.Run("board reports no permissions", func(t *testing.T) {
 		r, writes := permissionBoard(t, nil, true)
-		err := r.reconcilePermissions(ctx, "agent-1", true, false)
+		err := r.reconcilePermissions(ctx, "agent-1", true, false, true, "", nil)
 		if err == nil || !strings.Contains(err.Error(), "board reported no permissions for agent agent-1") || len(*writes) != 0 {
 			t.Fatalf("absent permissions must fail without a write: err %v writes %v", err, *writes)
 		}
 	})
 	t.Run("board ignores the write", func(t *testing.T) {
 		r, writes := permissionBoard(t, map[string]interface{}{"canCreateAgents": true, "canCreateSkills": true, "canAssignTasks": true}, false)
-		err := r.reconcilePermissions(ctx, "agent-1", true, false)
+		err := r.reconcilePermissions(ctx, "agent-1", true, false, true, "", nil)
 		if err == nil || !strings.Contains(err.Error(), "agent permissions did not converge: declared can_assign_tasks true and can_create_agents false") || len(*writes) != 1 {
 			t.Fatalf("an unconverged write must fail after one attempt: err %v writes %v", err, *writes)
 		}
@@ -1535,24 +1542,20 @@ func TestResultValueNormalization(t *testing.T) {
 	}
 }
 
-func TestSkillContentStatePreservesManagedContentWhenPaperclipOmitsIt(t *testing.T) {
-	configured := types.StringValue("# Managed skill")
-	if got := skillContentState(configured, ""); got != configured {
-		t.Fatalf("omissive response must preserve configured content: %#v", got)
+func TestSkillExactContentAndDescriptionRefresh(t *testing.T) {
+	if got := stringOrNull(""); !got.IsNull() {
+		t.Fatalf("empty string must normalize to null, got: %#v", got)
 	}
-	if got := skillContentState(configured, "# Board content"); got.ValueString() != "# Board content" {
-		t.Fatalf("returned content must refresh state: %#v", got)
+	if got := stringOrNull("desc"); got.ValueString() != "desc" {
+		t.Fatalf("non-empty string must normalize to value, got: %#v", got)
 	}
-	for name, value := range map[string]types.String{
-		"null":    types.StringNull(),
-		"unknown": types.StringUnknown(),
-	} {
-		t.Run(name, func(t *testing.T) {
-			got := skillContentState(value, "")
-			if got.IsNull() || got.IsUnknown() || got.ValueString() != "" {
-				t.Fatalf("absent prior content must normalize to a known value: %#v", got)
-			}
-		})
+	skill := client.PaperclipSkill{
+		Name:        "skill-1",
+		Content:     "# Exact content",
+		Description: "remote desc",
+	}
+	if skill.Content != "# Exact content" {
+		t.Fatalf("unexpected content: %s", skill.Content)
 	}
 }
 
@@ -1771,25 +1774,44 @@ func TestPaperclipSecretRotationValidationFailsClosed(t *testing.T) {
 	}
 }
 
-func TestPaperclipResourceStatePreservesConfiguredFieldsWhenResponseOmitsThem(t *testing.T) {
+func TestPaperclipResourceStateRefreshesExactRemoteState(t *testing.T) {
 	appState := PaperclipAppResourceModel{
 		ApplicationKey: types.StringValue("committer"),
 		Description:    types.StringValue("generated application"),
 		Metadata:       types.StringValue(`{"managed":true}`),
 	}
 	normalizePaperclipAppState(&appState, &client.PaperclipToolApp{ID: "app-1", Name: "committer"})
-	if appState.ApplicationKey.ValueString() != "committer" || appState.Description.ValueString() != "generated application" || appState.Metadata.ValueString() != `{"managed":true}` {
-		t.Fatalf("omissive application response must preserve configured state: %+v", appState)
+	if !appState.ApplicationKey.IsNull() || !appState.Description.IsNull() || !appState.Metadata.IsNull() {
+		t.Fatalf("omissive application response must refresh cleared fields to null: %+v", appState)
+	}
+
+	appStateWithRemote := PaperclipAppResourceModel{}
+	normalizePaperclipAppState(&appStateWithRemote, &client.PaperclipToolApp{
+		ID:             "app-1",
+		Name:           "committer",
+		ApplicationKey: "app-key",
+		Description:    "app-desc",
+		Metadata:       map[string]interface{}{"managed": true},
+	})
+	if appStateWithRemote.ApplicationKey.ValueString() != "app-key" || appStateWithRemote.Description.ValueString() != "app-desc" || appStateWithRemote.Metadata.IsNull() {
+		t.Fatalf("remote values must refresh into state: %+v", appStateWithRemote)
 	}
 
 	secretState := PaperclipSecretResourceModel{Description: types.StringValue("operator token")}
 	normalizePaperclipSecretState(&secretState, &client.PaperclipSecret{ID: "secret-1", Name: "committer-token"})
-	if secretState.Description.ValueString() != "operator token" {
-		t.Fatalf("omissive secret response must preserve configured description: %+v", secretState)
+	if !secretState.Description.IsNull() {
+		t.Fatalf("omissive secret response must refresh cleared description to null: %+v", secretState)
+	}
+
+	secretStateWithDesc := PaperclipSecretResourceModel{}
+	normalizePaperclipSecretState(&secretStateWithDesc, &client.PaperclipSecret{ID: "secret-1", Name: "committer-token", Description: "operator token"})
+	if secretStateWithDesc.Description.ValueString() != "operator token" {
+		t.Fatalf("remote description must refresh into state: %+v", secretStateWithDesc)
 	}
 }
 
-func TestApplicationCRUDPreservesConfiguredKeyWhenResponsesOmitIt(t *testing.T) {
+func TestApplicationCRUDRefreshesRemoteKey(t *testing.T) {
+	returnAppKey := true
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		if req.Method == http.MethodPost || req.Method == http.MethodPatch {
@@ -1801,7 +1823,15 @@ func TestApplicationCRUDPreservesConfiguredKeyWhenResponsesOmitIt(t *testing.T) 
 				t.Fatalf("configured application key was not sent to Paperclip: %#v", body)
 			}
 		}
-		_, _ = w.Write([]byte(`{"id":"app-123","companyId":"comp-123","name":"gitea-committer"}`))
+		resp := map[string]interface{}{
+			"id":        "app-123",
+			"companyId": "comp-123",
+			"name":      "gitea-committer",
+		}
+		if returnAppKey {
+			resp["applicationKey"] = "harness.mcp.gitea-committer"
+		}
+		_ = json.NewEncoder(w).Encode(resp)
 	}))
 	defer server.Close()
 	cli, err := client.NewClient(server.URL, "test-token")
@@ -1835,24 +1865,23 @@ func TestApplicationCRUDPreservesConfiguredKeyWhenResponsesOmitIt(t *testing.T) 
 			}
 		})
 	}
+
+	returnAppKey = false
+	got, err := r.readAppState(context.Background(), model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.ApplicationKey.IsNull() {
+		t.Fatalf("expected omitted application key to refresh to null, got: %#v", got.ApplicationKey)
+	}
 }
 
 func TestApplicationKeyState(t *testing.T) {
-	configured := types.StringValue("harness.mcp.gitea-committer")
-	if got := applicationStringState(configured, "paperclip.canonical-key"); got.ValueString() != "paperclip.canonical-key" {
-		t.Fatalf("returned application key must replace prior state, got %#v", got)
+	if got := stringOrNull("paperclip.canonical-key"); got.ValueString() != "paperclip.canonical-key" {
+		t.Fatalf("returned application key must normalize to value, got %#v", got)
 	}
-	for name, prior := range map[string]types.String{
-		"unset":   types.StringNull(),
-		"unknown": types.StringUnknown(),
-		"empty":   types.StringValue(""),
-	} {
-		t.Run(name+" optional application key remains known null", func(t *testing.T) {
-			got := applicationStringState(prior, "")
-			if !got.IsNull() || got.IsUnknown() {
-				t.Fatalf("omitted optional application key must normalize to known null: %#v", got)
-			}
-		})
+	if got := stringOrNull(""); !got.IsNull() {
+		t.Fatalf("omitted optional application key must normalize to known null: %#v", got)
 	}
 }
 

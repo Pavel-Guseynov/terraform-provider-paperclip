@@ -576,33 +576,36 @@ func TestPaperclipClientCRUD(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			w.WriteHeader(http.StatusCreated)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":                           "comp-123",
-				"name":                         req["name"],
-				"description":                  req["description"],
-				"requireTaskStartConfirmation": req["requireTaskStartConfirmation"],
+				"id":                       "comp-123",
+				"name":                     req["name"],
+				"description":              req["description"],
+				"status":                   "active",
+				"defaultResponsibleUserId": req["defaultResponsibleUserId"],
 			})
 		case r.URL.Path == "/api/companies/comp-123" && r.Method == http.MethodGet:
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":                           "comp-123",
-				"name":                         "guseynov",
-				"description":                  "desc",
-				"requireTaskStartConfirmation": true,
+				"id":          "comp-123",
+				"name":        "guseynov",
+				"description": "desc",
+				"status":      "active",
 			})
 		case r.URL.Path == "/api/companies/comp-123" && r.Method == http.MethodPatch:
 			var req map[string]interface{}
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":                           "comp-123",
-				"name":                         req["name"],
-				"description":                  req["description"],
-				"requireTaskStartConfirmation": req["requireTaskStartConfirmation"],
+				"id":          "comp-123",
+				"name":        req["name"],
+				"description": req["description"],
+				"status":      "active",
 			})
 		case r.URL.Path == "/api/companies/comp-123/archive" && r.Method == http.MethodPost:
+			w.WriteHeader(http.StatusNoContent)
+		case r.URL.Path == "/api/companies/comp-123" && r.Method == http.MethodDelete:
 			w.WriteHeader(http.StatusNoContent)
 		case r.URL.Path == "/api/companies" && r.Method == http.MethodGet:
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"companies": []map[string]interface{}{
-					{"id": "comp-123", "name": "guseynov", "requireTaskStartConfirmation": true},
+					{"id": "comp-123", "name": "guseynov", "status": "active"},
 				},
 			})
 		case r.URL.Path == "/api/companies/comp-123/projects" && r.Method == http.MethodPost:
@@ -701,7 +704,7 @@ func TestPaperclipClientCRUD(t *testing.T) {
 		case r.URL.Path == "/api/companies/comp-123/skills/skill-123/files" && r.Method == http.MethodPatch:
 			var req map[string]interface{}
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			if req["path"] != "SKILL.md" || req["content"] == "" {
+			if req["path"] != "SKILL.md" || req["content"] == nil {
 				w.WriteHeader(http.StatusBadRequest)
 				return
 			}
@@ -961,20 +964,23 @@ func TestPaperclipClientCRUD(t *testing.T) {
 	}
 
 	// 1. Company
-	comp, err := cli.CreateCompany(ctx, "guseynov", "desc", true)
-	if err != nil || comp.ID != "comp-123" || !comp.RequireTaskStartConfirmation {
+	comp, err := cli.CreateCompany(ctx, PaperclipCompany{Name: "guseynov", Description: "desc", DefaultResponsibleUserID: "user-1"})
+	if err != nil || comp.ID != "comp-123" || comp.Status != "active" {
 		t.Fatalf("CreateCompany failed: %v", err)
 	}
 	comp, err = cli.GetCompany(ctx, "comp-123")
-	if err != nil || comp.Name != "guseynov" || !comp.RequireTaskStartConfirmation {
+	if err != nil || comp.Name != "guseynov" || comp.Status != "active" {
 		t.Fatalf("GetCompany failed: %v", err)
 	}
 	comp, err = cli.FindCompanyByName(ctx, "guseynov")
-	if err != nil || comp.ID != "comp-123" || !comp.RequireTaskStartConfirmation {
+	if err != nil || comp.ID != "comp-123" || comp.Status != "active" {
 		t.Fatalf("FindCompanyByName failed: %v", err)
 	}
-	comp, err = cli.UpdateCompany(ctx, "comp-123", "guseynov2", "desc2", true)
-	if err != nil || !comp.RequireTaskStartConfirmation {
+	comp, err = cli.UpdateCompany(ctx, "comp-123", map[string]interface{}{
+		"name":        "guseynov2",
+		"description": "desc2",
+	})
+	if err != nil || comp.Name != "guseynov2" {
 		t.Fatalf("UpdateCompany failed: %v", err)
 	}
 	comps, err := cli.ListCompanies(ctx)
@@ -983,6 +989,9 @@ func TestPaperclipClientCRUD(t *testing.T) {
 	}
 	if err := cli.ArchiveCompany(ctx, "comp-123"); err != nil {
 		t.Fatalf("ArchiveCompany failed: %v", err)
+	}
+	if err := cli.DeleteCompany(ctx, "comp-123"); err != nil {
+		t.Fatalf("DeleteCompany failed: %v", err)
 	}
 
 	// 2. Project
@@ -1064,6 +1073,11 @@ func TestPaperclipClientCRUD(t *testing.T) {
 	if _, err = cli.UpdateSkill(ctx, "comp-123", "skill-123", metadataOnly); err != nil {
 		t.Fatalf("UpdateSkill without content failed: %v", err)
 	}
+	metadataWithVal := *skill
+	metadataWithVal.Metadata = map[string]interface{}{"author": "antigravity"}
+	if _, err = cli.UpdateSkill(ctx, "comp-123", "skill-123", metadataWithVal); err != nil {
+		t.Fatalf("UpdateSkill with metadata failed: %v", err)
+	}
 	skills, err := cli.ListSkills(ctx, "comp-123")
 	if err != nil || len(skills) != 1 {
 		t.Fatalf("ListSkills failed: %v", err)
@@ -1115,6 +1129,19 @@ func TestPaperclipClientCRUD(t *testing.T) {
 	agent, err = cli.UpdateAgent(ctx, "agent-123", *agent)
 	if err != nil {
 		t.Fatalf("UpdateAgent failed: %v", err)
+	}
+	agentWithConfigs := *agent
+	agentWithConfigs.RuntimeConfig = map[string]interface{}{"env": "prod"}
+	agentWithConfigs.AdapterConfig = map[string]interface{}{"model": "gpt-4"}
+	agentWithConfigs.Metadata = map[string]interface{}{"team": "core"}
+	if _, err = cli.UpdateAgent(ctx, "agent-123", agentWithConfigs); err != nil {
+		t.Fatalf("UpdateAgent with configs failed: %v", err)
+	}
+	agentWithReset := *agent
+	agentWithReset.AdapterConfig = nil
+	agentWithReset.ReplaceAdapterConfig = true
+	if _, err = cli.UpdateAgent(ctx, "agent-123", agentWithReset); err != nil {
+		t.Fatalf("UpdateAgent with reset failed: %v", err)
 	}
 	agents, err := cli.ListAgents(ctx, "comp-123")
 	if err != nil || len(agents) != 1 {

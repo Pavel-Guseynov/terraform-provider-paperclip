@@ -125,8 +125,6 @@ func (r *PaperclipBoardKeyResource) Create(ctx context.Context, req resource.Cre
 		expiresAt = &t
 	}
 
-	preExistingKey, _ := r.client.FindActiveBoardKeyByName(ctx, plan.Name.ValueString())
-
 	key, err := r.client.CreateBoardKey(ctx, plan.Name.ValueString(), expiresAt, plan.RequestedCompanyID.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating Paperclip board key", err.Error())
@@ -134,13 +132,10 @@ func (r *PaperclipBoardKeyResource) Create(ctx context.Context, req resource.Cre
 	}
 
 	r.client.RegisterMintedToken(key.ID, key.Token)
-	if preExistingKey != nil {
-		r.client.RecordSupersededKey(key.ID, preExistingKey.ID, true, "")
-	}
 
 	plan.ID = types.StringValue(key.ID)
 	plan.KeyID = types.StringValue(key.ID)
-	plan.DeliveryState = types.StringValue("delivered")
+	plan.DeliveryState = types.StringValue("pending")
 	if key.ExpiresAt != nil {
 		plan.ExpiresAt = types.StringValue(key.ExpiresAt.Format(time.RFC3339))
 	} else {
@@ -184,8 +179,9 @@ func (r *PaperclipBoardKeyResource) Read(ctx context.Context, req resource.ReadR
 	} else {
 		state.ExpiresAt = types.StringNull()
 	}
-	state.DeliveryState = types.StringValue("delivered")
-	r.client.MarkTokenDelivered(key.ID)
+	if r.client.IsTokenDelivered(keyID) {
+		state.DeliveryState = types.StringValue("delivered")
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -229,7 +225,7 @@ func (r *PaperclipBoardKeyResource) Update(ctx context.Context, req resource.Upd
 
 		plan.ID = types.StringValue(newKey.ID)
 		plan.KeyID = types.StringValue(newKey.ID)
-		plan.DeliveryState = types.StringValue("delivered")
+		plan.DeliveryState = types.StringValue("pending")
 		if newKey.ExpiresAt != nil {
 			plan.ExpiresAt = types.StringValue(newKey.ExpiresAt.Format(time.RFC3339))
 		} else {
@@ -242,7 +238,7 @@ func (r *PaperclipBoardKeyResource) Update(ctx context.Context, req resource.Upd
 
 	plan.ID = state.ID
 	plan.KeyID = state.KeyID
-	plan.DeliveryState = types.StringValue("delivered")
+	plan.DeliveryState = state.DeliveryState
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

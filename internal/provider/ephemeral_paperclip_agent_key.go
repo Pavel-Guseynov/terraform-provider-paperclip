@@ -97,11 +97,13 @@ func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephem
 			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 			return
 		}
-		if key, err := r.client.FindAgentKeyByID(ctx, keyID); err == nil && key != nil {
-			r.client.MarkTokenDelivered(keyID)
-			data.Token = types.StringNull()
-			resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
-			return
+		if agentID, ok := r.client.GetAgentIDForKey(keyID); ok && agentID != "" {
+			if key, err := r.client.GetAgentKey(ctx, agentID, keyID); err == nil && key != nil {
+				r.client.MarkTokenDelivered(keyID)
+				data.Token = types.StringNull()
+				resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+				return
+			}
 		}
 		if req.ClientCapabilities.DeferralAllowed {
 			resp.Deferred = &ephemeral.Deferred{
@@ -140,6 +142,7 @@ func (r *PaperclipAgentKeyEphemeralResource) Close(ctx context.Context, req ephe
 	}
 	var keyID string
 	var agentID string
+	var supersededKeyID string
 	if req.Private != nil {
 		keyIDBytes, diags := req.Private.GetKey(ctx, "key_id")
 		resp.Diagnostics.Append(diags...)
@@ -152,6 +155,12 @@ func (r *PaperclipAgentKeyEphemeralResource) Close(ctx context.Context, req ephe
 		if len(agentIDBytes) > 0 {
 			_ = json.Unmarshal(agentIDBytes, &agentID)
 		}
+
+		superBytes, diags := req.Private.GetKey(ctx, "superseded_key_id")
+		resp.Diagnostics.Append(diags...)
+		if len(superBytes) > 0 {
+			_ = json.Unmarshal(superBytes, &supersededKeyID)
+		}
 	}
 	if keyID == "" {
 		keyID = r.keyID
@@ -159,19 +168,21 @@ func (r *PaperclipAgentKeyEphemeralResource) Close(ctx context.Context, req ephe
 	if keyID == "" {
 		return
 	}
+	if supersededKeyID == "" {
+		if sID, ok := r.client.GetSupersededKey(keyID); ok {
+			supersededKeyID = sID
+		}
+	}
 	if agentID == "" {
 		if id, ok := r.client.GetAgentIDForKey(keyID); ok {
 			agentID = id
 		}
 	}
 
-	if r.client.IsDeliveryConfirmed(keyID) {
-		if err := r.client.ConfirmDelivery(ctx, keyID); err != nil {
-			resp.Diagnostics.AddError("Error confirming agent key delivery", err.Error())
-		}
-	} else {
-		if err := r.client.ReconcileFailedAgentKeyDelivery(ctx, agentID, keyID); err != nil {
-			resp.Diagnostics.AddError("Error reconciling failed agent key delivery", err.Error())
+	r.client.MarkTokenDelivered(keyID)
+	if supersededKeyID != "" && agentID != "" {
+		if err := r.client.RevokeAgentKey(ctx, agentID, supersededKeyID); err != nil {
+			resp.Diagnostics.AddError("Error revoking superseded agent key", err.Error())
 		}
 	}
 }

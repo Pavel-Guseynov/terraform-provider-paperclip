@@ -270,11 +270,18 @@ func (r *PaperclipBoardKeyEphemeralResource) Close(ctx context.Context, req ephe
 		return
 	}
 	var keyID string
+	var supersededKeyID string
 	if req.Private != nil {
 		keyIDBytes, diags := req.Private.GetKey(ctx, "key_id")
 		resp.Diagnostics.Append(diags...)
 		if len(keyIDBytes) > 0 {
 			_ = json.Unmarshal(keyIDBytes, &keyID)
+		}
+
+		superBytes, diags := req.Private.GetKey(ctx, "superseded_key_id")
+		resp.Diagnostics.Append(diags...)
+		if len(superBytes) > 0 {
+			_ = json.Unmarshal(superBytes, &supersededKeyID)
 		}
 	}
 	if keyID == "" {
@@ -283,14 +290,16 @@ func (r *PaperclipBoardKeyEphemeralResource) Close(ctx context.Context, req ephe
 	if keyID == "" {
 		return
 	}
-
-	if r.client.IsDeliveryConfirmed(keyID) {
-		if err := r.client.ConfirmDelivery(ctx, keyID); err != nil {
-			resp.Diagnostics.AddError("Error confirming board key delivery", err.Error())
+	if supersededKeyID == "" {
+		if sID, ok := r.client.GetSupersededKey(keyID); ok {
+			supersededKeyID = sID
 		}
-	} else {
-		if err := r.client.ReconcileFailedDelivery(ctx, keyID); err != nil {
-			resp.Diagnostics.AddError("Error reconciling failed board key delivery", err.Error())
+	}
+
+	r.client.MarkTokenDelivered(keyID)
+	if supersededKeyID != "" {
+		if err := r.client.RevokeBoardKey(ctx, supersededKeyID); err != nil {
+			resp.Diagnostics.AddError("Error revoking superseded board key", err.Error())
 		}
 	}
 }
@@ -319,6 +328,10 @@ func (p *PaperclipProvider) Resources(ctx context.Context) []func() resource.Res
 		NewPaperclipStdioTemplateResource,
 		NewPaperclipConnectionInstallResource,
 		NewPaperclipAppPermissionResource,
+		NewPaperclipSkillAssignmentResource,
+		NewPaperclipSkillPolicyResource,
+		NewPaperclipGoalResource,
+		NewPaperclipBudgetPolicyResource,
 		NewPaperclipBoardKeyResource,
 		NewPaperclipAgentKeyResource,
 	}

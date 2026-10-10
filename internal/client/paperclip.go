@@ -22,7 +22,7 @@ import (
 type PaperclipToolSelection struct {
 	EnabledTools      []string          `json:"enabled_tools"`
 	ApprovalMode      string            `json:"approval_mode"`
-	ToolApprovalModes map[string]string `json:"tool_approval_modes"`
+	ToolApprovalModes map[string]string `json:"tool_approval_modes,omitempty"`
 }
 
 func SelectAppPermissions(catalog []map[string]interface{}, policyJSON string, agents []string) (PaperclipAppFinish, error) {
@@ -288,10 +288,72 @@ func extractStringSlice(v interface{}) []string {
 }
 
 type PaperclipCompany struct {
-	ID                           string `json:"id,omitempty"`
-	Name                         string `json:"name"`
-	Description                  string `json:"description,omitempty"`
-	RequireTaskStartConfirmation bool   `json:"requireTaskStartConfirmation"`
+	ID                               string                 `json:"id,omitempty"`
+	Name                             string                 `json:"name"`
+	Description                      string                 `json:"description,omitempty"`
+	Status                           string                 `json:"status,omitempty"`
+	DefaultResponsibleUserID         string                 `json:"defaultResponsibleUserId,omitempty"`
+	RequireBoardApprovalForNewAgents bool                   `json:"requireBoardApprovalForNewAgents"`
+	InteractionResolverGovernance    map[string]interface{} `json:"interactionResolverGovernance,omitempty"`
+	FeedbackDataSharingEnabled       bool                   `json:"feedbackDataSharingEnabled"`
+	LogoAssetID                      string                 `json:"logoAssetId,omitempty"`
+}
+
+type PaperclipGoal struct {
+	ID           string `json:"id,omitempty"`
+	CompanyID    string `json:"companyId,omitempty"`
+	Title        string `json:"title"`
+	Description  string `json:"description,omitempty"`
+	Level        string `json:"level,omitempty"`
+	Status       string `json:"status,omitempty"`
+	ParentID     string `json:"parentId,omitempty"`
+	OwnerAgentID string `json:"ownerAgentId,omitempty"`
+	CreatedAt    string `json:"createdAt,omitempty"`
+	UpdatedAt    string `json:"updatedAt,omitempty"`
+}
+
+type PaperclipBudgetPolicy struct {
+	ScopeType       string `json:"scopeType"`
+	ScopeID         string `json:"scopeId"`
+	Metric          string `json:"metric"`
+	WindowKind      string `json:"windowKind"`
+	Amount          int64  `json:"amount"`
+	WarnPercent     int64  `json:"warnPercent"`
+	HardStopEnabled bool   `json:"hardStopEnabled"`
+	NotifyEnabled   bool   `json:"notifyEnabled"`
+	IsActive        bool   `json:"isActive"`
+}
+
+type PaperclipBudgetPolicySummary struct {
+	PolicyID           string  `json:"policyId"`
+	CompanyID          string  `json:"companyId"`
+	ScopeType          string  `json:"scopeType"`
+	ScopeID            string  `json:"scopeId"`
+	ScopeName          string  `json:"scopeName,omitempty"`
+	Metric             string  `json:"metric"`
+	WindowKind         string  `json:"windowKind"`
+	Amount             int64   `json:"amount"`
+	ObservedAmount     int64   `json:"observedAmount"`
+	RemainingAmount    int64   `json:"remainingAmount"`
+	UtilizationPercent float64 `json:"utilizationPercent"`
+	WarnPercent        int64   `json:"warnPercent"`
+	HardStopEnabled    bool    `json:"hardStopEnabled"`
+	NotifyEnabled      bool    `json:"notifyEnabled"`
+	IsActive           bool    `json:"isActive"`
+	Status             string  `json:"status,omitempty"`
+	Paused             bool    `json:"paused,omitempty"`
+	PauseReason        string  `json:"pauseReason,omitempty"`
+	WindowStart        string  `json:"windowStart,omitempty"`
+	WindowEnd          string  `json:"windowEnd,omitempty"`
+}
+
+type PaperclipBudgetOverview struct {
+	CompanyID            string                         `json:"companyId"`
+	Policies             []PaperclipBudgetPolicySummary `json:"policies"`
+	ActiveIncidents      []interface{}                  `json:"activeIncidents,omitempty"`
+	PausedAgentCount     int                            `json:"pausedAgentCount,omitempty"`
+	PausedProjectCount   int                            `json:"pausedProjectCount,omitempty"`
+	PendingApprovalCount int                            `json:"pendingApprovalCount,omitempty"`
 }
 
 type PaperclipProject struct {
@@ -317,16 +379,78 @@ type PaperclipWorkspace struct {
 	SourceType string `json:"sourceType,omitempty"`
 }
 
+type PaperclipSkillFileEntry struct {
+	Path string `json:"path"`
+	Kind string `json:"kind,omitempty"`
+}
+
+type PaperclipSkillFileDetail struct {
+	SkillID  string `json:"skillId,omitempty"`
+	Path     string `json:"path"`
+	Kind     string `json:"kind,omitempty"`
+	Content  string `json:"content"`
+	Language string `json:"language,omitempty"`
+	Markdown bool   `json:"markdown,omitempty"`
+	Editable bool   `json:"editable,omitempty"`
+}
+
+type PaperclipSkillVersion struct {
+	ID             string `json:"id"`
+	CompanyID      string `json:"companyId"`
+	CompanySkillID string `json:"companySkillId"`
+	RevisionNumber int64  `json:"revisionNumber,omitempty"`
+	Label          string `json:"label,omitempty"`
+	CreatedAt      string `json:"createdAt,omitempty"`
+}
+
 type PaperclipSkill struct {
-	ID            string                 `json:"id,omitempty"`
-	CompanyID     string                 `json:"companyId,omitempty"`
-	Name          string                 `json:"name"`
-	Slug          string                 `json:"slug"`
-	Description   string                 `json:"description,omitempty"`
-	Content       string                 `json:"content,omitempty"`
-	Markdown      string                 `json:"markdown,omitempty"`
-	SchemaVersion int64                  `json:"schemaVersion,omitempty"`
-	Metadata      map[string]interface{} `json:"metadata,omitempty"`
+	ID               string                    `json:"id,omitempty"`
+	CompanyID        string                    `json:"companyId,omitempty"`
+	Key              string                    `json:"key,omitempty"`
+	Name             string                    `json:"name"`
+	Slug             string                    `json:"slug"`
+	Description      string                    `json:"description,omitempty"`
+	Content          string                    `json:"content,omitempty"`
+	Markdown         string                    `json:"markdown,omitempty"`
+	IconURL          string                    `json:"iconUrl,omitempty"`
+	Color            string                    `json:"color,omitempty"`
+	Tagline          string                    `json:"tagline,omitempty"`
+	AuthorName       string                    `json:"authorName,omitempty"`
+	HomepageURL      string                    `json:"homepageUrl,omitempty"`
+	Categories       []string                  `json:"categories,omitempty"`
+	SharingScope     string                    `json:"sharingScope,omitempty"`
+	FolderID         string                    `json:"folderId,omitempty"`
+	ForkedFromID     string                    `json:"forkedFromSkillId,omitempty"`
+	SourceType       string                    `json:"sourceType,omitempty"`
+	SourceLocator    string                    `json:"sourceLocator,omitempty"`
+	CurrentVersionID string                    `json:"currentVersionId,omitempty"`
+	CurrentVersion   *PaperclipSkillVersion    `json:"currentVersion,omitempty"`
+	FileInventory    []PaperclipSkillFileEntry `json:"fileInventory,omitempty"`
+	SchemaVersion    int64                     `json:"schemaVersion,omitempty"`
+	Metadata         map[string]interface{}    `json:"metadata,omitempty"`
+}
+
+type PaperclipDesiredSkillEntry struct {
+	Key       string  `json:"key"`
+	VersionID *string `json:"versionId,omitempty"`
+}
+
+type PaperclipAgentSkillSnapshot struct {
+	AdapterType         string                       `json:"adapterType"`
+	Supported           bool                         `json:"supported"`
+	Mode                string                       `json:"mode"`
+	DesiredSkills       []string                     `json:"desiredSkills"`
+	DesiredSkillEntries []PaperclipDesiredSkillEntry `json:"desiredSkillEntries"`
+	Entries             []map[string]interface{}     `json:"entries"`
+	Warnings            []string                     `json:"warnings"`
+}
+
+type PaperclipSkillPolicy struct {
+	SchemaVersion int64                    `json:"schemaVersion"`
+	Revision      int64                    `json:"revision"`
+	DefaultEffect string                   `json:"defaultEffect"`
+	Rules         []map[string]interface{} `json:"rules"`
+	Materialized  bool                     `json:"materialized"`
 }
 
 type PaperclipSecret struct {
@@ -338,20 +462,36 @@ type PaperclipSecret struct {
 }
 
 type PaperclipAgent struct {
-	ID            string                 `json:"id,omitempty"`
-	CompanyID     string                 `json:"companyId,omitempty"`
-	Name          string                 `json:"name"`
-	Role          string                 `json:"role,omitempty"`
-	Title         string                 `json:"title,omitempty"`
-	AdapterType   string                 `json:"adapterType,omitempty"`
-	Status        string                 `json:"status,omitempty"`
-	RuntimeConfig map[string]interface{} `json:"runtimeConfig,omitempty"`
+	ID                   string                 `json:"id,omitempty"`
+	CompanyID            string                 `json:"companyId,omitempty"`
+	Name                 string                 `json:"name"`
+	Role                 string                 `json:"role,omitempty"`
+	Title                string                 `json:"title,omitempty"`
+	Icon                 string                 `json:"icon,omitempty"`
+	ReportsTo            string                 `json:"reportsTo,omitempty"`
+	Capabilities         string                 `json:"capabilities,omitempty"`
+	DefaultEnvironmentID string                 `json:"defaultEnvironmentId,omitempty"`
+	AdapterType          string                 `json:"adapterType,omitempty"`
+	Status               string                 `json:"status,omitempty"`
+	RuntimeConfig        map[string]interface{} `json:"runtimeConfig,omitempty"`
 	AdapterConfig        map[string]interface{} `json:"adapterConfig,omitempty"`
 	ReplaceAdapterConfig bool                   `json:"replaceAdapterConfig,omitempty"`
 	Metadata             map[string]interface{} `json:"metadata,omitempty"`
 	// Permissions is board-reported on a single-agent read and never sent back
 	// on an agent write; the permissions route owns it.
-	Permissions *PaperclipAgentPermissions `json:"permissions,omitempty"`
+	Permissions  *PaperclipAgentPermissions `json:"permissions,omitempty"`
+	HireApproval *PaperclipApproval         `json:"hireApproval,omitempty"`
+}
+
+type PaperclipApproval struct {
+	ID     string `json:"id"`
+	Type   string `json:"type"`
+	Status string `json:"status"`
+}
+
+type PaperclipAgentHireResponse struct {
+	Agent    PaperclipAgent     `json:"agent"`
+	Approval *PaperclipApproval `json:"approval,omitempty"`
 }
 
 // PaperclipAgentPermissions is the agent's own permission flags and the body of
@@ -359,9 +499,11 @@ type PaperclipAgent struct {
 // the unchanged flags back. Writing CanAssignTasks false also withdraws the
 // explicit tasks:assign grant Paperclip attaches to every agent it creates.
 type PaperclipAgentPermissions struct {
-	CanCreateAgents bool `json:"canCreateAgents"`
-	CanCreateSkills bool `json:"canCreateSkills"`
-	CanAssignTasks  bool `json:"canAssignTasks"`
+	CanCreateAgents     bool                   `json:"canCreateAgents"`
+	CanCreateSkills     bool                   `json:"canCreateSkills"`
+	CanAssignTasks      bool                   `json:"canAssignTasks"`
+	TrustPreset         string                 `json:"trustPreset,omitempty"`
+	AuthorizationPolicy map[string]interface{} `json:"authorizationPolicy,omitempty"`
 }
 
 type AgentKeyScope struct {
@@ -456,10 +598,10 @@ func (conn PaperclipToolConnection) AwaitingAuthorization() bool {
 
 type paperclipToolConnectionUpdate struct {
 	Name                 string                   `json:"name"`
-	Transport            string                   `json:"transport,omitempty"`
-	AuthKind             string                   `json:"authKind,omitempty"`
-	Config               map[string]interface{}   `json:"config,omitempty"`
-	CredentialRefs       []map[string]interface{} `json:"credentialRefs,omitempty"`
+	Transport            string                   `json:"transport"`
+	AuthKind             string                   `json:"authKind"`
+	Config               map[string]interface{}   `json:"config"`
+	CredentialRefs       []map[string]interface{} `json:"credentialRefs"`
 	CredentialSecretRefs []map[string]interface{} `json:"credentialSecretRefs"`
 }
 
@@ -964,9 +1106,7 @@ func (c *Client) RegisterMintedToken(keyID, token string) {
 	c.credMu.Lock()
 	defer c.credMu.Unlock()
 	c.mintedTokens[keyID] = token
-	c.pendingTokens[token] = keyID
 	delete(c.deliveredTokens, keyID)
-	delete(c.failedDeliveries, keyID)
 }
 
 func (c *Client) RegisterMintedAgentKey(agentID, keyID, token string) {
@@ -974,11 +1114,9 @@ func (c *Client) RegisterMintedAgentKey(agentID, keyID, token string) {
 	defer c.credMu.Unlock()
 	if token != "" {
 		c.mintedTokens[keyID] = token
-		c.pendingTokens[token] = keyID
 	}
 	c.agentKeyAgents[keyID] = agentID
 	delete(c.deliveredTokens, keyID)
-	delete(c.failedDeliveries, keyID)
 }
 
 func (c *Client) GetAgentIDForKey(keyID string) (string, bool) {
@@ -998,9 +1136,6 @@ func (c *Client) GetMintedToken(keyID string) (string, bool) {
 func (c *Client) ClearMintedToken(keyID string) {
 	c.credMu.Lock()
 	defer c.credMu.Unlock()
-	if tok, ok := c.mintedTokens[keyID]; ok {
-		delete(c.pendingTokens, tok)
-	}
 	delete(c.mintedTokens, keyID)
 	delete(c.supersededKeys, keyID)
 	delete(c.agentKeyAgents, keyID)
@@ -1017,6 +1152,10 @@ func (c *Client) RecordSupersededKey(newKeyID, oldKeyID string, isBoard bool, ag
 		isBoard:  isBoard,
 		agentID:  agentID,
 	}
+	if agentID != "" {
+		c.agentKeyAgents[newKeyID] = agentID
+		c.agentKeyAgents[oldKeyID] = agentID
+	}
 }
 
 func (c *Client) GetSupersededKey(keyID string) (string, bool) {
@@ -1029,59 +1168,6 @@ func (c *Client) GetSupersededKey(keyID string) (string, bool) {
 	return rec.oldKeyID, true
 }
 
-func (c *Client) RecordTokenDeliverySuccess(token string) {
-	if token == "" {
-		return
-	}
-	c.credMu.Lock()
-	defer c.credMu.Unlock()
-	if keyID, ok := c.pendingTokens[token]; ok {
-		c.deliveredTokens[keyID] = true
-	}
-}
-
-func (c *Client) RecordTokenDeliveryFailure(token string) {
-	if token == "" {
-		return
-	}
-	c.credMu.Lock()
-	defer c.credMu.Unlock()
-	if keyID, ok := c.pendingTokens[token]; ok {
-		c.failedDeliveries[keyID] = true
-	}
-}
-
-func (c *Client) ReconcileTokenDeliveryFailure(ctx context.Context, token string) {
-	if token == "" {
-		return
-	}
-	c.credMu.RLock()
-	keyID, ok := c.pendingTokens[token]
-	agentID, isAgent := c.agentKeyAgents[keyID]
-	c.credMu.RUnlock()
-	if !ok {
-		return
-	}
-
-	if isAgent && agentID != "" {
-		_ = c.ReconcileFailedAgentKeyDelivery(ctx, agentID, keyID)
-	} else {
-		_ = c.ReconcileFailedDelivery(ctx, keyID)
-	}
-}
-
-func (c *Client) IsDeliveryConfirmed(keyID string) bool {
-	c.credMu.RLock()
-	defer c.credMu.RUnlock()
-	return c.deliveredTokens[keyID]
-}
-
-func (c *Client) IsDeliveryFailed(keyID string) bool {
-	c.credMu.RLock()
-	defer c.credMu.RUnlock()
-	return c.failedDeliveries[keyID]
-}
-
 func (c *Client) IsTokenDelivered(keyID string) bool {
 	c.credMu.RLock()
 	defer c.credMu.RUnlock()
@@ -1092,63 +1178,7 @@ func (c *Client) MarkTokenDelivered(keyID string) {
 	c.credMu.Lock()
 	defer c.credMu.Unlock()
 	c.deliveredTokens[keyID] = true
-}
-
-func (c *Client) ConfirmDelivery(ctx context.Context, keyID string) error {
-	c.credMu.Lock()
-	c.deliveredTokens[keyID] = true
-	if tok, ok := c.mintedTokens[keyID]; ok {
-		delete(c.pendingTokens, tok)
-	}
 	delete(c.mintedTokens, keyID)
-	record, hasSuperseded := c.supersededKeys[keyID]
-	delete(c.supersededKeys, keyID)
-	delete(c.agentKeyAgents, keyID)
-	c.credMu.Unlock()
-
-	if hasSuperseded {
-		if record.isBoard {
-			return c.RevokeBoardKey(ctx, record.oldKeyID)
-		}
-		return c.RevokeAgentKey(ctx, record.agentID, record.oldKeyID)
-	}
-	return nil
-}
-
-func (c *Client) ReconcileFailedDelivery(ctx context.Context, keyID string) error {
-	c.credMu.Lock()
-	if tok, ok := c.mintedTokens[keyID]; ok {
-		delete(c.pendingTokens, tok)
-	}
-	delete(c.supersededKeys, keyID)
-	delete(c.mintedTokens, keyID)
-	delete(c.deliveredTokens, keyID)
-	delete(c.agentKeyAgents, keyID)
-	c.failedDeliveries[keyID] = true
-	c.credMu.Unlock()
-
-	if keyID != "" {
-		return c.RevokeBoardKey(ctx, keyID)
-	}
-	return nil
-}
-
-func (c *Client) ReconcileFailedAgentKeyDelivery(ctx context.Context, agentID, keyID string) error {
-	c.credMu.Lock()
-	if tok, ok := c.mintedTokens[keyID]; ok {
-		delete(c.pendingTokens, tok)
-	}
-	delete(c.supersededKeys, keyID)
-	delete(c.mintedTokens, keyID)
-	delete(c.deliveredTokens, keyID)
-	delete(c.agentKeyAgents, keyID)
-	c.failedDeliveries[keyID] = true
-	c.credMu.Unlock()
-
-	if keyID != "" && agentID != "" {
-		return c.RevokeAgentKey(ctx, agentID, keyID)
-	}
-	return nil
 }
 
 func (c *Client) FindActiveBoardKeyByName(ctx context.Context, name string) (*PaperclipBoardKey, error) {
@@ -1237,13 +1267,15 @@ func extractItems(raw interface{}, key string) []map[string]interface{} {
 }
 
 // Company CRUD
-func (c *Client) CreateCompany(ctx context.Context, name, description string, requireTaskStartConfirmation bool) (*PaperclipCompany, error) {
+func (c *Client) CreateCompany(ctx context.Context, comp PaperclipCompany) (*PaperclipCompany, error) {
 	payload := map[string]interface{}{
-		"name":                         name,
-		"requireTaskStartConfirmation": requireTaskStartConfirmation,
+		"name": comp.Name,
 	}
-	if description != "" {
-		payload["description"] = description
+	if comp.Description != "" {
+		payload["description"] = comp.Description
+	}
+	if comp.DefaultResponsibleUserID != "" {
+		payload["defaultResponsibleUserId"] = comp.DefaultResponsibleUserID
 	}
 	var resp PaperclipCompany
 	if err := c.paperclipRequest(ctx, http.MethodPost, "/api/companies", payload, &resp); err != nil {
@@ -1290,16 +1322,9 @@ func (c *Client) FindCompanyByName(ctx context.Context, name string) (*Paperclip
 	return &matches[0], nil
 }
 
-func (c *Client) UpdateCompany(ctx context.Context, id, name, description string, requireTaskStartConfirmation bool) (*PaperclipCompany, error) {
-	payload := map[string]interface{}{
-		"name":                         name,
-		"requireTaskStartConfirmation": requireTaskStartConfirmation,
-	}
-	if description != "" {
-		payload["description"] = description
-	}
+func (c *Client) UpdateCompany(ctx context.Context, id string, patch map[string]interface{}) (*PaperclipCompany, error) {
 	var resp PaperclipCompany
-	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/companies/%s", url.PathEscape(id)), payload, &resp); err != nil {
+	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/companies/%s", url.PathEscape(id)), patch, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -1307,6 +1332,10 @@ func (c *Client) UpdateCompany(ctx context.Context, id, name, description string
 
 func (c *Client) ArchiveCompany(ctx context.Context, id string) error {
 	return c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/archive", url.PathEscape(id)), map[string]interface{}{}, nil)
+}
+
+func (c *Client) DeleteCompany(ctx context.Context, id string) error {
+	return c.paperclipRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/companies/%s", url.PathEscape(id)), nil, nil)
 }
 
 func (c *Client) ListCompanies(ctx context.Context) ([]PaperclipCompany, error) {
@@ -1357,12 +1386,10 @@ func (c *Client) GetProject(ctx context.Context, projectID string) (*PaperclipPr
 }
 
 func (c *Client) UpdateProject(ctx context.Context, projectID, name, description string, executionWorkspacePolicy map[string]interface{}) (*PaperclipProject, error) {
-	payload := map[string]interface{}{"name": name}
-	if description != "" {
-		payload["description"] = description
-	}
-	if executionWorkspacePolicy != nil {
-		payload["executionWorkspacePolicy"] = executionWorkspacePolicy
+	payload := map[string]interface{}{
+		"name":                     name,
+		"description":              description,
+		"executionWorkspacePolicy": executionWorkspacePolicy,
 	}
 	var resp PaperclipProject
 	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/projects/%s", url.PathEscape(projectID)), payload, &resp); err != nil {
@@ -1495,6 +1522,33 @@ func (c *Client) CreateSkill(ctx context.Context, companyID string, skill Paperc
 		"markdown":    skill.Content,
 		"content":     skill.Content,
 	}
+	if skill.IconURL != "" {
+		payload["iconUrl"] = skill.IconURL
+	}
+	if skill.Color != "" {
+		payload["color"] = skill.Color
+	}
+	if skill.Tagline != "" {
+		payload["tagline"] = skill.Tagline
+	}
+	if skill.AuthorName != "" {
+		payload["authorName"] = skill.AuthorName
+	}
+	if skill.HomepageURL != "" {
+		payload["homepageUrl"] = skill.HomepageURL
+	}
+	if skill.Categories != nil {
+		payload["categories"] = skill.Categories
+	}
+	if skill.SharingScope != "" {
+		payload["sharingScope"] = skill.SharingScope
+	}
+	if skill.FolderID != "" {
+		payload["folderId"] = skill.FolderID
+	}
+	if skill.ForkedFromID != "" {
+		payload["forkedFromSkillId"] = skill.ForkedFromID
+	}
 	if skill.Metadata != nil {
 		payload["metadata"] = skill.Metadata
 	}
@@ -1528,20 +1582,185 @@ func (c *Client) GetSkill(ctx context.Context, companyID, skillID string) (*Pape
 	return &resp, nil
 }
 
-// UpdateSkill converges a skill through the two Paperclip write surfaces: the
-// record PATCH owns the metadata, and the file PATCH owns the SKILL.md content
-// that Paperclip mirrors into the record's markdown.
+func (c *Client) RenameSkill(ctx context.Context, companyID, skillID, name, slug string) (*PaperclipSkill, error) {
+	payload := map[string]interface{}{
+		"name": name,
+	}
+	if slug != "" {
+		payload["slug"] = slug
+	}
+	var resp struct {
+		Skill PaperclipSkill `json:"skill"`
+	}
+	err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/skills/%s/rename", url.PathEscape(companyID), url.PathEscape(skillID)), payload, &resp)
+	if err != nil {
+		return nil, err
+	}
+	if resp.Skill.ID != "" {
+		if resp.Skill.Content == "" && resp.Skill.Markdown != "" {
+			resp.Skill.Content = resp.Skill.Markdown
+		}
+		if resp.Skill.CompanyID == "" {
+			resp.Skill.CompanyID = companyID
+		}
+		return &resp.Skill, nil
+	}
+	return c.GetSkill(ctx, companyID, skillID)
+}
+
+func (c *Client) PatchSkillMetadata(ctx context.Context, companyID, skillID string, metadata map[string]interface{}) (*PaperclipSkill, error) {
+	var resp PaperclipSkill
+	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/companies/%s/skills/%s", url.PathEscape(companyID), url.PathEscape(skillID)), metadata, &resp); err != nil {
+		return nil, err
+	}
+	if resp.Content == "" && resp.Markdown != "" {
+		resp.Content = resp.Markdown
+	}
+	if resp.CompanyID == "" {
+		resp.CompanyID = companyID
+	}
+	return &resp, nil
+}
+
+func (c *Client) UpdateSkillFile(ctx context.Context, companyID, skillID, filePath, content string) (*PaperclipSkillFileDetail, error) {
+	payload := map[string]interface{}{
+		"path":    filePath,
+		"content": content,
+	}
+	var resp PaperclipSkillFileDetail
+	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/companies/%s/skills/%s/files", url.PathEscape(companyID), url.PathEscape(skillID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) DeleteSkillFile(ctx context.Context, companyID, skillID, filePath string) error {
+	payload := map[string]interface{}{
+		"path":   filePath,
+		"target": "file",
+	}
+	return c.paperclipRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/companies/%s/skills/%s/files", url.PathEscape(companyID), url.PathEscape(skillID)), payload, nil)
+}
+
+func (c *Client) GetSkillFile(ctx context.Context, companyID, skillID, filePath string) (*PaperclipSkillFileDetail, error) {
+	var resp PaperclipSkillFileDetail
+	endpoint := fmt.Sprintf("/api/companies/%s/skills/%s/files?path=%s", url.PathEscape(companyID), url.PathEscape(skillID), url.QueryEscape(filePath))
+	if err := c.paperclipRequest(ctx, http.MethodGet, endpoint, nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) CreateSkillVersion(ctx context.Context, companyID, skillID, label string) (*PaperclipSkillVersion, error) {
+	payload := map[string]interface{}{}
+	if label != "" {
+		payload["label"] = label
+	}
+	var resp PaperclipSkillVersion
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/skills/%s/versions", url.PathEscape(companyID), url.PathEscape(skillID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) ListSkillVersions(ctx context.Context, companyID, skillID string) ([]PaperclipSkillVersion, error) {
+	var raw []PaperclipSkillVersion
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/companies/%s/skills/%s/versions", url.PathEscape(companyID), url.PathEscape(skillID)), nil, &raw); err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+func (c *Client) ImportSkill(ctx context.Context, companyID, source string) (*PaperclipSkill, error) {
+	payload := map[string]interface{}{
+		"source": source,
+	}
+	var resp struct {
+		Imported []PaperclipSkill `json:"imported"`
+		Warnings []string         `json:"warnings"`
+	}
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/skills/import", url.PathEscape(companyID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	if len(resp.Imported) == 0 {
+		return nil, fmt.Errorf("skill import produced no skills")
+	}
+	skill := resp.Imported[0]
+	if skill.Content == "" && skill.Markdown != "" {
+		skill.Content = skill.Markdown
+	}
+	if skill.CompanyID == "" {
+		skill.CompanyID = companyID
+	}
+	return &skill, nil
+}
+
+func (c *Client) InstallCatalogSkill(ctx context.Context, companyID, catalogSkillID, slug string) (*PaperclipSkill, error) {
+	payload := map[string]interface{}{
+		"catalogSkillId": catalogSkillID,
+	}
+	if slug != "" {
+		payload["slug"] = slug
+	}
+	var resp struct {
+		Action   string         `json:"action"`
+		Skill    PaperclipSkill `json:"skill"`
+		Warnings []string       `json:"warnings"`
+	}
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/skills/install-catalog", url.PathEscape(companyID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	skill := resp.Skill
+	if skill.Content == "" && skill.Markdown != "" {
+		skill.Content = skill.Markdown
+	}
+	if skill.CompanyID == "" {
+		skill.CompanyID = companyID
+	}
+	return &skill, nil
+}
+
 func (c *Client) UpdateSkill(ctx context.Context, companyID, skillID string, skill PaperclipSkill) (*PaperclipSkill, error) {
 	skillPath := fmt.Sprintf("/api/companies/%s/skills/%s", url.PathEscape(companyID), url.PathEscape(skillID))
-	metadata := map[string]interface{}{"description": skill.Description}
+	metadata := map[string]interface{}{
+		"description": skill.Description,
+	}
+	if skill.Metadata != nil {
+		metadata["metadata"] = skill.Metadata
+	}
+	if skill.IconURL != "" {
+		metadata["iconUrl"] = skill.IconURL
+	}
+	if skill.Color != "" {
+		metadata["color"] = skill.Color
+	}
+	if skill.Tagline != "" {
+		metadata["tagline"] = skill.Tagline
+	}
+	if skill.AuthorName != "" {
+		metadata["authorName"] = skill.AuthorName
+	}
+	if skill.HomepageURL != "" {
+		metadata["homepageUrl"] = skill.HomepageURL
+	}
+	if skill.Categories != nil {
+		metadata["categories"] = skill.Categories
+	}
+	if skill.SharingScope != "" {
+		metadata["sharingScope"] = skill.SharingScope
+	}
+	if skill.Name != "" {
+		metadata["name"] = skill.Name
+	}
+	if skill.Slug != "" {
+		metadata["slug"] = skill.Slug
+	}
 	if err := c.paperclipRequest(ctx, http.MethodPatch, skillPath, metadata, nil); err != nil {
 		return nil, err
 	}
-	if skill.Content != "" {
-		file := map[string]interface{}{"path": "SKILL.md", "content": skill.Content}
-		if err := c.paperclipRequest(ctx, http.MethodPatch, skillPath+"/files", file, nil); err != nil {
-			return nil, err
-		}
+
+	if _, err := c.UpdateSkillFile(ctx, companyID, skillID, "SKILL.md", skill.Content); err != nil {
+		return nil, err
 	}
 	return c.GetSkill(ctx, companyID, skillID)
 }
@@ -1573,6 +1792,79 @@ func (c *Client) ListSkills(ctx context.Context, companyID string) ([]PaperclipS
 	return result, nil
 }
 
+// Agent Skill Assignments
+func (c *Client) GetAgentSkills(ctx context.Context, agentID string) (*PaperclipAgentSkillSnapshot, error) {
+	if agentID == "" {
+		return nil, ErrNotFound
+	}
+	var resp PaperclipAgentSkillSnapshot
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/agents/%s/skills", url.PathEscape(agentID)), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) SyncAgentSkills(ctx context.Context, agentID, mode string, desiredSkills []PaperclipDesiredSkillEntry) (*PaperclipAgentSkillSnapshot, error) {
+	if agentID == "" {
+		return nil, ErrNotFound
+	}
+	if desiredSkills == nil {
+		desiredSkills = []PaperclipDesiredSkillEntry{}
+	}
+	payload := map[string]interface{}{
+		"mode":          mode,
+		"desiredSkills": desiredSkills,
+	}
+	var resp PaperclipAgentSkillSnapshot
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/agents/%s/skills/sync", url.PathEscape(agentID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+// Company Skill Policy
+func (c *Client) GetSkillPolicy(ctx context.Context, companyID string) (*PaperclipSkillPolicy, error) {
+	if companyID == "" {
+		return nil, ErrNotFound
+	}
+	var resp PaperclipSkillPolicy
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/companies/%s/skill-policy", url.PathEscape(companyID)), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) ReplaceSkillPolicy(ctx context.Context, companyID string, expectedRevision int64, defaultEffect string, rules []map[string]interface{}) (*PaperclipSkillPolicy, error) {
+	if companyID == "" {
+		return nil, ErrNotFound
+	}
+	if rules == nil {
+		rules = []map[string]interface{}{}
+	}
+	payload := map[string]interface{}{
+		"schemaVersion":    1,
+		"expectedRevision": expectedRevision,
+		"defaultEffect":    defaultEffect,
+		"rules":            rules,
+	}
+	var resp PaperclipSkillPolicy
+	if err := c.paperclipRequest(ctx, http.MethodPut, fmt.Sprintf("/api/companies/%s/skill-policy", url.PathEscape(companyID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) ResetSkillPolicy(ctx context.Context, companyID string) (*PaperclipSkillPolicy, error) {
+	if companyID == "" {
+		return nil, ErrNotFound
+	}
+	var resp PaperclipSkillPolicy
+	if err := c.paperclipRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/companies/%s/skill-policy", url.PathEscape(companyID)), nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 // Secret CRUD
 func (c *Client) CreateSecret(ctx context.Context, companyID, name, description, value string) (*PaperclipSecret, error) {
 	payload := map[string]interface{}{
@@ -1582,11 +1874,8 @@ func (c *Client) CreateSecret(ctx context.Context, companyID, name, description,
 	}
 	var resp PaperclipSecret
 	if err := c.paperclipSecretRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/secrets", url.PathEscape(companyID)), payload, &resp); err != nil {
-		c.RecordTokenDeliveryFailure(value)
-		c.ReconcileTokenDeliveryFailure(ctx, value)
 		return nil, err
 	}
-	c.RecordTokenDeliverySuccess(value)
 	if resp.CompanyID == "" {
 		resp.CompanyID = companyID
 	}
@@ -1626,11 +1915,8 @@ func (c *Client) RotateSecret(ctx context.Context, secretID, value string) (*Pap
 	payload := map[string]interface{}{"value": value}
 	var resp PaperclipSecret
 	if err := c.paperclipSecretRequest(ctx, http.MethodPost, fmt.Sprintf("/api/secrets/%s/rotate", url.PathEscape(secretID)), payload, &resp); err != nil {
-		c.RecordTokenDeliveryFailure(value)
-		c.ReconcileTokenDeliveryFailure(ctx, value)
 		return nil, err
 	}
-	c.RecordTokenDeliverySuccess(value)
 	resp.Value = value
 	return &resp, nil
 }
@@ -1659,10 +1945,69 @@ func (c *Client) ListSecrets(ctx context.Context, companyID string) ([]Paperclip
 	return result, nil
 }
 
+func buildAgentCreatePayload(agent PaperclipAgent) map[string]interface{} {
+	payload := map[string]interface{}{
+		"name":        agent.Name,
+		"role":        agent.Role,
+		"adapterType": agent.AdapterType,
+	}
+	if agent.Title != "" {
+		payload["title"] = agent.Title
+	}
+	if agent.Icon != "" {
+		payload["icon"] = agent.Icon
+	}
+	if agent.ReportsTo != "" {
+		payload["reportsTo"] = agent.ReportsTo
+	}
+	if agent.Capabilities != "" {
+		payload["capabilities"] = agent.Capabilities
+	}
+	if agent.DefaultEnvironmentID != "" {
+		payload["defaultEnvironmentId"] = agent.DefaultEnvironmentID
+	}
+	if agent.RuntimeConfig != nil {
+		payload["runtimeConfig"] = agent.RuntimeConfig
+	}
+	if agent.AdapterConfig != nil {
+		payload["adapterConfig"] = agent.AdapterConfig
+	}
+	if agent.Metadata != nil {
+		payload["metadata"] = agent.Metadata
+	}
+	if agent.Permissions != nil {
+		payload["permissions"] = agent.Permissions
+	}
+	return payload
+}
+
+func (c *Client) CreateAgentHire(ctx context.Context, companyID string, agent PaperclipAgent) (*PaperclipAgent, error) {
+	payload := buildAgentCreatePayload(agent)
+	var resp PaperclipAgentHireResponse
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/agent-hires", url.PathEscape(companyID)), payload, &resp); err != nil {
+		return nil, err
+	}
+	res := resp.Agent
+	if res.CompanyID == "" {
+		res.CompanyID = companyID
+	}
+	res.HireApproval = resp.Approval
+	return &res, nil
+}
+
 // Agent CRUD
 func (c *Client) CreateAgent(ctx context.Context, companyID string, agent PaperclipAgent) (*PaperclipAgent, error) {
+	company, err := c.GetCompany(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	if company != nil && company.RequireBoardApprovalForNewAgents {
+		return c.CreateAgentHire(ctx, companyID, agent)
+	}
+
+	payload := buildAgentCreatePayload(agent)
 	var resp PaperclipAgent
-	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/agents", url.PathEscape(companyID)), agent, &resp); err != nil {
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/agents", url.PathEscape(companyID)), payload, &resp); err != nil {
 		return nil, err
 	}
 	if resp.CompanyID == "" {
@@ -1683,8 +2028,56 @@ func (c *Client) GetAgent(ctx context.Context, agentID string) (*PaperclipAgent,
 }
 
 func (c *Client) UpdateAgent(ctx context.Context, agentID string, agent PaperclipAgent) (*PaperclipAgent, error) {
+	payload := map[string]interface{}{
+		"name":        agent.Name,
+		"role":        agent.Role,
+		"adapterType": agent.AdapterType,
+	}
+	if agent.Title != "" {
+		payload["title"] = agent.Title
+	} else {
+		payload["title"] = nil
+	}
+	if agent.Icon != "" {
+		payload["icon"] = agent.Icon
+	} else {
+		payload["icon"] = nil
+	}
+	if agent.ReportsTo != "" {
+		payload["reportsTo"] = agent.ReportsTo
+	} else {
+		payload["reportsTo"] = nil
+	}
+	if agent.Capabilities != "" {
+		payload["capabilities"] = agent.Capabilities
+	} else {
+		payload["capabilities"] = nil
+	}
+	if agent.DefaultEnvironmentID != "" {
+		payload["defaultEnvironmentId"] = agent.DefaultEnvironmentID
+	} else {
+		payload["defaultEnvironmentId"] = nil
+	}
+	if agent.RuntimeConfig != nil {
+		payload["runtimeConfig"] = agent.RuntimeConfig
+	} else {
+		payload["runtimeConfig"] = map[string]interface{}{}
+	}
+	if agent.AdapterConfig != nil {
+		payload["adapterConfig"] = agent.AdapterConfig
+	} else if agent.ReplaceAdapterConfig {
+		payload["adapterConfig"] = map[string]interface{}{}
+	}
+	if agent.ReplaceAdapterConfig {
+		payload["replaceAdapterConfig"] = true
+	}
+	if agent.Metadata != nil {
+		payload["metadata"] = agent.Metadata
+	} else {
+		payload["metadata"] = map[string]interface{}{}
+	}
 	var resp PaperclipAgent
-	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/agents/%s", url.PathEscape(agentID)), agent, &resp); err != nil {
+	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/agents/%s", url.PathEscape(agentID)), payload, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -1694,11 +2087,34 @@ func (c *Client) DeleteAgent(ctx context.Context, agentID string) error {
 	return c.paperclipRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/agents/%s", url.PathEscape(agentID)), nil, nil)
 }
 
+func (c *Client) PauseAgent(ctx context.Context, agentID string) error {
+	return c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/agents/%s/pause", url.PathEscape(agentID)), nil, nil)
+}
+
+func (c *Client) ResumeAgent(ctx context.Context, agentID string) error {
+	return c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/agents/%s/resume", url.PathEscape(agentID)), nil, nil)
+}
+
+func (c *Client) TerminateAgent(ctx context.Context, agentID string) error {
+	return c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/agents/%s/terminate", url.PathEscape(agentID)), nil, nil)
+}
+
 // UpdateAgentPermissions replaces the agent's board permission flags. Paperclip
 // grants tasks:assign to every agent it creates, so the declared value is
 // reconciled after creation rather than sent with it.
 func (c *Client) UpdateAgentPermissions(ctx context.Context, agentID string, permissions PaperclipAgentPermissions) error {
-	return c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/agents/%s/permissions", url.PathEscape(agentID)), permissions, nil)
+	payload := map[string]interface{}{
+		"canCreateAgents": permissions.CanCreateAgents,
+		"canCreateSkills": permissions.CanCreateSkills,
+		"canAssignTasks":  permissions.CanAssignTasks,
+	}
+	if permissions.TrustPreset != "" {
+		payload["trustPreset"] = permissions.TrustPreset
+	}
+	if permissions.AuthorizationPolicy != nil {
+		payload["authorizationPolicy"] = permissions.AuthorizationPolicy
+	}
+	return c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/agents/%s/permissions", url.PathEscape(agentID)), payload, nil)
 }
 
 func (c *Client) ListAgents(ctx context.Context, companyID string) ([]PaperclipAgent, error) {
@@ -1785,37 +2201,6 @@ func (c *Client) GetAgentKey(ctx context.Context, agentID, keyID string) (*Paper
 				key.AgentID = agentID
 			}
 			return &key, nil
-		}
-	}
-	return nil, ErrNotFound
-}
-
-func (c *Client) FindAgentKeyByID(ctx context.Context, keyID string) (*PaperclipAgentKey, error) {
-	keyID = strings.TrimSpace(keyID)
-	if keyID == "" {
-		return nil, errors.New("key ID is required")
-	}
-	c.credMu.RLock()
-	agentID, ok := c.agentKeyAgents[keyID]
-	c.credMu.RUnlock()
-	if ok && agentID != "" {
-		return c.GetAgentKey(ctx, agentID, keyID)
-	}
-
-	var keys []PaperclipAgentKey
-	if err := c.paperclipRequest(ctx, http.MethodGet, "/api/agents/_/keys", nil, &keys); err == nil {
-		for _, key := range keys {
-			if key.ID == keyID {
-				if key.RevokedAt != nil && *key.RevokedAt != "" {
-					return nil, ErrNotFound
-				}
-				if key.AgentID != "" {
-					c.credMu.Lock()
-					c.agentKeyAgents[keyID] = key.AgentID
-					c.credMu.Unlock()
-				}
-				return &key, nil
-			}
 		}
 	}
 	return nil, ErrNotFound
@@ -1910,7 +2295,17 @@ func (c *Client) UpdateToolApp(ctx context.Context, appID string, app PaperclipT
 		return nil, err
 	}
 	var resp PaperclipToolApp
-	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/tool-applications/%s", url.PathEscape(appID)), app, &resp); err != nil {
+	payload := map[string]interface{}{
+		"name":           app.Name,
+		"type":           app.Type,
+		"description":    app.Description,
+		"applicationKey": app.ApplicationKey,
+		"metadata":       app.Metadata,
+	}
+	if app.Metadata == nil {
+		payload["metadata"] = map[string]interface{}{}
+	}
+	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/tool-applications/%s", url.PathEscape(appID)), payload, &resp); err != nil {
 		return nil, err
 	}
 	if resp.Type == "" {
@@ -2000,12 +2395,20 @@ func (c *Client) GetToolConnection(ctx context.Context, connID string) (*Papercl
 
 func (c *Client) UpdateToolConnection(ctx context.Context, connID string, conn PaperclipToolConnection) (*PaperclipToolConnection, error) {
 	var resp PaperclipToolConnection
+	config := conn.Config
+	if config == nil {
+		config = map[string]interface{}{}
+	}
+	credRefs := conn.CredentialRefs
+	if credRefs == nil {
+		credRefs = []map[string]interface{}{}
+	}
 	payload := paperclipToolConnectionUpdate{
 		Name:                 conn.Name,
 		Transport:            conn.Transport,
 		AuthKind:             conn.AuthKind,
-		Config:               conn.Config,
-		CredentialRefs:       conn.CredentialRefs,
+		Config:               config,
+		CredentialRefs:       credRefs,
 		CredentialSecretRefs: []map[string]interface{}{},
 	}
 	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/tool-connections/%s", url.PathEscape(connID)), payload, &resp); err != nil {
@@ -2191,7 +2594,19 @@ func (c *Client) UpdateToolPolicy(ctx context.Context, companyID, polID string, 
 	if companyID == "" {
 		reqPath = fmt.Sprintf("/api/tool-policies/%s", url.PathEscape(polID))
 	}
-	if err := c.paperclipRequest(ctx, http.MethodPatch, reqPath, pol, &resp); err != nil {
+	payload := map[string]interface{}{
+		"name":       pol.Name,
+		"policyType": pol.PolicyType,
+		"rules":      pol.Rules,
+		"metadata":   pol.Metadata,
+	}
+	if pol.Rules == nil {
+		payload["rules"] = map[string]interface{}{}
+	}
+	if pol.Metadata == nil {
+		payload["metadata"] = map[string]interface{}{}
+	}
+	if err := c.paperclipRequest(ctx, http.MethodPatch, reqPath, payload, &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -2307,3 +2722,150 @@ func (c *Client) ReconcileAskFirstPolicies(ctx context.Context, companyID, conne
 	}
 	return nil
 }
+
+func (c *Client) CreateGoal(ctx context.Context, companyID string, goal PaperclipGoal) (*PaperclipGoal, error) {
+	body := map[string]interface{}{
+		"title": goal.Title,
+	}
+	if goal.Description != "" {
+		body["description"] = goal.Description
+	}
+	if goal.Level != "" {
+		body["level"] = goal.Level
+	}
+	if goal.Status != "" {
+		body["status"] = goal.Status
+	}
+	if goal.ParentID != "" {
+		body["parentId"] = goal.ParentID
+	}
+	if goal.OwnerAgentID != "" {
+		body["ownerAgentId"] = goal.OwnerAgentID
+	}
+
+	var res PaperclipGoal
+	path := fmt.Sprintf("/api/companies/%s/goals", url.PathEscape(companyID))
+	if err := c.paperclipRequest(ctx, http.MethodPost, path, body, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) GetGoal(ctx context.Context, goalID string) (*PaperclipGoal, error) {
+	var res PaperclipGoal
+	path := fmt.Sprintf("/api/goals/%s", url.PathEscape(goalID))
+	if err := c.paperclipRequest(ctx, http.MethodGet, path, nil, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) UpdateGoal(ctx context.Context, goalID string, patch map[string]interface{}) (*PaperclipGoal, error) {
+	var res PaperclipGoal
+	path := fmt.Sprintf("/api/goals/%s", url.PathEscape(goalID))
+	if err := c.paperclipRequest(ctx, http.MethodPatch, path, patch, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) DeleteGoal(ctx context.Context, goalID string) error {
+	path := fmt.Sprintf("/api/goals/%s", url.PathEscape(goalID))
+	return c.paperclipRequest(ctx, http.MethodDelete, path, nil, nil)
+}
+
+func (c *Client) ListGoals(ctx context.Context, companyID string) ([]PaperclipGoal, error) {
+	var res []PaperclipGoal
+	path := fmt.Sprintf("/api/companies/%s/goals", url.PathEscape(companyID))
+	if err := c.paperclipRequest(ctx, http.MethodGet, path, nil, &res); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+func (c *Client) UpsertBudgetPolicy(ctx context.Context, companyID string, policy PaperclipBudgetPolicy) (*PaperclipBudgetPolicySummary, error) {
+	metric := policy.Metric
+	if metric == "" {
+		metric = "billed_cents"
+	}
+	windowKind := policy.WindowKind
+	if windowKind == "" {
+		windowKind = "calendar_month_utc"
+	}
+	body := map[string]interface{}{
+		"scopeType":       policy.ScopeType,
+		"scopeId":         policy.ScopeID,
+		"metric":          metric,
+		"windowKind":      windowKind,
+		"amount":          policy.Amount,
+		"warnPercent":     policy.WarnPercent,
+		"hardStopEnabled": policy.HardStopEnabled,
+		"notifyEnabled":   policy.NotifyEnabled,
+		"isActive":        policy.IsActive,
+	}
+
+	var res PaperclipBudgetPolicySummary
+	path := fmt.Sprintf("/api/companies/%s/budgets/policies", url.PathEscape(companyID))
+	if err := c.paperclipRequest(ctx, http.MethodPost, path, body, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) GetBudgetOverview(ctx context.Context, companyID string) (*PaperclipBudgetOverview, error) {
+	var res PaperclipBudgetOverview
+	path := fmt.Sprintf("/api/companies/%s/budgets/overview", url.PathEscape(companyID))
+	if err := c.paperclipRequest(ctx, http.MethodGet, path, nil, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) ListBudgetPolicies(ctx context.Context, companyID string) ([]PaperclipBudgetPolicySummary, error) {
+	overview, err := c.GetBudgetOverview(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	return overview.Policies, nil
+}
+
+func (c *Client) GetBudgetPolicy(ctx context.Context, companyID, policyID string) (*PaperclipBudgetPolicySummary, error) {
+	policies, err := c.ListBudgetPolicies(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	for _, pol := range policies {
+		if pol.PolicyID == policyID {
+			return &pol, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (c *Client) FindBudgetPolicy(ctx context.Context, companyID, scopeType, scopeID, windowKind string) (*PaperclipBudgetPolicySummary, error) {
+	policies, err := c.ListBudgetPolicies(ctx, companyID)
+	if err != nil {
+		return nil, err
+	}
+	for _, pol := range policies {
+		if pol.ScopeType == scopeType && pol.ScopeID == scopeID && pol.WindowKind == windowKind {
+			return &pol, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
+func (c *Client) FindBudgetPolicyByID(ctx context.Context, policyID string) (*PaperclipBudgetPolicySummary, error) {
+	companies, err := c.ListCompanies(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, comp := range companies {
+		pol, err := c.GetBudgetPolicy(ctx, comp.ID, policyID)
+		if err == nil && pol != nil {
+			return pol, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+

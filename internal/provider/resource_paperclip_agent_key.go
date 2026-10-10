@@ -263,8 +263,6 @@ func (r *PaperclipAgentKeyResource) Create(ctx context.Context, req resource.Cre
 		return
 	}
 
-	preExistingKey, _ := r.client.FindActiveAgentKeyByName(ctx, plan.AgentID.ValueString(), plan.Name.ValueString())
-
 	key, err := r.client.CreateAgentKey(ctx, plan.AgentID.ValueString(), plan.Name.ValueString(), scope)
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating Paperclip agent key", err.Error())
@@ -272,13 +270,10 @@ func (r *PaperclipAgentKeyResource) Create(ctx context.Context, req resource.Cre
 	}
 
 	r.client.RegisterMintedAgentKey(plan.AgentID.ValueString(), key.ID, key.Token)
-	if preExistingKey != nil {
-		r.client.RecordSupersededKey(key.ID, preExistingKey.ID, false, plan.AgentID.ValueString())
-	}
 
 	plan.ID = types.StringValue(key.ID)
 	plan.KeyID = types.StringValue(key.ID)
-	plan.DeliveryState = types.StringValue("delivered")
+	plan.DeliveryState = types.StringValue("pending")
 
 	if key.Scope != nil {
 		modelScope, d := clientScopeToModel(ctx, key.Scope, plan.Scope)
@@ -323,9 +318,9 @@ func (r *PaperclipAgentKeyResource) Read(ctx context.Context, req resource.ReadR
 		resp.Diagnostics.Append(d...)
 		state.Scope = modelScope
 	}
-	state.DeliveryState = types.StringValue("delivered")
-	r.client.RegisterMintedAgentKey(state.AgentID.ValueString(), key.ID, "")
-	r.client.MarkTokenDelivered(key.ID)
+	if r.client.IsTokenDelivered(keyID) {
+		state.DeliveryState = types.StringValue("delivered")
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -365,7 +360,7 @@ func (r *PaperclipAgentKeyResource) Update(ctx context.Context, req resource.Upd
 
 		plan.ID = types.StringValue(newKey.ID)
 		plan.KeyID = types.StringValue(newKey.ID)
-		plan.DeliveryState = types.StringValue("delivered")
+		plan.DeliveryState = types.StringValue("pending")
 		if newKey.Scope != nil {
 			modelScope, d := clientScopeToModel(ctx, newKey.Scope, plan.Scope)
 			resp.Diagnostics.Append(d...)
@@ -378,7 +373,7 @@ func (r *PaperclipAgentKeyResource) Update(ctx context.Context, req resource.Upd
 
 	plan.ID = state.ID
 	plan.KeyID = state.KeyID
-	plan.DeliveryState = types.StringValue("delivered")
+	plan.DeliveryState = state.DeliveryState
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

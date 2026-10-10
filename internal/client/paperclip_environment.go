@@ -11,9 +11,10 @@ import (
 // Environment bindings are used transiently to preserve unmanaged keys. They
 // are never copied into Terraform state or diagnostics.
 type PaperclipEnvironment struct {
-	ID      string                 `json:"id"`
-	Driver  string                 `json:"driver"`
-	EnvVars map[string]interface{} `json:"envVars"`
+	ID        string                 `json:"id"`
+	CompanyID string                 `json:"companyId,omitempty"`
+	Driver    string                 `json:"driver"`
+	EnvVars   map[string]interface{} `json:"envVars"`
 }
 
 func (e *PaperclipEnvironment) InheritsServicePath() bool {

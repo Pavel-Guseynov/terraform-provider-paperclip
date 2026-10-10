@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -75,17 +76,21 @@ func (r *PaperclipPolicyResource) Schema(ctx context.Context, req resource.Schem
 			"rules": schema.StringAttribute{
 				Description: "Optional JSON rules object.",
 				Optional:    true,
-				Computed:    true,
+				Validators: []validator.String{
+					JSONAttributeValidator(),
+				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+					SemanticJSONPlanModifier(),
 				},
 			},
 			"metadata": schema.StringAttribute{
 				Description: "Optional JSON metadata object for the policy.",
 				Optional:    true,
-				Computed:    true,
+				Validators: []validator.String{
+					JSONAttributeValidator(),
+				},
 				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.UseStateForUnknown(),
+					SemanticJSONPlanModifier(),
 				},
 			},
 		},
@@ -116,10 +121,16 @@ func (r *PaperclipPolicyResource) Create(ctx context.Context, req resource.Creat
 
 	var rulesMap, metaMap map[string]interface{}
 	if !plan.Rules.IsNull() && !plan.Rules.IsUnknown() && plan.Rules.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.Rules.ValueString()), &rulesMap)
+		if err := json.Unmarshal([]byte(plan.Rules.ValueString()), &rulesMap); err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("rules"), "Invalid JSON", err.Error())
+			return
+		}
 	}
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap)
+		if err := json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap); err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("metadata"), "Invalid JSON", err.Error())
+			return
+		}
 	}
 
 	pol := client.PaperclipToolPolicy{
@@ -142,6 +153,8 @@ func (r *PaperclipPolicyResource) Create(ctx context.Context, req resource.Creat
 	if created.PolicyType != "" {
 		plan.PolicyType = types.StringValue(created.PolicyType)
 	}
+	plan.Rules = refreshSemanticJSON(plan.Rules, created.Rules)
+	plan.Metadata = refreshSemanticJSON(plan.Metadata, created.Metadata)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -171,14 +184,8 @@ func (r *PaperclipPolicyResource) Read(ctx context.Context, req resource.ReadReq
 	if pol.PolicyType != "" {
 		state.PolicyType = types.StringValue(pol.PolicyType)
 	}
-	if pol.Rules != nil {
-		data, _ := json.Marshal(pol.Rules)
-		state.Rules = types.StringValue(string(data))
-	}
-	if pol.Metadata != nil {
-		data, _ := json.Marshal(pol.Metadata)
-		state.Metadata = types.StringValue(string(data))
-	}
+	state.Rules = refreshSemanticJSON(state.Rules, pol.Rules)
+	state.Metadata = refreshSemanticJSON(state.Metadata, pol.Metadata)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -195,10 +202,16 @@ func (r *PaperclipPolicyResource) Update(ctx context.Context, req resource.Updat
 
 	var rulesMap, metaMap map[string]interface{}
 	if !plan.Rules.IsNull() && !plan.Rules.IsUnknown() && plan.Rules.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.Rules.ValueString()), &rulesMap)
+		if err := json.Unmarshal([]byte(plan.Rules.ValueString()), &rulesMap); err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("rules"), "Invalid JSON", err.Error())
+			return
+		}
 	}
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
-		_ = json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap)
+		if err := json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap); err != nil {
+			resp.Diagnostics.AddAttributeError(path.Root("metadata"), "Invalid JSON", err.Error())
+			return
+		}
 	}
 
 	pol := client.PaperclipToolPolicy{
@@ -220,6 +233,8 @@ func (r *PaperclipPolicyResource) Update(ctx context.Context, req resource.Updat
 	if updated.PolicyType != "" {
 		plan.PolicyType = types.StringValue(updated.PolicyType)
 	}
+	plan.Rules = refreshSemanticJSON(plan.Rules, updated.Rules)
+	plan.Metadata = refreshSemanticJSON(plan.Metadata, updated.Metadata)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -243,9 +258,14 @@ func (r *PaperclipPolicyResource) ImportState(ctx context.Context, req resource.
 	id := req.ID
 	if strings.Contains(id, "/") {
 		parts := strings.SplitN(id, "/", 2)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
-		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
-		return
+		if parts[0] != "" && parts[1] != "" {
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
+			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
+			return
+		}
 	}
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	resp.Diagnostics.AddError(
+		"Invalid Policy Import ID",
+		fmt.Sprintf("Expected <company_id>/<policy_id>, got %q", id),
+	)
 }

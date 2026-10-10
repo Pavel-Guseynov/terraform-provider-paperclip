@@ -26,17 +26,27 @@ type PaperclipAgentDataSource struct {
 }
 
 type PaperclipAgentDataSourceModel struct {
-	ID            types.String `tfsdk:"id"`
-	CompanyID     types.String `tfsdk:"company_id"`
-	Name          types.String `tfsdk:"name"`
-	Role          types.String `tfsdk:"role"`
-	Title         types.String `tfsdk:"title"`
-	AdapterType   types.String `tfsdk:"adapter_type"`
-	Status        types.String `tfsdk:"status"`
-	RuntimeConfig types.String `tfsdk:"runtime_config"`
-	AdapterConfig types.String `tfsdk:"adapter_config"`
-	Metadata      types.String `tfsdk:"metadata"`
-	Instructions  types.String `tfsdk:"instructions"`
+	ID                   types.String `tfsdk:"id"`
+	CompanyID            types.String `tfsdk:"company_id"`
+	Name                 types.String `tfsdk:"name"`
+	Role                 types.String `tfsdk:"role"`
+	Title                types.String `tfsdk:"title"`
+	Icon                 types.String `tfsdk:"icon"`
+	ReportsTo            types.String `tfsdk:"reports_to"`
+	Capabilities         types.String `tfsdk:"capabilities"`
+	DefaultEnvironmentID types.String `tfsdk:"default_environment_id"`
+	AdapterType          types.String `tfsdk:"adapter_type"`
+	Status               types.String `tfsdk:"status"`
+	RuntimeConfig        types.String `tfsdk:"runtime_config"`
+	AdapterConfig        types.String `tfsdk:"adapter_config"`
+	Metadata             types.String `tfsdk:"metadata"`
+	Instructions         types.String `tfsdk:"instructions"`
+	CanAssignTasks       types.Bool   `tfsdk:"can_assign_tasks"`
+	CanCreateAgents      types.Bool   `tfsdk:"can_create_agents"`
+	CanCreateSkills      types.Bool   `tfsdk:"can_create_skills"`
+	TrustPreset          types.String `tfsdk:"trust_preset"`
+	AuthorizationPolicy  types.String `tfsdk:"authorization_policy"`
+	Paused               types.Bool   `tfsdk:"paused"`
 }
 
 func (d *PaperclipAgentDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -70,6 +80,22 @@ func (d *PaperclipAgentDataSource) Schema(ctx context.Context, req datasource.Sc
 				Description: "Agent title.",
 				Computed:    true,
 			},
+			"icon": schema.StringAttribute{
+				Description: "Agent icon identifier.",
+				Computed:    true,
+			},
+			"reports_to": schema.StringAttribute{
+				Description: "Identifier of the agent's manager.",
+				Computed:    true,
+			},
+			"capabilities": schema.StringAttribute{
+				Description: "Free-form description of agent capabilities.",
+				Computed:    true,
+			},
+			"default_environment_id": schema.StringAttribute{
+				Description: "Identifier of default environment.",
+				Computed:    true,
+			},
 			"adapter_type": schema.StringAttribute{
 				Description: "Adapter type.",
 				Computed:    true,
@@ -92,6 +118,30 @@ func (d *PaperclipAgentDataSource) Schema(ctx context.Context, req datasource.Sc
 			},
 			"instructions": schema.StringAttribute{
 				Description: "Managed AGENTS.md instructions for this agent.",
+				Computed:    true,
+			},
+			"can_assign_tasks": schema.BoolAttribute{
+				Description: "Whether the agent holds the task-assignment permission.",
+				Computed:    true,
+			},
+			"can_create_agents": schema.BoolAttribute{
+				Description: "Whether the agent may create other agents.",
+				Computed:    true,
+			},
+			"can_create_skills": schema.BoolAttribute{
+				Description: "Whether the agent may create skills.",
+				Computed:    true,
+			},
+			"trust_preset": schema.StringAttribute{
+				Description: "Trust policy preset.",
+				Computed:    true,
+			},
+			"authorization_policy": schema.StringAttribute{
+				Description: "JSON authorization policy for the agent.",
+				Computed:    true,
+			},
+			"paused": schema.BoolAttribute{
+				Description: "Whether the agent is currently paused.",
 				Computed:    true,
 			},
 		},
@@ -172,17 +222,15 @@ func (d *PaperclipAgentDataSource) Read(ctx context.Context, req datasource.Read
 	}
 	config.Name = types.StringValue(agent.Name)
 	config.Role = types.StringValue(agent.Role)
-	if agent.Title != "" {
-		config.Title = types.StringValue(agent.Title)
-	} else {
-		config.Title = types.StringNull()
-	}
+	config.Title = stringOrNull(agent.Title)
+	config.Icon = stringOrNull(agent.Icon)
+	config.ReportsTo = stringOrNull(agent.ReportsTo)
+	config.Capabilities = stringOrNull(agent.Capabilities)
+	config.DefaultEnvironmentID = stringOrNull(agent.DefaultEnvironmentID)
 	config.AdapterType = types.StringValue(agent.AdapterType)
-	if agent.Status != "" {
-		config.Status = types.StringValue(agent.Status)
-	} else {
-		config.Status = types.StringNull()
-	}
+	config.Status = stringOrNull(agent.Status)
+	config.Paused = types.BoolValue(agent.Status == "paused")
+
 	if agent.RuntimeConfig != nil {
 		data, _ := json.Marshal(agent.RuntimeConfig)
 		config.RuntimeConfig = types.StringValue(string(data))
@@ -200,6 +248,25 @@ func (d *PaperclipAgentDataSource) Read(ctx context.Context, req datasource.Read
 		config.Metadata = types.StringValue(string(data))
 	} else {
 		config.Metadata = types.StringNull()
+	}
+
+	if agent.Permissions != nil {
+		config.CanAssignTasks = types.BoolValue(agent.Permissions.CanAssignTasks)
+		config.CanCreateAgents = types.BoolValue(agent.Permissions.CanCreateAgents)
+		config.CanCreateSkills = types.BoolValue(agent.Permissions.CanCreateSkills)
+		config.TrustPreset = stringOrNull(agent.Permissions.TrustPreset)
+		if len(agent.Permissions.AuthorizationPolicy) > 0 {
+			data, _ := json.Marshal(agent.Permissions.AuthorizationPolicy)
+			config.AuthorizationPolicy = types.StringValue(string(data))
+		} else {
+			config.AuthorizationPolicy = types.StringNull()
+		}
+	} else {
+		config.CanAssignTasks = types.BoolNull()
+		config.CanCreateAgents = types.BoolNull()
+		config.CanCreateSkills = types.BoolNull()
+		config.TrustPreset = types.StringNull()
+		config.AuthorizationPolicy = types.StringNull()
 	}
 
 	instructions, err := d.client.GetAgentInstructionsFile(ctx, agent.ID, "AGENTS.md")
