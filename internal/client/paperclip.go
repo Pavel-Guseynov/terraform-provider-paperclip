@@ -2200,6 +2200,9 @@ func (c *Client) GetAgentKey(ctx context.Context, agentID, keyID string) (*Paper
 			if key.AgentID == "" {
 				key.AgentID = agentID
 			}
+			c.credMu.Lock()
+			c.agentKeyAgents[keyID] = agentID
+			c.credMu.Unlock()
 			return &key, nil
 		}
 	}
