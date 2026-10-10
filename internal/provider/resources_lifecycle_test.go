@@ -45,15 +45,15 @@ func TestPaperclipCompanyResourceLifecycle(t *testing.T) {
 		switch {
 		case req.Method == http.MethodPost && req.URL.Path == "/api/companies":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "comp-1", "name": "Acme", "description": "Acme Corp", "requireTaskStartConfirmation": false,
+				"id": "comp-1", "name": "Acme", "description": "Acme Corp", "status": "active",
 			})
 		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "comp-1", "name": "Acme", "description": "Acme Corp", "requireTaskStartConfirmation": false,
+				"id": "comp-1", "name": "Acme", "description": "Acme Corp", "status": "active",
 			})
 		case req.Method == http.MethodPatch && req.URL.Path == "/api/companies/comp-1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "comp-1", "name": "Acme Updated", "description": "New Desc", "requireTaskStartConfirmation": true,
+				"id": "comp-1", "name": "Acme Updated", "description": "New Desc", "status": "active",
 			})
 		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-1/archive":
 			archiveCalled = true
@@ -84,9 +84,12 @@ func TestPaperclipCompanyResourceLifecycle(t *testing.T) {
 
 	// Create
 	model := PaperclipCompanyResourceModel{
-		Name:                         types.StringValue("Acme"),
-		Description:                  types.StringValue("Acme Corp"),
-		RequireTaskStartConfirmation: types.BoolValue(false),
+		Name:                             types.StringValue("Acme"),
+		Description:                      types.StringValue("Acme Corp"),
+		Status:                           types.StringValue("active"),
+		RequireBoardApprovalForNewAgents: types.BoolValue(false),
+		FeedbackDataSharingEnabled:       types.BoolValue(false),
+		ArchiveOnDestroy:                 types.BoolValue(true),
 	}
 	plan := tfsdk.Plan{Schema: schema}
 	if diags := plan.Set(ctx, &model); diags.HasError() {
@@ -108,7 +111,7 @@ func TestPaperclipCompanyResourceLifecycle(t *testing.T) {
 	// Update
 	model.Name = types.StringValue("Acme Updated")
 	model.Description = types.StringValue("New Desc")
-	model.RequireTaskStartConfirmation = types.BoolValue(true)
+	model.Status = types.StringValue("active")
 	model.ID = types.StringValue("comp-1")
 	if diags := plan.Set(ctx, &model); diags.HasError() {
 		t.Fatal(diags)
@@ -297,6 +300,12 @@ func TestPaperclipSkillResourceLifecycle(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": "skill-1", "companyId": "comp-1", "name": "Reviewer Skill Updated", "content": "# Prompt 2",
 			})
+		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-1/skills/skill-1/rename":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"skill": map[string]interface{}{
+					"id": "skill-1", "companyId": "comp-1", "name": "Reviewer Skill Updated", "slug": "reviewer-skill", "content": "# Prompt 2",
+				},
+			})
 		case req.Method == http.MethodPatch && req.URL.Path == "/api/companies/comp-1/skills/skill-1/files":
 			w.WriteHeader(http.StatusOK)
 		case req.Method == http.MethodDelete && req.URL.Path == "/api/companies/comp-1/skills/skill-1":
@@ -318,9 +327,12 @@ func TestPaperclipSkillResourceLifecycle(t *testing.T) {
 	schema := configureTestResource(t, server.URL, r)
 
 	model := PaperclipSkillResourceModel{
-		CompanyID: types.StringValue("comp-1"),
-		Name:      types.StringValue("Reviewer Skill"),
-		Content:   types.StringValue("# Prompt"),
+		CompanyID:     types.StringValue("comp-1"),
+		Name:          types.StringValue("Reviewer Skill"),
+		Content:       types.StringValue("# Prompt"),
+		Categories:    types.ListNull(types.StringType),
+		Files:         types.MapNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
 	}
 	plan := tfsdk.Plan{Schema: schema}
 	_ = plan.Set(ctx, &model)
@@ -349,13 +361,23 @@ func TestPaperclipSkillResourceLifecycle(t *testing.T) {
 
 	// ImportState
 	importResp := resource.ImportStateResponse{State: tfsdk.State{Schema: schema}}
-	_ = importResp.State.Set(ctx, &PaperclipSkillResourceModel{})
+	_ = importResp.State.Set(ctx, &PaperclipSkillResourceModel{
+		Categories:    types.ListNull(types.StringType),
+		Files:         types.MapNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+	})
 	r.ImportState(ctx, resource.ImportStateRequest{ID: "skill-1"}, &importResp)
 	r.ImportState(ctx, resource.ImportStateRequest{ID: "comp-1/skill-1"}, &importResp)
 
 	// 404 read
 	read404 := resource.ReadResponse{State: tfsdk.State{Schema: schema}}
-	m404 := PaperclipSkillResourceModel{ID: types.StringValue("skill-missing"), CompanyID: types.StringValue("comp-1")}
+	m404 := PaperclipSkillResourceModel{
+		ID:            types.StringValue("skill-missing"),
+		CompanyID:     types.StringValue("comp-1"),
+		Categories:    types.ListNull(types.StringType),
+		Files:         types.MapNull(types.StringType),
+		FileInventory: types.ListNull(fileInventoryObjectType),
+	}
 	_ = read404.State.Set(ctx, &m404)
 	r.Read(ctx, resource.ReadRequest{State: read404.State}, &read404)
 	if !read404.State.Raw.IsNull() {
@@ -868,6 +890,8 @@ func TestPaperclipAgentResourceLifecycle(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "comp-1"})
 		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-1/agents":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": "agent-1", "companyId": "comp-1", "name": "Agent 1", "role": "engineer",

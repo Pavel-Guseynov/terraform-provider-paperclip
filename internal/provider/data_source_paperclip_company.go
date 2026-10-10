@@ -25,10 +25,15 @@ type PaperclipCompanyDataSource struct {
 }
 
 type PaperclipCompanyDataSourceModel struct {
-	ID                           types.String `tfsdk:"id"`
-	Name                         types.String `tfsdk:"name"`
-	Description                  types.String `tfsdk:"description"`
-	RequireTaskStartConfirmation types.Bool   `tfsdk:"require_task_start_confirmation"`
+	ID                               types.String `tfsdk:"id"`
+	Name                             types.String `tfsdk:"name"`
+	Description                      types.String `tfsdk:"description"`
+	Status                           types.String `tfsdk:"status"`
+	DefaultResponsibleUserID         types.String `tfsdk:"default_responsible_user_id"`
+	RequireBoardApprovalForNewAgents types.Bool   `tfsdk:"require_board_approval_for_new_agents"`
+	InteractionResolverGovernance    types.String `tfsdk:"interaction_resolver_governance"`
+	FeedbackDataSharingEnabled       types.Bool   `tfsdk:"feedback_data_sharing_enabled"`
+	LogoAssetID                      types.String `tfsdk:"logo_asset_id"`
 }
 
 func (d *PaperclipCompanyDataSource) Metadata(ctx context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -53,8 +58,28 @@ func (d *PaperclipCompanyDataSource) Schema(ctx context.Context, req datasource.
 				Description: "Company description.",
 				Computed:    true,
 			},
-			"require_task_start_confirmation": schema.BoolAttribute{
-				Description: "Whether newly runnable tasks require start confirmation in Decisions.",
+			"status": schema.StringAttribute{
+				Description: "Administrative status of the company (active, paused, or archived).",
+				Computed:    true,
+			},
+			"default_responsible_user_id": schema.StringAttribute{
+				Description: "Default responsible user identifier.",
+				Computed:    true,
+			},
+			"require_board_approval_for_new_agents": schema.BoolAttribute{
+				Description: "Whether adding new agents requires board approval.",
+				Computed:    true,
+			},
+			"interaction_resolver_governance": schema.StringAttribute{
+				Description: "Interaction resolver governance policy configuration as a JSON object.",
+				Computed:    true,
+			},
+			"feedback_data_sharing_enabled": schema.BoolAttribute{
+				Description: "Whether feedback data sharing is enabled for the company.",
+				Computed:    true,
+			},
+			"logo_asset_id": schema.StringAttribute{
+				Description: "Logo asset reference identifier.",
 				Computed:    true,
 			},
 		},
@@ -109,12 +134,17 @@ func (d *PaperclipCompanyDataSource) Read(ctx context.Context, req datasource.Re
 
 	config.ID = types.StringValue(comp.ID)
 	config.Name = types.StringValue(comp.Name)
-	if comp.Description != "" {
-		config.Description = types.StringValue(comp.Description)
+	config.Description = stringOrNull(comp.Description)
+	if comp.Status != "" {
+		config.Status = types.StringValue(comp.Status)
 	} else {
-		config.Description = types.StringNull()
+		config.Status = types.StringValue("active")
 	}
-	config.RequireTaskStartConfirmation = types.BoolValue(comp.RequireTaskStartConfirmation)
+	config.DefaultResponsibleUserID = stringOrNull(comp.DefaultResponsibleUserID)
+	config.RequireBoardApprovalForNewAgents = types.BoolValue(comp.RequireBoardApprovalForNewAgents)
+	config.InteractionResolverGovernance = refreshSemanticJSON(config.InteractionResolverGovernance, comp.InteractionResolverGovernance)
+	config.FeedbackDataSharingEnabled = types.BoolValue(comp.FeedbackDataSharingEnabled)
+	config.LogoAssetID = stringOrNull(comp.LogoAssetID)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &config)...)
 }

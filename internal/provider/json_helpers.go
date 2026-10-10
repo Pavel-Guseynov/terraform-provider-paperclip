@@ -142,3 +142,92 @@ func validateJSONString(attributePath path.Path, val string) error {
 	}
 	return nil
 }
+
+type interactionResolverGovernanceValidator struct{}
+
+func (interactionResolverGovernanceValidator) Description(context.Context) string {
+	return "validates interaction resolver governance kinds and policy values"
+}
+
+func (v interactionResolverGovernanceValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (interactionResolverGovernanceValidator) ValidateString(ctx context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() || req.ConfigValue.ValueString() == "" {
+		return
+	}
+	var root map[string]interface{}
+	if err := json.Unmarshal([]byte(req.ConfigValue.ValueString()), &root); err != nil {
+		return
+	}
+
+	validKinds := map[string]bool{
+		"suggest_tasks":                 true,
+		"ask_user_questions":            true,
+		"request_confirmation":          true,
+		"request_checkbox_confirmation": true,
+		"request_item_verdicts":         true,
+	}
+
+	validPolicies := map[string]bool{
+		"anyone":          true,
+		"not_creator":     true,
+		"human_only":      true,
+		"board_or_agents": true,
+		"board_only":      true,
+	}
+
+	for kind, val := range root {
+		if !validKinds[kind] {
+			resp.Diagnostics.AddAttributeError(
+				req.Path,
+				"Invalid Interaction Resolver Governance Kind",
+				fmt.Sprintf("Kind %q is not valid. Valid kinds are: suggest_tasks, ask_user_questions, request_confirmation, request_checkbox_confirmation, request_item_verdicts", kind),
+			)
+			continue
+		}
+		policyObj, ok := val.(map[string]interface{})
+		if !ok {
+			resp.Diagnostics.AddAttributeError(
+				req.Path,
+				"Invalid Interaction Resolver Governance Kind Value",
+				fmt.Sprintf("Value for kind %q must be a JSON object with defaultPolicy and/or cap", kind),
+			)
+			continue
+		}
+		for k, p := range policyObj {
+			if k != "defaultPolicy" && k != "cap" {
+				resp.Diagnostics.AddAttributeError(
+					req.Path,
+					"Invalid Interaction Resolver Governance Policy Key",
+					fmt.Sprintf("Key %q for kind %q is not valid. Expected defaultPolicy or cap", k, kind),
+				)
+				continue
+			}
+			pStr, ok := p.(string)
+			if !ok || !validPolicies[pStr] {
+				resp.Diagnostics.AddAttributeError(
+					req.Path,
+					"Invalid Interaction Resolver Governance Policy Value",
+					fmt.Sprintf("Policy %q for %s.%s is not valid. Valid policies are: anyone, not_creator, human_only, board_or_agents, board_only", fmt.Sprintf("%v", p), kind, k),
+				)
+			}
+		}
+	}
+}
+
+func InteractionResolverGovernanceValidator() validator.String {
+	return interactionResolverGovernanceValidator{}
+}
+
+func parseInteractionResolverGovernance(raw string) (map[string]interface{}, error) {
+	if raw == "" {
+		return map[string]interface{}{}, nil
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}
