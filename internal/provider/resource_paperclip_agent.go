@@ -21,11 +21,12 @@ import (
 )
 
 var (
-	_ resource.Resource                 = &PaperclipAgentResource{}
-	_ resource.ResourceWithConfigure    = &PaperclipAgentResource{}
-	_ resource.ResourceWithImportState  = &PaperclipAgentResource{}
-	_ resource.ResourceWithModifyPlan   = &PaperclipAgentResource{}
-	_ resource.ResourceWithUpgradeState = &PaperclipAgentResource{}
+	_ resource.Resource                   = &PaperclipAgentResource{}
+	_ resource.ResourceWithConfigure      = &PaperclipAgentResource{}
+	_ resource.ResourceWithImportState    = &PaperclipAgentResource{}
+	_ resource.ResourceWithModifyPlan     = &PaperclipAgentResource{}
+	_ resource.ResourceWithUpgradeState   = &PaperclipAgentResource{}
+	_ resource.ResourceWithValidateConfig = &PaperclipAgentResource{}
 )
 
 func NewPaperclipAgentResource() resource.Resource {
@@ -37,28 +38,29 @@ type PaperclipAgentResource struct {
 }
 
 type PaperclipAgentResourceModel struct {
-	ID                   types.String `tfsdk:"id"`
-	CompanyID            types.String `tfsdk:"company_id"`
-	Name                 types.String `tfsdk:"name"`
-	Role                 types.String `tfsdk:"role"`
-	Title                types.String `tfsdk:"title"`
-	Icon                 types.String `tfsdk:"icon"`
-	ReportsTo            types.String `tfsdk:"reports_to"`
-	Capabilities         types.String `tfsdk:"capabilities"`
-	DefaultEnvironmentID types.String `tfsdk:"default_environment_id"`
-	AdapterType          types.String `tfsdk:"adapter_type"`
-	Status               types.String `tfsdk:"status"`
-	RuntimeConfig        types.String `tfsdk:"runtime_config"`
-	AdapterConfig        types.String `tfsdk:"adapter_config"`
-	Metadata             types.String `tfsdk:"metadata"`
-	Instructions         types.String `tfsdk:"instructions"`
-	CanAssignTasks       types.Bool   `tfsdk:"can_assign_tasks"`
-	CanCreateAgents      types.Bool   `tfsdk:"can_create_agents"`
-	CanCreateSkills      types.Bool   `tfsdk:"can_create_skills"`
-	TrustPreset          types.String `tfsdk:"trust_preset"`
-	AuthorizationPolicy  types.String `tfsdk:"authorization_policy"`
-	Paused               types.Bool   `tfsdk:"paused"`
-	Retirement           types.String `tfsdk:"retirement"`
+	ID                   types.String               `tfsdk:"id"`
+	CompanyID            types.String               `tfsdk:"company_id"`
+	Name                 types.String               `tfsdk:"name"`
+	Role                 types.String               `tfsdk:"role"`
+	Title                types.String               `tfsdk:"title"`
+	Icon                 types.String               `tfsdk:"icon"`
+	ReportsTo            types.String               `tfsdk:"reports_to"`
+	Capabilities         types.String               `tfsdk:"capabilities"`
+	DefaultEnvironmentID types.String               `tfsdk:"default_environment_id"`
+	AdapterType          types.String               `tfsdk:"adapter_type"`
+	Status               types.String               `tfsdk:"status"`
+	RuntimeConfig        types.String               `tfsdk:"runtime_config"`
+	AdapterConfig        types.String               `tfsdk:"adapter_config"`
+	Metadata             types.String               `tfsdk:"metadata"`
+	Instructions         types.String               `tfsdk:"instructions"`
+	CanAssignTasks       types.Bool                 `tfsdk:"can_assign_tasks"`
+	CanCreateAgents      types.Bool                 `tfsdk:"can_create_agents"`
+	CanCreateSkills      types.Bool                 `tfsdk:"can_create_skills"`
+	TrustPreset          types.String               `tfsdk:"trust_preset"`
+	AuthorizationPolicy  types.String               `tfsdk:"authorization_policy"`
+	Paused               types.Bool                 `tfsdk:"paused"`
+	Retirement           types.String               `tfsdk:"retirement"`
+	Env                  map[string]EnvBindingModel `tfsdk:"env"`
 }
 
 func (r *PaperclipAgentResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -235,6 +237,7 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 					stringOneOfValidator{allowed: []string{"terminate", "delete"}},
 				},
 			},
+			"env": EnvBindingMapAttribute("Optional environment bindings for the agent (merged into adapter_config.env)."),
 		},
 	}
 }
@@ -372,6 +375,28 @@ func validateTrustPresetNotCleared(stateVal, planVal types.String) error {
 		return fmt.Errorf("trust_preset cannot be cleared once configured: the Paperclip API does not support removing trust_preset. Set trust_preset to an explicit value (such as \"standard\") instead.")
 	}
 	return nil
+}
+
+func (r *PaperclipAgentResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config PaperclipAgentResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if config.Env != nil {
+		resp.Diagnostics.Append(ValidateEnvBindingsMapPlan(path.Root("env"), config.Env, "agent")...)
+	}
+
+	if !config.AdapterConfig.IsNull() && !config.AdapterConfig.IsUnknown() && config.AdapterConfig.ValueString() != "" {
+		var rawMap map[string]interface{}
+		if err := json.Unmarshal([]byte(config.AdapterConfig.ValueString()), &rawMap); err == nil {
+			if rawEnv, ok := rawMap["env"].(map[string]interface{}); ok {
+				envJSON, _ := json.Marshal(rawEnv)
+				resp.Diagnostics.Append(ValidateEnvBindingsJSONPlan(path.Root("adapter_config"), string(envJSON), "agent")...)
+			}
+		}
+	}
 }
 
 func (r *PaperclipAgentResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
@@ -547,6 +572,36 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 			return
 		}
 	}
+	if plan.Env != nil {
+		resp.Diagnostics.Append(ValidateEnvBindingsApply(ctx, r.client, plan.CompanyID.ValueString(), plan.Env)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+	if !plan.AdapterConfig.IsNull() && !plan.AdapterConfig.IsUnknown() && plan.AdapterConfig.ValueString() != "" {
+		if rawEnv, ok := adapterMap["env"].(map[string]interface{}); ok {
+			envJSON, _ := json.Marshal(rawEnv)
+			resp.Diagnostics.Append(ValidateEnvBindingsJSONApply(ctx, r.client, plan.CompanyID.ValueString(), string(envJSON))...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+		}
+	}
+	if plan.Env != nil && len(plan.Env) > 0 {
+		if adapterMap == nil {
+			adapterMap = make(map[string]interface{})
+		}
+		apiEnv := EnvBindingsMapToAPI(plan.Env)
+		existingEnv, ok := adapterMap["env"].(map[string]interface{})
+		if !ok || existingEnv == nil {
+			adapterMap["env"] = apiEnv
+		} else {
+			for k, v := range apiEnv {
+				existingEnv[k] = v
+			}
+			adapterMap["env"] = existingEnv
+		}
+	}
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
 		if err := json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap); err != nil {
 			resp.Diagnostics.AddAttributeError(path.Root("metadata"), "Invalid JSON", err.Error())
@@ -688,6 +743,10 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 		plan.Retirement = types.StringValue("delete")
 	}
 
+	if plan.Env != nil {
+		plan.Env = refreshAgentEnvBindings(plan.Env, created.AdapterConfig)
+	}
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -768,6 +827,10 @@ func (r *PaperclipAgentResource) Read(ctx context.Context, req resource.ReadRequ
 		state.Instructions = types.StringValue(instructions)
 	} else {
 		state.Instructions = types.StringNull()
+	}
+
+	if state.Env != nil {
+		state.Env = refreshAgentEnvBindings(state.Env, agent.AdapterConfig)
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -929,6 +992,82 @@ func jsonContains(remote, managed interface{}) bool {
 	return true
 }
 
+func refreshAgentEnvBindings(currentEnv map[string]EnvBindingModel, remoteAdapterConfig map[string]interface{}) map[string]EnvBindingModel {
+	if currentEnv == nil {
+		return nil
+	}
+	if remoteAdapterConfig == nil {
+		return make(map[string]EnvBindingModel)
+	}
+	remoteEnv, ok := remoteAdapterConfig["env"].(map[string]interface{})
+	if !ok || remoteEnv == nil {
+		return make(map[string]EnvBindingModel)
+	}
+
+	result := make(map[string]EnvBindingModel, len(currentEnv))
+	for k, currentBinding := range currentEnv {
+		remoteVal, exists := remoteEnv[k]
+		if !exists {
+			continue
+		}
+		switch v := remoteVal.(type) {
+		case string:
+			currentBinding.Type = types.StringValue("plain")
+			currentBinding.Value = types.StringValue(v)
+			result[k] = currentBinding
+		case map[string]interface{}:
+			bType, _ := v["type"].(string)
+			switch bType {
+			case "plain":
+				currentBinding.Type = types.StringValue("plain")
+				if valStr, ok := v["value"].(string); ok {
+					currentBinding.Value = types.StringValue(valStr)
+				}
+				result[k] = currentBinding
+			case "secret_ref":
+				currentBinding.Type = types.StringValue("secret_ref")
+				if secID, ok := v["secretId"].(string); ok {
+					currentBinding.SecretID = types.StringValue(secID)
+				}
+				if ver, ok := v["version"].(string); ok {
+					currentBinding.Version = types.StringValue(ver)
+				} else if currentBinding.Version.IsNull() || currentBinding.Version.IsUnknown() {
+					currentBinding.Version = types.StringNull()
+				}
+				if proj, ok := v["projectionClass"].(string); ok {
+					currentBinding.ProjectionClass = types.StringValue(proj)
+				}
+				if alk, ok := v["projectionAllowlistKey"].(string); ok {
+					currentBinding.ProjectionAllowlistKey = types.StringValue(alk)
+				}
+				result[k] = currentBinding
+			case "user_secret_ref":
+				currentBinding.Type = types.StringValue("user_secret_ref")
+				if keyVal, ok := v["key"].(string); ok {
+					currentBinding.Key = types.StringValue(keyVal)
+				}
+				if ver, ok := v["version"].(string); ok {
+					currentBinding.Version = types.StringValue(ver)
+				} else if currentBinding.Version.IsNull() || currentBinding.Version.IsUnknown() {
+					currentBinding.Version = types.StringNull()
+				}
+				if reqVal, ok := v["required"].(bool); ok {
+					currentBinding.Required = types.BoolValue(reqVal)
+				}
+				if amoVal, ok := v["allowMissingOverride"].(bool); ok {
+					currentBinding.AllowMissingOverride = types.BoolValue(amoVal)
+				}
+				result[k] = currentBinding
+			default:
+				result[k] = currentBinding
+			}
+		default:
+			result[k] = currentBinding
+		}
+	}
+	return result
+}
+
 func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan PaperclipAgentResourceModel
 	var state PaperclipAgentResourceModel
@@ -947,13 +1086,25 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		}
 	}
 	var replaceAdapterConfig bool
+	var currentAgent *client.PaperclipAgent
+	getCurrentAgent := func() (*client.PaperclipAgent, error) {
+		if currentAgent != nil {
+			return currentAgent, nil
+		}
+		a, err := r.client.GetAgent(ctx, state.ID.ValueString())
+		if err != nil {
+			return nil, err
+		}
+		currentAgent = a
+		return currentAgent, nil
+	}
 	if !plan.AdapterConfig.IsNull() && !plan.AdapterConfig.IsUnknown() && plan.AdapterConfig.ValueString() != "" {
 		if err := json.Unmarshal([]byte(plan.AdapterConfig.ValueString()), &adapterMap); err != nil {
 			resp.Diagnostics.AddAttributeError(path.Root("adapter_config"), "Invalid JSON", err.Error())
 			return
 		}
 		if adapterMap != nil {
-			current, err := r.client.GetAgent(ctx, state.ID.ValueString())
+			current, err := getCurrentAgent()
 			if err != nil {
 				resp.Diagnostics.AddError("Error reading Paperclip agent before update", err.Error())
 				return
@@ -963,12 +1114,69 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		}
 	} else if plan.AdapterConfig.IsNull() && !state.AdapterConfig.IsNull() {
 		adapterMap = make(map[string]interface{})
-		current, err := r.client.GetAgent(ctx, state.ID.ValueString())
+		current, err := getCurrentAgent()
 		if err != nil {
 			resp.Diagnostics.AddError("Error reading Paperclip agent before update", err.Error())
 			return
 		}
 		preservePaperclipManagedAdapterConfig(current.AdapterConfig, adapterMap)
+		replaceAdapterConfig = true
+	}
+	if plan.Env != nil {
+		resp.Diagnostics.Append(ValidateEnvBindingsApply(ctx, r.client, plan.CompanyID.ValueString(), plan.Env)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+	if !plan.AdapterConfig.IsNull() && !plan.AdapterConfig.IsUnknown() && plan.AdapterConfig.ValueString() != "" {
+		if rawEnv, ok := adapterMap["env"].(map[string]interface{}); ok {
+			envJSON, _ := json.Marshal(rawEnv)
+			resp.Diagnostics.Append(ValidateEnvBindingsJSONApply(ctx, r.client, plan.CompanyID.ValueString(), string(envJSON))...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+		}
+	}
+	if plan.Env != nil {
+		if adapterMap == nil {
+			adapterMap = make(map[string]interface{})
+		}
+		current, err := getCurrentAgent()
+		if err != nil {
+			resp.Diagnostics.AddError("Error reading Paperclip agent before update", err.Error())
+			return
+		}
+		if current.AdapterConfig != nil {
+			preservePaperclipManagedAdapterConfig(current.AdapterConfig, adapterMap)
+		}
+		if len(plan.Env) > 0 {
+			apiEnv := EnvBindingsMapToAPI(plan.Env)
+			existingEnv, ok := adapterMap["env"].(map[string]interface{})
+			if !ok || existingEnv == nil {
+				adapterMap["env"] = apiEnv
+			} else {
+				for k, v := range apiEnv {
+					existingEnv[k] = v
+				}
+				for k := range state.Env {
+					if _, stillPresent := plan.Env[k]; !stillPresent {
+						delete(existingEnv, k)
+					}
+				}
+				adapterMap["env"] = existingEnv
+			}
+		} else {
+			if existingEnv, ok := adapterMap["env"].(map[string]interface{}); ok {
+				for k := range state.Env {
+					delete(existingEnv, k)
+				}
+				if len(existingEnv) == 0 {
+					delete(adapterMap, "env")
+				} else {
+					adapterMap["env"] = existingEnv
+				}
+			}
+		}
 		replaceAdapterConfig = true
 	}
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
@@ -1140,6 +1348,10 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 
 	if plan.Instructions.IsNull() || plan.Instructions.IsUnknown() || plan.Instructions.ValueString() == "" {
 		plan.Instructions = types.StringNull()
+	}
+
+	if plan.Env != nil {
+		plan.Env = refreshAgentEnvBindings(plan.Env, updated.AdapterConfig)
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)

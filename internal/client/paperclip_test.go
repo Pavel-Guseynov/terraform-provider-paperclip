@@ -1799,3 +1799,217 @@ func TestReconcileAskFirstPolicies(t *testing.T) {
 		}
 	}
 }
+
+func TestSecretProviderConfigAndUserSecretDefinitionCRUD(t *testing.T) {
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := r.URL.Path
+
+		switch {
+		case r.Method == http.MethodPost && p == "/api/companies/comp-1/secret-provider-configs":
+			var input PaperclipSecretProviderConfig
+			_ = json.NewDecoder(r.Body).Decode(&input)
+			input.ID = "spc-1"
+			_ = json.NewEncoder(w).Encode(input)
+		case r.Method == http.MethodGet && p == "/api/secret-provider-configs/spc-1":
+			_ = json.NewEncoder(w).Encode(PaperclipSecretProviderConfig{ID: "spc-1", CompanyID: "comp-1", Provider: "vault", DisplayName: "HashiCorp Vault"})
+		case r.Method == http.MethodPatch && p == "/api/secret-provider-configs/spc-1":
+			var input PaperclipSecretProviderConfig
+			_ = json.NewDecoder(r.Body).Decode(&input)
+			input.ID = "spc-1"
+			input.CompanyID = "comp-1"
+			_ = json.NewEncoder(w).Encode(input)
+		case r.Method == http.MethodDelete && p == "/api/secret-provider-configs/spc-1":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && p == "/api/companies/comp-1/secret-provider-configs":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"providerConfigs": []map[string]interface{}{
+					{"id": "spc-1", "provider": "vault", "displayName": "Vault 1"},
+					{"id": "spc-2", "companyId": "comp-1", "provider": "aws_secrets_manager", "displayName": "AWS 2"},
+				},
+			})
+		case r.Method == http.MethodPost && p == "/api/companies/comp-1/user-secret-definitions":
+			var input PaperclipUserSecretDefinition
+			_ = json.NewDecoder(r.Body).Decode(&input)
+			input.ID = "usd-1"
+			_ = json.NewEncoder(w).Encode(input)
+		case r.Method == http.MethodPatch && p == "/api/companies/comp-1/user-secret-definitions/usd-1":
+			var input PaperclipUserSecretDefinition
+			_ = json.NewDecoder(r.Body).Decode(&input)
+			input.ID = "usd-1"
+			_ = json.NewEncoder(w).Encode(input)
+		case r.Method == http.MethodDelete && p == "/api/companies/comp-1/user-secret-definitions/usd-1":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		case r.Method == http.MethodGet && p == "/api/companies/comp-1/user-secret-definitions":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"userSecretDefinitions": []map[string]interface{}{
+					{"id": "usd-1", "key": "openai_api_key", "name": "OpenAI Key"},
+					{"id": "usd-2", "companyId": "comp-1", "key": "anthropic_api_key", "name": "Anthropic Key"},
+				},
+			})
+		case r.Method == http.MethodGet && p == "/api/secret-provider-configs/not-found":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		default:
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":"internal error"}`))
+		}
+	}))
+	defer server.Close()
+
+	cli, err := NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	// SecretProviderConfig Tests
+	createdSpc, err := cli.CreateSecretProviderConfig(ctx, "comp-1", PaperclipSecretProviderConfig{
+		Provider:    "vault",
+		DisplayName: "HashiCorp Vault",
+	})
+	if err != nil || createdSpc.ID != "spc-1" || createdSpc.CompanyID != "comp-1" {
+		t.Fatalf("CreateSecretProviderConfig failed: %v, %#v", err, createdSpc)
+	}
+
+	gotSpc, err := cli.GetSecretProviderConfig(ctx, "spc-1")
+	if err != nil || gotSpc.ID != "spc-1" {
+		t.Fatalf("GetSecretProviderConfig failed: %v, %#v", err, gotSpc)
+	}
+
+	updatedSpc, err := cli.UpdateSecretProviderConfig(ctx, "spc-1", PaperclipSecretProviderConfig{
+		DisplayName: "Updated Vault",
+	})
+	if err != nil || updatedSpc.DisplayName != "Updated Vault" {
+		t.Fatalf("UpdateSecretProviderConfig failed: %v, %#v", err, updatedSpc)
+	}
+
+	if err := cli.DeleteSecretProviderConfig(ctx, "spc-1"); err != nil {
+		t.Fatalf("DeleteSecretProviderConfig failed: %v", err)
+	}
+
+	spcList, err := cli.ListSecretProviderConfigs(ctx, "comp-1")
+	if err != nil || len(spcList) != 2 || spcList[0].CompanyID != "comp-1" {
+		t.Fatalf("ListSecretProviderConfigs failed: %v, %#v", err, spcList)
+	}
+
+	// UserSecretDefinition Tests
+	createdUsd, err := cli.CreateUserSecretDefinition(ctx, "comp-1", PaperclipUserSecretDefinition{
+		Key:  "openai_api_key",
+		Name: "OpenAI Key",
+	})
+	if err != nil || createdUsd.ID != "usd-1" || createdUsd.CompanyID != "comp-1" {
+		t.Fatalf("CreateUserSecretDefinition failed: %v, %#v", err, createdUsd)
+	}
+
+	gotUsd, err := cli.GetUserSecretDefinition(ctx, "comp-1", "usd-1")
+	if err != nil || gotUsd.ID != "usd-1" {
+		t.Fatalf("GetUserSecretDefinition by ID failed: %v, %#v", err, gotUsd)
+	}
+
+	gotUsdByKey, err := cli.GetUserSecretDefinition(ctx, "comp-1", "openai_api_key")
+	if err != nil || gotUsdByKey.ID != "usd-1" {
+		t.Fatalf("GetUserSecretDefinition by Key failed: %v, %#v", err, gotUsdByKey)
+	}
+
+	if _, err := cli.GetUserSecretDefinition(ctx, "comp-1", "non-existent"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound, got: %v", err)
+	}
+
+	updatedUsd, err := cli.UpdateUserSecretDefinition(ctx, "comp-1", "usd-1", PaperclipUserSecretDefinition{
+		Name: "Updated Key",
+	})
+	if err != nil || updatedUsd.Name != "Updated Key" {
+		t.Fatalf("UpdateUserSecretDefinition failed: %v, %#v", err, updatedUsd)
+	}
+
+	if err := cli.DeleteUserSecretDefinition(ctx, "comp-1", "usd-1"); err != nil {
+		t.Fatalf("DeleteUserSecretDefinition failed: %v", err)
+	}
+
+	usdList, err := cli.ListUserSecretDefinitions(ctx, "comp-1")
+	if err != nil || len(usdList) != 2 || usdList[0].CompanyID != "comp-1" {
+		t.Fatalf("ListUserSecretDefinitions failed: %v, %#v", err, usdList)
+	}
+
+	// Empty ID checks
+	if _, err := cli.GetSecretProviderConfig(ctx, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for empty id, got: %v", err)
+	}
+	if _, err := cli.GetUserSecretDefinition(ctx, "", "usd-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for empty companyID, got: %v", err)
+	}
+	if _, err := cli.GetUserSecretDefinition(ctx, "comp-1", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for empty id, got: %v", err)
+	}
+
+	// Alternate envelope tests
+	serverEnv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(r.URL.Path, "secret-provider-configs") {
+			if r.URL.Query().Get("fmt") == "spc" {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"secretProviderConfigs": []map[string]interface{}{{"id": "spc-3", "provider": "vault"}},
+				})
+			} else {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{
+					"configs": []interface{}{map[string]interface{}{"id": "spc-4", "provider": "vault"}, "not-a-map"},
+				})
+			}
+		} else {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"definitions": []interface{}{map[string]interface{}{"id": "usd-3", "key": "key3"}, "not-a-map"},
+			})
+		}
+	}))
+	defer serverEnv.Close()
+	cliEnv, _ := NewClient(serverEnv.URL, "token")
+	spcEnvList1, err := cliEnv.ListSecretProviderConfigs(ctx, "comp-1?fmt=spc")
+	if err != nil || len(spcEnvList1) != 1 {
+		t.Fatalf("ListSecretProviderConfigs spc envelope failed: %v", err)
+	}
+	spcEnvList2, err := cliEnv.ListSecretProviderConfigs(ctx, "comp-1")
+	if err != nil || len(spcEnvList2) != 1 {
+		t.Fatalf("ListSecretProviderConfigs configs envelope failed: %v", err)
+	}
+	usdEnvList, err := cliEnv.ListUserSecretDefinitions(ctx, "comp-1")
+	if err != nil || len(usdEnvList) != 1 {
+		t.Fatalf("ListUserSecretDefinitions definitions envelope failed: %v", err)
+	}
+
+	// Error paths
+	badCli, _ := NewClient("http://127.0.0.1:1", "token")
+	if _, err := badCli.CreateSecretProviderConfig(ctx, "comp-1", PaperclipSecretProviderConfig{}); err == nil {
+		t.Fatal("expected error on bad host CreateSecretProviderConfig")
+	}
+	if _, err := badCli.GetSecretProviderConfig(ctx, "spc-1"); err == nil {
+		t.Fatal("expected error on bad host GetSecretProviderConfig")
+	}
+	if _, err := badCli.UpdateSecretProviderConfig(ctx, "spc-1", PaperclipSecretProviderConfig{}); err == nil {
+		t.Fatal("expected error on bad host UpdateSecretProviderConfig")
+	}
+	if err := badCli.DeleteSecretProviderConfig(ctx, "spc-1"); err == nil {
+		t.Fatal("expected error on bad host DeleteSecretProviderConfig")
+	}
+	if _, err := badCli.ListSecretProviderConfigs(ctx, "comp-1"); err == nil {
+		t.Fatal("expected error on bad host ListSecretProviderConfigs")
+	}
+	if _, err := badCli.CreateUserSecretDefinition(ctx, "comp-1", PaperclipUserSecretDefinition{}); err == nil {
+		t.Fatal("expected error on bad host CreateUserSecretDefinition")
+	}
+	if _, err := badCli.GetUserSecretDefinition(ctx, "comp-1", "usd-1"); err == nil {
+		t.Fatal("expected error on bad host GetUserSecretDefinition")
+	}
+	if _, err := badCli.UpdateUserSecretDefinition(ctx, "comp-1", "usd-1", PaperclipUserSecretDefinition{}); err == nil {
+		t.Fatal("expected error on bad host UpdateUserSecretDefinition")
+	}
+	if err := badCli.DeleteUserSecretDefinition(ctx, "comp-1", "usd-1"); err == nil {
+		t.Fatal("expected error on bad host DeleteUserSecretDefinition")
+	}
+	if _, err := badCli.ListUserSecretDefinitions(ctx, "comp-1"); err == nil {
+		t.Fatal("expected error on bad host ListUserSecretDefinitions")
+	}
+}
+
