@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	ephemeralschema "github.com/hashicorp/terraform-plugin-framework/ephemeral/schema"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -17,11 +19,48 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
+var jsonMarshal = json.Marshal
+
+type privateStateSetter interface {
+	SetKey(context.Context, string, []byte) diag.Diagnostics
+}
+
+type privateStateGetter interface {
+	GetKey(context.Context, string) ([]byte, diag.Diagnostics)
+}
+
+func setPrivateStateKey(ctx context.Context, private privateStateSetter, key string, val any, diags *diag.Diagnostics) {
+	if private == nil {
+		return
+	}
+	b, err := jsonMarshal(val)
+	if err != nil {
+		diags.AddError("Error encoding private state "+key, err.Error())
+		return
+	}
+	diags.Append(private.SetKey(ctx, key, b)...)
+}
+
+func getPrivateStateKey(ctx context.Context, private privateStateGetter, key string, target any, diags *diag.Diagnostics) {
+	if private == nil {
+		return
+	}
+	b, d := private.GetKey(ctx, key)
+	diags.Append(d...)
+	if diags.HasError() || len(b) == 0 {
+		return
+	}
+	if err := json.Unmarshal(b, target); err != nil {
+		diags.AddError("Error decoding private state "+key, err.Error())
+	}
+}
+
 var (
 	_ provider.Provider                        = &PaperclipProvider{}
 	_ provider.ProviderWithEphemeralResources  = &PaperclipProvider{}
 	_ ephemeral.EphemeralResource              = &PaperclipBoardKeyEphemeralResource{}
 	_ ephemeral.EphemeralResourceWithConfigure = &PaperclipBoardKeyEphemeralResource{}
+	_ ephemeral.EphemeralResourceWithClose     = &PaperclipBoardKeyEphemeralResource{}
 )
 
 type PaperclipProvider struct {
@@ -156,10 +195,13 @@ type PaperclipBoardKeyEphemeralResource struct {
 }
 
 type PaperclipBoardKeyEphemeralResourceModel struct {
-	Name       types.String `tfsdk:"name"`
-	Activation types.String `tfsdk:"activation"`
-	KeyID      types.String `tfsdk:"key_id"`
-	Token      types.String `tfsdk:"token"`
+	Name               types.String `tfsdk:"name"`
+	Generation         types.Int64  `tfsdk:"generation"`
+	ExpiresAt          types.String `tfsdk:"expires_at"`
+	RequestedCompanyID types.String `tfsdk:"requested_company_id"`
+	KeyID              types.String `tfsdk:"key_id"`
+	Token              types.String `tfsdk:"token"`
+	Applying           types.Bool   `tfsdk:"applying"`
 }
 
 func NewPaperclipBoardKeyEphemeralResource() ephemeral.EphemeralResource {
@@ -172,24 +214,37 @@ func (r *PaperclipBoardKeyEphemeralResource) Metadata(ctx context.Context, req e
 
 func (r *PaperclipBoardKeyEphemeralResource) Schema(ctx context.Context, req ephemeral.SchemaRequest, resp *ephemeral.SchemaResponse) {
 	resp.Schema = ephemeralschema.Schema{
-		Description: "Creates and verifies one Paperclip board key during an approved OpenTofu apply.",
+		Description: "Produces a Paperclip board key token only during apply for ephemeral or write-only delivery.",
 		Attributes: map[string]ephemeralschema.Attribute{
 			"name": ephemeralschema.StringAttribute{
-				Description: "Name recorded for the Paperclip board key.",
-				Required:    true,
+				Description: "Board key name.",
+				Optional:    true,
 			},
-			"activation": ephemeralschema.StringAttribute{
-				Description: "Apply-only activation value; pass timestamp() so planning leaves it unknown and cannot mint a key.",
-				Required:    true,
+			"generation": ephemeralschema.Int64Attribute{
+				Description: "Monotonic generation number.",
+				Optional:    true,
+			},
+			"expires_at": ephemeralschema.StringAttribute{
+				Description: "Optional RFC3339 expiration timestamp.",
+				Optional:    true,
+			},
+			"requested_company_id": ephemeralschema.StringAttribute{
+				Description: "Optional company ID to scope board key activity records.",
+				Optional:    true,
 			},
 			"key_id": ephemeralschema.StringAttribute{
-				Description: "Paperclip board key identifier.",
+				Description: "Managed Paperclip board key ID.",
+				Optional:    true,
 				Computed:    true,
 			},
 			"token": ephemeralschema.StringAttribute{
-				Description: "Paperclip board bearer supplied only to another ephemeral or write-only context.",
+				Description: "Ephemeral bearer token delivered only to an ephemeral or write-only consumer.",
 				Computed:    true,
 				Sensitive:   true,
+			},
+			"applying": ephemeralschema.BoolAttribute{
+				Description: "Indicates whether the apply phase is actively running (e.g. tofu.applying). When false, credential minting is deferred.",
+				Optional:    true,
 			},
 		},
 	}
@@ -220,15 +275,163 @@ func (r *PaperclipBoardKeyEphemeralResource) Open(ctx context.Context, req ephem
 		resp.Diagnostics.AddError("Unconfigured Paperclip Client", "Expected a configured Paperclip provider client.")
 		return
 	}
-	key, err := r.client.CreateBoardKey(ctx, data.Name.ValueString())
-	if err != nil {
-		resp.Diagnostics.AddError("Error creating Paperclip board key", err.Error())
+
+	name := data.Name.ValueString()
+	gen := int64(1)
+	if !data.Generation.IsNull() && !data.Generation.IsUnknown() {
+		gen = data.Generation.ValueInt64()
+	}
+	// 0. Plan-phase deferral when applying is false (e.g. via tofu.applying)
+	if !data.Applying.IsNull() && !data.Applying.IsUnknown() && !data.Applying.ValueBool() {
+		if req.ClientCapabilities.DeferralAllowed {
+			resp.Deferred = &ephemeral.Deferred{
+				Reason: ephemeral.DeferredReasonUnknown,
+			}
+			return
+		}
+		data.KeyID = types.StringNull()
+		data.Token = types.StringNull()
+		resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 		return
 	}
-	data.KeyID = types.StringValue(key.ID)
-	data.Token = types.StringValue(key.Token)
+
+	// 1. If key_id is provided directly without name, handle key_id lookup
+	if name == "" && !data.KeyID.IsNull() && !data.KeyID.IsUnknown() && data.KeyID.ValueString() != "" {
+		keyID := data.KeyID.ValueString()
+		token, ok := r.client.GetMintedToken(keyID)
+		if !ok {
+			if r.client.IsTokenDelivered(keyID) {
+				data.Token = types.StringNull()
+				resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+				return
+			}
+			if req.ClientCapabilities.DeferralAllowed {
+				resp.Deferred = &ephemeral.Deferred{
+					Reason: ephemeral.DeferredReasonEphemeralResourceConfigUnknown,
+				}
+				return
+			}
+			resp.Diagnostics.AddError(
+				"Token Unavailable",
+				fmt.Sprintf("The bearer token for board key %q is unavailable. Tokens are only delivered during the initial apply or generation rotation in which they are minted.", keyID),
+			)
+			return
+		}
+		data.Token = types.StringValue(token)
+		if resp.Private != nil {
+			setPrivateStateKey(ctx, resp.Private, "key_id", keyID, &resp.Diagnostics)
+			setPrivateStateKey(ctx, resp.Private, "is_lookup", true, &resp.Diagnostics)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+		}
+		resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+		return
+	}
+
+	if name == "" {
+		if req.ClientCapabilities.DeferralAllowed {
+			resp.Deferred = &ephemeral.Deferred{
+				Reason: ephemeral.DeferredReasonUnknown,
+			}
+			return
+		}
+		resp.Diagnostics.AddError("Missing name", "A valid name or key_id is required for ephemeral board key.")
+		return
+	}
+
+	// 2. Check if this generation is already delivered
+	if r.client.IsGenerationDelivered(name, true, "", gen) {
+		data.Token = types.StringNull()
+		if keyID, _, ok := r.client.GetMintedKeyForName(name, true, ""); ok && keyID != "" {
+			data.KeyID = types.StringValue(keyID)
+		}
+		resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
+		return
+	}
+
+	// 3. Defer during plan so plan never mints
+	if req.ClientCapabilities.DeferralAllowed {
+		resp.Deferred = &ephemeral.Deferred{
+			Reason: ephemeral.DeferredReasonUnknown,
+		}
+		return
+	}
+
+	// 4. Mint key at apply time
+	var expiresAt *time.Time
+	if !data.ExpiresAt.IsNull() && !data.ExpiresAt.IsUnknown() && data.ExpiresAt.ValueString() != "" {
+		t, err := time.Parse(time.RFC3339, data.ExpiresAt.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid expires_at format", fmt.Sprintf("expires_at must be RFC3339 format: %s", err))
+			return
+		}
+		expiresAt = &t
+	}
+
+	newKey, err := r.client.CreateBoardKey(ctx, name, expiresAt, data.RequestedCompanyID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Error minting Paperclip board key", err.Error())
+		return
+	}
+
+	r.client.RegisterMintedKey(newKey.ID, newKey.Token, name, true, "")
+
+	data.KeyID = types.StringValue(newKey.ID)
+	data.Token = types.StringValue(newKey.Token)
+
+	if resp.Private != nil {
+		setPrivateStateKey(ctx, resp.Private, "key_id", newKey.ID, &resp.Diagnostics)
+		if resp.Diagnostics.HasError() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := r.client.RevokeBoardKey(cleanupCtx, newKey.ID); err != nil {
+				resp.Diagnostics.AddError(
+					"Failed to revoke unconfirmed board key after private state failure",
+					fmt.Sprintf("Failed to revoke unconfirmed board key %s: %s", newKey.ID, err.Error()),
+				)
+			} else {
+				r.client.ClearMintedToken(newKey.ID)
+			}
+			return
+		}
+	}
+
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 }
+
+func (r *PaperclipBoardKeyEphemeralResource) Close(ctx context.Context, req ephemeral.CloseRequest, resp *ephemeral.CloseResponse) {
+	if r.client == nil || req.Private == nil {
+		return
+	}
+	var keyID string
+	var isLookup bool
+	getPrivateStateKey(ctx, req.Private, "key_id", &keyID, &resp.Diagnostics)
+	getPrivateStateKey(ctx, req.Private, "is_lookup", &isLookup, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() || keyID == "" {
+		return
+	}
+
+	if isLookup {
+		r.client.MarkTokenDelivered(keyID)
+		r.client.ClearMintedToken(keyID)
+		return
+	}
+
+	if !r.client.IsKeyDeliveryAcknowledged(keyID) {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := r.client.RevokeBoardKey(cleanupCtx, keyID); err != nil {
+			resp.Diagnostics.AddError("Error revoking unconfirmed board key", err.Error())
+			return
+		}
+		r.client.ClearMintedToken(keyID)
+		return
+	}
+
+	r.client.ClearMintedToken(keyID)
+}
+
 
 func (p *PaperclipProvider) EphemeralResources(ctx context.Context) []func() ephemeral.EphemeralResource {
 	return []func() ephemeral.EphemeralResource{
@@ -246,6 +449,8 @@ func (p *PaperclipProvider) Resources(ctx context.Context) []func() resource.Res
 		NewPaperclipLocalEnvironmentResource,
 		NewPaperclipSkillResource,
 		NewPaperclipSecretResource,
+		NewPaperclipSecretProviderConfigResource,
+		NewPaperclipUserSecretDefinitionResource,
 		NewPaperclipAgentResource,
 		NewPaperclipAppResource,
 		NewPaperclipConnectionResource,
@@ -257,6 +462,9 @@ func (p *PaperclipProvider) Resources(ctx context.Context) []func() resource.Res
 		NewPaperclipSkillPolicyResource,
 		NewPaperclipGoalResource,
 		NewPaperclipBudgetPolicyResource,
+		NewPaperclipBoardKeyResource,
+		NewPaperclipAgentKeyResource,
+		NewPaperclipAgentInstructionBundleResource,
 		NewPaperclipInvitationResource,
 		NewPaperclipInviteResource,
 		NewPaperclipMembershipResource,

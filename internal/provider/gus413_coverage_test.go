@@ -739,37 +739,6 @@ func TestAgentReadTerminatedAndPermissions(t *testing.T) {
 		t.Fatalf("expected nulls for nil permissions: %+v", res3)
 	}
 
-	// 4. Instructions empty string sets null
-	state4 := tfsdk.State{Schema: schemaResp.Schema}
-	_ = state4.Set(ctx, &PaperclipAgentResourceModel{
-		ID:        types.StringValue("ag-empty-inst"),
-		CompanyID: types.StringValue("comp-1"),
-	})
-	var readResp4 resource.ReadResponse
-	readResp4.State = state4
-	r.Read(ctx, resource.ReadRequest{State: state4}, &readResp4)
-	if readResp4.Diagnostics.HasError() {
-		t.Fatal(readResp4.Diagnostics)
-	}
-	var res4 PaperclipAgentResourceModel
-	_ = readResp4.State.Get(ctx, &res4)
-	if !res4.Instructions.IsNull() {
-		t.Fatalf("expected null instructions: %+v", res4)
-	}
-
-	// 5. Instructions 500 error reports diagnostic error
-	state5 := tfsdk.State{Schema: schemaResp.Schema}
-	_ = state5.Set(ctx, &PaperclipAgentResourceModel{
-		ID:        types.StringValue("ag-err-inst"),
-		CompanyID: types.StringValue("comp-1"),
-	})
-	var readResp5 resource.ReadResponse
-	readResp5.State = state5
-	r.Read(ctx, resource.ReadRequest{State: state5}, &readResp5)
-	if !readResp5.Diagnostics.HasError() {
-		t.Fatal("expected error on instructions read failure")
-	}
-
 	// 6. GetAgent 500 error reports diagnostic error
 	state6 := tfsdk.State{Schema: schemaResp.Schema}
 	_ = state6.Set(ctx, &PaperclipAgentResourceModel{
@@ -788,7 +757,6 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 	ctx := context.Background()
 	pausedCalled := false
 	resumeCalled := false
-	instructionsCleared := false
 	agUpdNilPermsGetCount := 0
 	agUpdClearAPPolicyCleared := false
 
@@ -834,7 +802,6 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 			resumeCalled = true
 			w.WriteHeader(http.StatusOK)
 		case r.URL.Path == "/api/agents/ag-upd/instructions-bundle/file" && r.Method == http.MethodPut:
-			instructionsCleared = true
 			w.WriteHeader(http.StatusOK)
 		case r.URL.Path == "/api/agents/ag-upd-full" && r.Method == http.MethodPatch:
 			_ = json.NewEncoder(w).Encode(client.PaperclipAgent{
@@ -1044,7 +1011,6 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 		CanCreateAgents: types.BoolValue(false),
 		CanCreateSkills: types.BoolValue(true),
 		Paused:          types.BoolValue(false),
-		Instructions:    types.StringValue("old instructions"),
 		Retirement:      types.StringValue("terminate"),
 	})
 
@@ -1056,9 +1022,6 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 	}
 	if !pausedCalled {
 		t.Fatal("expected PauseAgent to be called")
-	}
-	if !instructionsCleared {
-		t.Fatal("expected instructions to be cleared")
 	}
 	var res1 PaperclipAgentResourceModel
 	_ = updResp1.State.Get(ctx, &res1)

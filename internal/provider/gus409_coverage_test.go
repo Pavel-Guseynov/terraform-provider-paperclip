@@ -720,7 +720,6 @@ func TestResourceLifecycleWithUnknownAndNullAttributes(t *testing.T) {
 		CompanyID:       types.StringValue("comp-1"),
 		Name:            types.StringValue("agent-test"),
 		AdapterConfig:   types.StringNull(),
-		Instructions:    types.StringUnknown(),
 		CanAssignTasks:  types.BoolValue(true),
 		CanCreateAgents: types.BoolValue(false),
 	})
@@ -999,58 +998,6 @@ func TestGUS409AdditionalErrorCoverage(t *testing.T) {
 		r.Update(ctx, resource.UpdateRequest{Plan: plan, State: state}, &uResp)
 		if !uResp.Diagnostics.HasError() {
 			t.Fatal("expected error on invalid metadata JSON in skill Update")
-		}
-	}
-
-	// 2. Agent Update error when clearing instructions file
-	{
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			switch {
-			case req.URL.Path == "/api/agents/agent-1" && req.Method == http.MethodPatch:
-				_ = json.NewEncoder(w).Encode(map[string]interface{}{
-					"id":        "agent-1",
-					"companyId": "comp-1",
-					"name":      "agent-1",
-				})
-			case req.URL.Path == "/api/agents/agent-1/instructions-bundle/file" && req.Method == http.MethodPut:
-				w.WriteHeader(http.StatusInternalServerError)
-				_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "server error"})
-			default:
-				w.WriteHeader(http.StatusNotFound)
-			}
-		}))
-		defer server.Close()
-
-		cli, _ := client.NewClient(server.URL, "token")
-		r := NewPaperclipAgentResource().(*PaperclipAgentResource)
-		r.client = cli
-		var sResp resource.SchemaResponse
-		r.Schema(ctx, resource.SchemaRequest{}, &sResp)
-
-		plan := tfsdk.Plan{Schema: sResp.Schema}
-		_ = plan.Set(ctx, &PaperclipAgentResourceModel{
-			ID:              types.StringValue("agent-1"),
-			CompanyID:       types.StringValue("comp-1"),
-			Name:            types.StringValue("agent-1"),
-			Instructions:    types.StringNull(),
-			CanAssignTasks:  types.BoolValue(true),
-			CanCreateAgents: types.BoolValue(false),
-		})
-		state := tfsdk.State{Schema: sResp.Schema}
-		_ = state.Set(ctx, &PaperclipAgentResourceModel{
-			ID:              types.StringValue("agent-1"),
-			CompanyID:       types.StringValue("comp-1"),
-			Name:            types.StringValue("agent-1"),
-			Instructions:    types.StringValue("prior instructions"),
-			CanAssignTasks:  types.BoolValue(true),
-			CanCreateAgents: types.BoolValue(false),
-		})
-
-		var uResp resource.UpdateResponse
-		r.Update(ctx, resource.UpdateRequest{Plan: plan, State: state}, &uResp)
-		if !uResp.Diagnostics.HasError() {
-			t.Fatal("expected error on failure to clear agent instructions file")
 		}
 	}
 }

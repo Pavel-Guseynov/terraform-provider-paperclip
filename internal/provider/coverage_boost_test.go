@@ -124,6 +124,10 @@ func TestEphemeralsLifecycle(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"source": "board_key", "keyId": "k-1",
 			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/board-api-keys":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id": "k-1", "name": "bk-1", "token": "board-tok",
+			})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/agents/agent-1/keys":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": "ak-1", "token": "agent-tok",
@@ -160,8 +164,7 @@ func TestEphemeralsLifecycle(t *testing.T) {
 	unconfBK := &PaperclipBoardKeyEphemeralResource{}
 	goodPlan := tfsdk.Plan{Schema: bkSchema.Schema}
 	_ = goodPlan.Set(ctx, &PaperclipBoardKeyEphemeralResourceModel{
-		Name:       types.StringValue("bk-1"),
-		Activation: types.StringValue("now"),
+		KeyID: types.StringValue("bk-boost"),
 	})
 	goodConfig := tfsdk.Config{Schema: bkSchema.Schema, Raw: goodPlan.Raw}
 	var bkOpenUnconf ephemeral.OpenResponse
@@ -170,21 +173,38 @@ func TestEphemeralsLifecycle(t *testing.T) {
 		t.Fatal("expected error on unconfigured")
 	}
 
+	// token unavailable
+	unavailPlan := tfsdk.Plan{Schema: bkSchema.Schema}
+	_ = unavailPlan.Set(ctx, &PaperclipBoardKeyEphemeralResourceModel{
+		KeyID: types.StringValue("bk-unavail"),
+	})
+	unavailConfig := tfsdk.Config{Schema: bkSchema.Schema, Raw: unavailPlan.Raw}
+	var bkOpenUnavailable ephemeral.OpenResponse
+	bkOpenUnavailable.Result = tfsdk.EphemeralResultData{Schema: bkSchema.Schema}
+	bk.Open(ctx, ephemeral.OpenRequest{Config: unavailConfig}, &bkOpenUnavailable)
+	if !bkOpenUnavailable.Diagnostics.HasError() {
+		t.Fatal("expected error when token is unavailable")
+	}
+
 	// success
+	cli.RegisterMintedToken("bk-boost", "tok-boost")
 	var bkOpenSuccess ephemeral.OpenResponse
+	privBk := initOpenResponsePrivate(&bkOpenSuccess)
 	bkOpenSuccess.Result = tfsdk.EphemeralResultData{Schema: bkSchema.Schema}
 	bk.Open(ctx, ephemeral.OpenRequest{Config: goodConfig}, &bkOpenSuccess)
 	if bkOpenSuccess.Diagnostics.HasError() {
 		t.Fatalf("bk open failed: %v", bkOpenSuccess.Diagnostics)
 	}
 
-	// client error
-	failCli, _ := client.NewClient("http://127.0.0.1:59999", "token")
-	failBK := &PaperclipBoardKeyEphemeralResource{client: failCli}
-	var bkOpenFail ephemeral.OpenResponse
-	failBK.Open(ctx, ephemeral.OpenRequest{Config: goodConfig}, &bkOpenFail)
-	if !bkOpenFail.Diagnostics.HasError() {
-		t.Fatal("expected error on client failure")
+	var bkCloseReq ephemeral.CloseRequest
+	initCloseRequestPrivate(&bkCloseReq, privBk)
+	var bkCloseResp ephemeral.CloseResponse
+	bk.Close(ctx, bkCloseReq, &bkCloseResp)
+	if bkCloseResp.Diagnostics.HasError() {
+		t.Fatalf("bk close failed: %v", bkCloseResp.Diagnostics)
+	}
+	if !cli.IsTokenDelivered("bk-boost") {
+		t.Fatal("expected bk-boost marked delivered")
 	}
 
 	// AgentKey
@@ -209,9 +229,7 @@ func TestEphemeralsLifecycle(t *testing.T) {
 	unconfAK := &PaperclipAgentKeyEphemeralResource{}
 	akGoodPlan := tfsdk.Plan{Schema: akSchema.Schema}
 	_ = akGoodPlan.Set(ctx, &PaperclipAgentKeyEphemeralResourceModel{
-		AgentID:    types.StringValue("agent-1"),
-		Name:       types.StringValue("ak-1"),
-		Activation: types.StringValue("now"),
+		KeyID: types.StringValue("ak-boost"),
 	})
 	akGoodConfig := tfsdk.Config{Schema: akSchema.Schema, Raw: akGoodPlan.Raw}
 	var akOpenUnconf ephemeral.OpenResponse
@@ -220,32 +238,38 @@ func TestEphemeralsLifecycle(t *testing.T) {
 		t.Fatal("expected error on unconfigured")
 	}
 
+	// token unavailable
+	akUnavailPlan := tfsdk.Plan{Schema: akSchema.Schema}
+	_ = akUnavailPlan.Set(ctx, &PaperclipAgentKeyEphemeralResourceModel{
+		KeyID: types.StringValue("ak-unavail"),
+	})
+	akUnavailConfig := tfsdk.Config{Schema: akSchema.Schema, Raw: akUnavailPlan.Raw}
+	var akOpenUnavailable ephemeral.OpenResponse
+	akOpenUnavailable.Result = tfsdk.EphemeralResultData{Schema: akSchema.Schema}
+	ak.Open(ctx, ephemeral.OpenRequest{Config: akUnavailConfig}, &akOpenUnavailable)
+	if !akOpenUnavailable.Diagnostics.HasError() {
+		t.Fatal("expected error when agent token unavailable")
+	}
+
+	// success
+	cli.RegisterMintedToken("ak-boost", "ak-tok-boost")
 	var akOpenSuccess ephemeral.OpenResponse
+	privAk := initOpenResponsePrivate(&akOpenSuccess)
 	akOpenSuccess.Result = tfsdk.EphemeralResultData{Schema: akSchema.Schema}
 	ak.Open(ctx, ephemeral.OpenRequest{Config: akGoodConfig}, &akOpenSuccess)
 	if akOpenSuccess.Diagnostics.HasError() {
 		t.Fatalf("ak open failed: %v", akOpenSuccess.Diagnostics)
 	}
 
-	failAK := &PaperclipAgentKeyEphemeralResource{client: failCli}
-	var akOpenFail ephemeral.OpenResponse
-	failAK.Open(ctx, ephemeral.OpenRequest{Config: akGoodConfig}, &akOpenFail)
-	if !akOpenFail.Diagnostics.HasError() {
-		t.Fatal("expected error on client failure")
+	var akCloseReq ephemeral.CloseRequest
+	initCloseRequestPrivate(&akCloseReq, privAk)
+	var akCloseResp ephemeral.CloseResponse
+	ak.Close(ctx, akCloseReq, &akCloseResp)
+	if akCloseResp.Diagnostics.HasError() {
+		t.Fatalf("ak close failed: %v", akCloseResp.Diagnostics)
 	}
-
-	// empty id/token response from server
-	emptyKeyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "", "token": ""})
-	}))
-	defer emptyKeyServer.Close()
-	emptyCli, _ := client.NewClient(emptyKeyServer.URL, "token")
-	emptyAK := &PaperclipAgentKeyEphemeralResource{client: emptyCli}
-	var akOpenEmpty ephemeral.OpenResponse
-	emptyAK.Open(ctx, ephemeral.OpenRequest{Config: akGoodConfig}, &akOpenEmpty)
-	if !akOpenEmpty.Diagnostics.HasError() {
-		t.Fatal("expected error on empty key response")
+	if !cli.IsTokenDelivered("ak-boost") {
+		t.Fatal("expected ak-boost marked delivered")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -41,10 +42,34 @@ func (e *APIError) Is(target error) bool {
 	return false
 }
 
+type supersededKeyRecord struct {
+	oldKeyID string
+	isBoard  bool
+	agentID  string
+}
+
+type mintedKeyRecord struct {
+	keyID   string
+	token   string
+	name    string
+	isBoard bool
+	agentID string
+}
+
 type Client struct {
 	Endpoint   string
 	Token      string
 	HTTPClient *http.Client
+
+	credMu                 sync.RWMutex
+	mintedTokens           map[string]string // keyID -> token
+	deliveredTokens        map[string]bool   // keyID -> true (delivery confirmed)
+	supersededKeys         map[string]supersededKeyRecord
+	agentKeyAgents         map[string]string // keyID -> agentID
+	mintedKeys             map[string]mintedKeyRecord
+	mintedKeysByName       map[string]string // lookupKey -> keyID
+	acknowledgedDeliveries   map[string]bool   // keyID -> true
+	deliveredGenerations   map[string]int64 // lookupKey -> generation
 }
 
 type HealthResponse struct {
@@ -61,13 +86,49 @@ func NewClient(endpoint, token string) (*Client, error) {
 	if _, err := url.ParseRequestURI(endpoint); err != nil {
 		return nil, fmt.Errorf("invalid endpoint URL: %w", err)
 	}
-	return &Client{
+	c := &Client{
 		Endpoint: endpoint,
 		Token:    token,
 		HTTPClient: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-	}, nil
+		mintedTokens:           make(map[string]string),
+		deliveredTokens:        make(map[string]bool),
+		supersededKeys:         make(map[string]supersededKeyRecord),
+		agentKeyAgents:         make(map[string]string),
+		mintedKeys:             make(map[string]mintedKeyRecord),
+		mintedKeysByName:       make(map[string]string),
+		acknowledgedDeliveries: make(map[string]bool),
+		deliveredGenerations:   make(map[string]int64),
+	}
+	registerActiveClient(c)
+	return c, nil
+}
+
+var (
+	activeClientsMu sync.Mutex
+	activeClients   []*Client
+)
+
+func registerActiveClient(c *Client) {
+	activeClientsMu.Lock()
+	defer activeClientsMu.Unlock()
+	activeClients = append(activeClients, c)
+}
+
+func CleanupAllUnconfirmedKeys(ctx context.Context) error {
+	activeClientsMu.Lock()
+	clients := make([]*Client, len(activeClients))
+	copy(clients, activeClients)
+	activeClientsMu.Unlock()
+
+	var errs []error
+	for _, c := range clients {
+		if err := c.CleanupUnconfirmedKeys(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func (c *Client) Health(ctx context.Context) (*HealthResponse, error) {

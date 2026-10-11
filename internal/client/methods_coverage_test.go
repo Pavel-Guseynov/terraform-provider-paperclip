@@ -202,7 +202,7 @@ func TestAllClientMethodsFailures(t *testing.T) {
 	cli, _ := NewClient(failServer.URL, "token")
 
 	// Exercise error return paths on all client functions
-	_, _ = cli.CreateBoardKey(ctx, "key-name")
+	_, _ = cli.CreateBoardKey(ctx, "key-name", nil, "")
 	_, _ = cli.CreateCompany(ctx, PaperclipCompany{Name: "Acme"})
 	_, _ = cli.GetCompany(ctx, "comp-1")
 	_, _ = cli.UpdateCompany(ctx, "comp-1", map[string]interface{}{"name": "Acme", "description": "desc"})
@@ -239,7 +239,7 @@ func TestAllClientMethodsFailures(t *testing.T) {
 	_, _ = cli.ListAgents(ctx, "comp-1")
 	_, _ = cli.GetAgentInstructionsFile(ctx, "agent-1", "AGENTS.md")
 	_ = cli.UpdateAgentInstructionsFile(ctx, "agent-1", "AGENTS.md", "content")
-	_, _ = cli.CreateAgentKey(ctx, "agent-1", "key-name")
+	_, _ = cli.CreateAgentKey(ctx, "agent-1", "key-name", nil)
 	_, _ = cli.CreateToolApp(ctx, "comp-1", PaperclipToolApp{Name: "app"})
 	_, _ = cli.GetToolApp(ctx, "app-1")
 	_, _ = cli.FindCompanyByName(ctx, "app-1")
@@ -437,8 +437,8 @@ func TestClientSpecificBranches(t *testing.T) {
 	}))
 	defer bServer.Close()
 
-	cliB, _ := NewClient(bServer.URL, "token")
-	_, _ = cliB.CreateBoardKey(ctx, "name")
+	cliB, _ := NewClient(bServer.URL, "")
+	_, _ = cliB.CreateBoardKey(ctx, "name", nil, "")
 
 	// 4. EnsureConnectionCredentialGrant branches
 	grantServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -511,9 +511,9 @@ func TestClientRemainingCoverage(t *testing.T) {
 	}))
 	defer boardKeySrv.Close()
 
-	cliBK, _ := NewClient(boardKeySrv.URL, "token")
+	cliBK, _ := NewClient(boardKeySrv.URL, "")
 	// line 695: status != "approved"
-	if _, err := cliBK.CreateBoardKey(ctx, "k"); err == nil {
+	if _, err := cliBK.CreateBoardKey(ctx, "k", nil, ""); err == nil {
 		t.Fatal("expected rejection error")
 	}
 
@@ -528,8 +528,8 @@ func TestClientRemainingCoverage(t *testing.T) {
 		}
 	}))
 	defer boardKeyEmptySrv.Close()
-	cliBKEmpty, _ := NewClient(boardKeyEmptySrv.URL, "token")
-	if _, err := cliBKEmpty.CreateBoardKey(ctx, "k"); err == nil {
+	cliBKEmpty, _ := NewClient(boardKeyEmptySrv.URL, "")
+	if _, err := cliBKEmpty.CreateBoardKey(ctx, "k", nil, ""); err == nil {
 		t.Fatal("expected error on empty key ID")
 	}
 
@@ -544,8 +544,8 @@ func TestClientRemainingCoverage(t *testing.T) {
 		}
 	}))
 	defer boardKeyApproveErrSrv.Close()
-	cliBKApproveErr, _ := NewClient(boardKeyApproveErrSrv.URL, "token")
-	if _, err := cliBKApproveErr.CreateBoardKey(ctx, "k"); err == nil {
+	cliBKApproveErr, _ := NewClient(boardKeyApproveErrSrv.URL, "")
+	if _, err := cliBKApproveErr.CreateBoardKey(ctx, "k", nil, ""); err == nil {
 		t.Fatal("expected approve error")
 	}
 
@@ -562,8 +562,8 @@ func TestClientRemainingCoverage(t *testing.T) {
 		}
 	}))
 	defer boardKeyIdErrSrv.Close()
-	cliBKIdErr, _ := NewClient(boardKeyIdErrSrv.URL, "token")
-	if _, err := cliBKIdErr.CreateBoardKey(ctx, "k"); err == nil {
+	cliBKIdErr, _ := NewClient(boardKeyIdErrSrv.URL, "")
+	if _, err := cliBKIdErr.CreateBoardKey(ctx, "k", nil, ""); err == nil {
 		t.Fatal("expected identity error")
 	}
 
