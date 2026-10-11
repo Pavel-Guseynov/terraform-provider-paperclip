@@ -23,6 +23,7 @@ var (
 	_ resource.ResourceWithImportState    = &PaperclipSecretResource{}
 	_ resource.ResourceWithValidateConfig = &PaperclipSecretResource{}
 	_ resource.ResourceWithUpgradeState   = &PaperclipSecretResource{}
+	_ resource.ResourceWithModifyPlan     = &PaperclipSecretResource{}
 )
 
 func NewPaperclipSecretResource() resource.Resource {
@@ -189,12 +190,20 @@ func (r *PaperclipSecretResource) Schema(ctx context.Context, req resource.Schem
 				},
 			},
 			"latest_version": schema.Int64Attribute{
-				Description: "The latest secret revision version number reported by Paperclip.",
+				Description: "The latest secret revision version number reported by Paperclip. When specified in configuration, detects out-of-band rotations as plan drift.",
+				Optional:    true,
 				Computed:    true,
+				PlanModifiers: []planmodifier.Int64{
+					int64UseStateForUnknown(),
+				},
 			},
 			"last_rotated_at": schema.StringAttribute{
-				Description: "Timestamp when the secret was last rotated, reflecting remote rotations as drift.",
+				Description: "Timestamp when the secret was last rotated, reflecting remote rotations as drift. When specified in configuration, detects out-of-band rotations as plan drift.",
+				Optional:    true,
 				Computed:    true,
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 		},
 	}
@@ -351,6 +360,10 @@ func (r *PaperclipSecretResource) ValidateConfig(ctx context.Context, req resour
 			resp.Diagnostics.AddAttributeError(path.Root("key"), "Invalid Secret Key", fmt.Sprintf("Key %q must match ^[a-zA-Z0-9_.-]+$ and have length between 1 and 120", k))
 		}
 	}
+
+	if !config.LatestVersion.IsNull() && !config.LatestVersion.IsUnknown() && config.LatestVersion.ValueInt64() < 1 {
+		resp.Diagnostics.AddAttributeError(path.Root("latest_version"), "Invalid Latest Version", "latest_version must be a positive integer (>= 1)")
+	}
 }
 
 func (r *PaperclipSecretResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -366,6 +379,44 @@ func (r *PaperclipSecretResource) Configure(ctx context.Context, req resource.Co
 		return
 	}
 	r.client = c
+}
+
+func (r *PaperclipSecretResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+	var plan PaperclipSecretResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if !req.State.Raw.IsNull() {
+		var state PaperclipSecretResourceModel
+		resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+
+		var config PaperclipSecretResourceModel
+		if !req.Config.Raw.IsNull() {
+			resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+			if resp.Diagnostics.HasError() {
+				return
+			}
+		}
+
+		isRotating := !plan.Rotation.IsNull() && !plan.Rotation.IsUnknown() && !plan.Rotation.Equal(state.Rotation)
+		if isRotating {
+			if config.LatestVersion.IsNull() {
+				plan.LatestVersion = types.Int64Unknown()
+			}
+			if config.LastRotatedAt.IsNull() {
+				plan.LastRotatedAt = types.StringUnknown()
+			}
+			resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
+		}
+	}
 }
 
 func (r *PaperclipSecretResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -473,6 +524,12 @@ func (r *PaperclipSecretResource) Update(ctx context.Context, req resource.Updat
 		ExternalRef:        plan.ExternalRef.ValueString(),
 		ProviderConfigID:   plan.ProviderConfigID.ValueString(),
 		ProviderVersionRef: plan.ProviderVersionRef.ValueString(),
+	}
+	if !state.LatestVersion.IsNull() && !state.LatestVersion.IsUnknown() {
+		secret.LatestVersion = state.LatestVersion.ValueInt64()
+	}
+	if !state.LastRotatedAt.IsNull() && !state.LastRotatedAt.IsUnknown() {
+		secret.LastRotatedAt = state.LastRotatedAt.ValueString()
 	}
 
 	metaChanged := !plan.ProviderMetadata.Equal(state.ProviderMetadata)

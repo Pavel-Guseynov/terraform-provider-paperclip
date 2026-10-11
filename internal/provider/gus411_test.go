@@ -727,6 +727,8 @@ func TestPaperclipSecretCoverage(t *testing.T) {
 	updateCfgModel := updatePlanModel
 	updateCfgModel.Value = types.StringValue("rotated-val")
 	updatePlanModel.Value = types.StringNull()
+	updatePlanModel.LatestVersion = types.Int64Unknown()
+	updatePlanModel.LastRotatedAt = types.StringUnknown()
 
 	updatePlan := tfsdk.Plan{Schema: schemaResp.Schema}
 	_ = updatePlan.Set(ctx, &updatePlanModel)
@@ -769,6 +771,74 @@ func TestPaperclipSecretCoverage(t *testing.T) {
 	}, &uRespNull)
 	if uRespNull.Diagnostics.HasError() {
 		t.Fatalf("Update with null name failed: %v", uRespNull.Diagnostics)
+	}
+
+	// Update with null provider_metadata (clearing metadata)
+	updateClearMetaModel := updateNullModel
+	updateClearMetaModel.ProviderMetadata = types.StringNull()
+	updateClearMetaPlan := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = updateClearMetaPlan.Set(ctx, &updateClearMetaModel)
+	updateClearMetaCfgPlan := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = updateClearMetaCfgPlan.Set(ctx, &updateClearMetaModel)
+	updateClearMetaCfg := tfsdk.Config{Schema: schemaResp.Schema, Raw: updateClearMetaCfgPlan.Raw}
+	var uRespClearMeta resource.UpdateResponse
+	uRespClearMeta.State = tfsdk.State{Schema: schemaResp.Schema}
+	secretResource.Update(ctx, resource.UpdateRequest{
+		Plan:   updateClearMetaPlan,
+		Config: updateClearMetaCfg,
+		State:  uRespNull.State,
+	}, &uRespClearMeta)
+	if uRespClearMeta.Diagnostics.HasError() {
+		t.Fatalf("Update with null provider_metadata failed: %v", uRespClearMeta.Diagnostics)
+	}
+
+	// Update metadata error
+	updateErrMetaModel := updateNullModel
+	updateErrMetaModel.Description = types.StringValue("fail-desc")
+	updateErrMetaPlan := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = updateErrMetaPlan.Set(ctx, &updateErrMetaModel)
+	updateErrMetaCfgPlan := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = updateErrMetaCfgPlan.Set(ctx, &updateErrMetaModel)
+	updateErrMetaCfg := tfsdk.Config{Schema: schemaResp.Schema, Raw: updateErrMetaCfgPlan.Raw}
+	errMetaState := updateNullModel
+	errMetaState.ID = types.StringValue("sec-error")
+	errMetaStateVal := tfsdk.State{Schema: schemaResp.Schema}
+	_ = errMetaStateVal.Set(ctx, &errMetaState)
+	var uRespErrMeta resource.UpdateResponse
+	uRespErrMeta.State = tfsdk.State{Schema: schemaResp.Schema}
+	secretResource.Update(ctx, resource.UpdateRequest{
+		Plan:   updateErrMetaPlan,
+		Config: updateErrMetaCfg,
+		State:  errMetaStateVal,
+	}, &uRespErrMeta)
+	if !uRespErrMeta.Diagnostics.HasError() {
+		t.Fatal("expected Update metadata error on 500")
+	}
+
+	// Rotate error
+	updateErrRotateModel := updateNullModel
+	updateErrRotateModel.Value = types.StringNull()
+	updateErrRotateModel.Rotation = types.StringValue("rev-rotate-err")
+	updateErrRotatePlan := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = updateErrRotatePlan.Set(ctx, &updateErrRotateModel)
+	updateErrRotateCfgModel := updateErrRotateModel
+	updateErrRotateCfgModel.Value = types.StringValue("val-rotate-err")
+	updateErrRotateCfgPlan := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = updateErrRotateCfgPlan.Set(ctx, &updateErrRotateCfgModel)
+	updateErrRotateCfg := tfsdk.Config{Schema: schemaResp.Schema, Raw: updateErrRotateCfgPlan.Raw}
+	errRotateState := updateNullModel
+	errRotateState.ID = types.StringValue("sec-error")
+	errRotateStateVal := tfsdk.State{Schema: schemaResp.Schema}
+	_ = errRotateStateVal.Set(ctx, &errRotateState)
+	var uRespErrRotate resource.UpdateResponse
+	uRespErrRotate.State = tfsdk.State{Schema: schemaResp.Schema}
+	secretResource.Update(ctx, resource.UpdateRequest{
+		Plan:   updateErrRotatePlan,
+		Config: updateErrRotateCfg,
+		State:  errRotateStateVal,
+	}, &uRespErrRotate)
+	if !uRespErrRotate.Diagnostics.HasError() {
+		t.Fatal("expected Rotate error on 500")
 	}
 
 	// Delete
@@ -1496,5 +1566,913 @@ func TestPaperclipAgentInstructionsEmpty(t *testing.T) {
 	_ = rResp.State.Get(ctx, &resState)
 	if !resState.Instructions.IsNull() {
 		t.Fatalf("expected null instructions, got %v", resState.Instructions)
+	}
+}
+
+func TestEnvBindingsApplyNon404Error(t *testing.T) {
+	ctx := context.Background()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"server error"}`))
+	}))
+	defer server.Close()
+
+	cli, _ := client.NewClient(server.URL, "token")
+
+	bindings := map[string]EnvBindingModel{
+		"SECRET_KEY": {
+			Type:     types.StringValue("secret_ref"),
+			SecretID: types.StringValue("sec-err"),
+		},
+	}
+	diags := ValidateEnvBindingsApply(ctx, cli, "comp-1", bindings)
+	if !diags.HasError() {
+		t.Fatal("expected error on 500 server error")
+	}
+	found := false
+	for _, d := range diags.Errors() {
+		if strings.Contains(d.Summary(), "Secret Reference Verification Failed") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected 'Secret Reference Verification Failed', got %v", diags)
+	}
+
+	jsonDiags := ValidateEnvBindingsJSONApply(ctx, cli, "comp-1", `{"SECRET_KEY": {"type": "secret_ref", "secretId": "sec-err"}}`)
+	if !jsonDiags.HasError() {
+		t.Fatal("expected error on 500 server error for JSON apply")
+	}
+	foundJSON := false
+	for _, d := range jsonDiags.Errors() {
+		if strings.Contains(d.Summary(), "Secret Reference Verification Failed") {
+			foundJSON = true
+			break
+		}
+	}
+	if !foundJSON {
+		t.Fatalf("expected 'Secret Reference Verification Failed', got %v", jsonDiags)
+	}
+}
+
+func TestRefreshAgentEnvBindings(t *testing.T) {
+	if refreshAgentEnvBindings(nil, nil) != nil {
+		t.Fatal("expected nil when currentEnv is nil")
+	}
+
+	currentEnv := map[string]EnvBindingModel{
+		"PLAIN_STR": {Type: types.StringValue("plain")},
+		"PLAIN_OBJ": {Type: types.StringValue("plain")},
+		"SEC_REF":   {Type: types.StringValue("secret_ref")},
+		"USER_SEC":  {Type: types.StringValue("user_secret_ref")},
+		"OTHER":     {Type: types.StringValue("plain")},
+		"DELETED":   {Type: types.StringValue("plain")},
+	}
+
+	resNil := refreshAgentEnvBindings(currentEnv, nil)
+	if len(resNil) != 0 {
+		t.Fatal("expected empty map when remoteAdapterConfig is nil")
+	}
+
+	resNoEnv := refreshAgentEnvBindings(currentEnv, map[string]interface{}{"other": 1})
+	if len(resNoEnv) != 0 {
+		t.Fatal("expected empty map when remote has no env")
+	}
+
+	remote := map[string]interface{}{
+		"env": map[string]interface{}{
+			"PLAIN_STR": "val1",
+			"PLAIN_OBJ": map[string]interface{}{
+				"type":  "plain",
+				"value": "val2",
+			},
+			"SEC_REF": map[string]interface{}{
+				"type":                   "secret_ref",
+				"secretId":               "sec-123",
+				"version":                "1",
+				"projectionClass":        "class_3_static_lease",
+				"projectionAllowlistKey": "slack.bot_token",
+			},
+			"USER_SEC": map[string]interface{}{
+				"type":                 "user_secret_ref",
+				"key":                  "user_key",
+				"version":              "2",
+				"required":             true,
+				"allowMissingOverride": true,
+			},
+			"OTHER": 12345,
+			"EXTRA": "ignored",
+		},
+	}
+
+	res := refreshAgentEnvBindings(currentEnv, remote)
+	if len(res) != 5 {
+		t.Fatalf("expected 5 refreshed bindings, got %d", len(res))
+	}
+	if res["PLAIN_STR"].Value.ValueString() != "val1" {
+		t.Fatalf("unexpected PLAIN_STR value: %v", res["PLAIN_STR"])
+	}
+	if res["PLAIN_OBJ"].Value.ValueString() != "val2" {
+		t.Fatalf("unexpected PLAIN_OBJ value: %v", res["PLAIN_OBJ"])
+	}
+	if res["SEC_REF"].SecretID.ValueString() != "sec-123" || res["SEC_REF"].Version.ValueString() != "1" ||
+		res["SEC_REF"].ProjectionClass.ValueString() != "class_3_static_lease" ||
+		res["SEC_REF"].ProjectionAllowlistKey.ValueString() != "slack.bot_token" {
+		t.Fatalf("unexpected SEC_REF: %v", res["SEC_REF"])
+	}
+	if res["USER_SEC"].Key.ValueString() != "user_key" || res["USER_SEC"].Version.ValueString() != "2" ||
+		!res["USER_SEC"].Required.ValueBool() || !res["USER_SEC"].AllowMissingOverride.ValueBool() {
+		t.Fatalf("unexpected USER_SEC: %v", res["USER_SEC"])
+	}
+	if _, ok := res["DELETED"]; ok {
+		t.Fatal("expected DELETED to be omitted")
+	}
+
+	currentSingle := map[string]EnvBindingModel{
+		"SEC_NO_VER":  {Type: types.StringValue("secret_ref")},
+		"USER_NO_VER": {Type: types.StringValue("user_secret_ref")},
+		"CUSTOM_TYP":  {Type: types.StringValue("plain")},
+	}
+	remoteSingle := map[string]interface{}{
+		"env": map[string]interface{}{
+			"SEC_NO_VER": map[string]interface{}{
+				"type":     "secret_ref",
+				"secretId": "sec-456",
+			},
+			"USER_NO_VER": map[string]interface{}{
+				"type": "user_secret_ref",
+				"key":  "usr-key-456",
+			},
+			"CUSTOM_TYP": map[string]interface{}{
+				"type": "custom",
+			},
+		},
+	}
+	resSingle := refreshAgentEnvBindings(currentSingle, remoteSingle)
+	if !resSingle["SEC_NO_VER"].Version.IsNull() {
+		t.Fatalf("expected null version for SEC_NO_VER, got %v", resSingle["SEC_NO_VER"].Version)
+	}
+	if !resSingle["USER_NO_VER"].Version.IsNull() {
+		t.Fatalf("expected null version for USER_NO_VER, got %v", resSingle["USER_NO_VER"].Version)
+	}
+}
+
+func TestAgentResourceEnvValidateConfig(t *testing.T) {
+	ctx := context.Background()
+	agentResource := NewPaperclipAgentResource().(*PaperclipAgentResource)
+	var schemaResp resource.SchemaResponse
+	agentResource.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
+
+	validModel := PaperclipAgentResourceModel{
+		Name:            types.StringValue("agent-valid"),
+		CompanyID:       types.StringValue("comp-1"),
+		CanAssignTasks:  types.BoolValue(true),
+		CanCreateAgents: types.BoolValue(true),
+		Env: map[string]EnvBindingModel{
+			"VAR1": {
+				Type:  types.StringValue("plain"),
+				Value: types.StringValue("hello"),
+			},
+			"VAR2": {
+				Type:     types.StringValue("secret_ref"),
+				SecretID: types.StringValue("sec-1"),
+			},
+			"VAR3": {
+				Type: types.StringValue("user_secret_ref"),
+				Key:  types.StringValue("user_k"),
+			},
+		},
+		AdapterConfig: types.StringValue(`{"env": {"VAR4": "world"}}`),
+	}
+	var plan1 tfsdk.Plan
+	plan1.Schema = schemaResp.Schema
+	_ = plan1.Set(ctx, &validModel)
+	config1 := tfsdk.Config{Schema: schemaResp.Schema, Raw: plan1.Raw}
+	var resp1 resource.ValidateConfigResponse
+	agentResource.ValidateConfig(ctx, resource.ValidateConfigRequest{Config: config1}, &resp1)
+	if resp1.Diagnostics.HasError() {
+		t.Fatalf("unexpected validation errors: %v", resp1.Diagnostics)
+	}
+
+	invalidModel := PaperclipAgentResourceModel{
+		Name:            types.StringValue("agent-invalid"),
+		CompanyID:       types.StringValue("comp-1"),
+		CanAssignTasks:  types.BoolValue(true),
+		CanCreateAgents: types.BoolValue(true),
+		Env: map[string]EnvBindingModel{
+			"BAD_VAR": {
+				Type:  types.StringValue("plain"),
+				Value: types.StringValue("[REDACTED]"),
+			},
+		},
+		AdapterConfig: types.StringValue(`{"env": {"BAD_ADAPTER": "[REDACTED]"}}`),
+	}
+	var plan2 tfsdk.Plan
+	plan2.Schema = schemaResp.Schema
+	_ = plan2.Set(ctx, &invalidModel)
+	config2 := tfsdk.Config{Schema: schemaResp.Schema, Raw: plan2.Raw}
+	var resp2 resource.ValidateConfigResponse
+	agentResource.ValidateConfig(ctx, resource.ValidateConfigRequest{Config: config2}, &resp2)
+	if !resp2.Diagnostics.HasError() {
+		t.Fatal("expected validation errors for [REDACTED]")
+	}
+
+	badJSONModel := PaperclipAgentResourceModel{
+		Name:            types.StringValue("agent-bad-json"),
+		CompanyID:       types.StringValue("comp-1"),
+		CanAssignTasks:  types.BoolValue(true),
+		CanCreateAgents: types.BoolValue(true),
+		AdapterConfig:   types.StringValue(`not-json`),
+	}
+	var plan3 tfsdk.Plan
+	plan3.Schema = schemaResp.Schema
+	_ = plan3.Set(ctx, &badJSONModel)
+	config3 := tfsdk.Config{Schema: schemaResp.Schema, Raw: plan3.Raw}
+	var resp3 resource.ValidateConfigResponse
+	agentResource.ValidateConfig(ctx, resource.ValidateConfigRequest{Config: config3}, &resp3)
+}
+
+func TestAgentResourceEnvCreateUpdateReadLifecycle(t *testing.T) {
+	ctx := context.Background()
+	agentResource := NewPaperclipAgentResource().(*PaperclipAgentResource)
+	var schemaResp resource.SchemaResponse
+	agentResource.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
+
+	var lastCreatedAgent client.PaperclipAgent
+	var lastUpdatedAgent client.PaperclipAgent
+	companySecrets := []client.PaperclipSecret{
+		{
+			ID:        "sec-valid",
+			CompanyID: "comp-1",
+			Name:      "valid-secret",
+		},
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/companies/comp-1" {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":   "comp-1",
+				"name": "comp-1",
+			})
+			return
+		}
+		if r.URL.Path == "/api/companies/comp-1/secrets" {
+			_ = json.NewEncoder(w).Encode(companySecrets)
+			return
+		}
+		if r.Method == http.MethodPost && r.URL.Path == "/api/companies/comp-1/agents" {
+			_ = json.NewDecoder(r.Body).Decode(&lastCreatedAgent)
+			lastCreatedAgent.ID = "agent-created-1"
+			lastCreatedAgent.CompanyID = "comp-1"
+			lastCreatedAgent.Permissions = &client.PaperclipAgentPermissions{
+				CanAssignTasks:  true,
+				CanCreateAgents: true,
+				CanCreateSkills: true,
+			}
+			_ = json.NewEncoder(w).Encode(lastCreatedAgent)
+			return
+		}
+		if r.Method == http.MethodPatch && r.URL.Path == "/api/agents/agent-created-1" {
+			_ = json.NewDecoder(r.Body).Decode(&lastUpdatedAgent)
+			lastUpdatedAgent.ID = "agent-created-1"
+			lastUpdatedAgent.CompanyID = "comp-1"
+			lastUpdatedAgent.Permissions = &client.PaperclipAgentPermissions{
+				CanAssignTasks:  true,
+				CanCreateAgents: true,
+				CanCreateSkills: true,
+			}
+			_ = json.NewEncoder(w).Encode(lastUpdatedAgent)
+			return
+		}
+		if r.Method == http.MethodGet && r.URL.Path == "/api/agents/agent-created-1" {
+			agent := lastCreatedAgent
+			if lastUpdatedAgent.ID != "" {
+				agent = lastUpdatedAgent
+			}
+			if agent.ID == "" {
+				agent.ID = "agent-created-1"
+				agent.CompanyID = "comp-1"
+				agent.Name = "agent-1"
+			}
+			if agent.Permissions == nil {
+				agent.Permissions = &client.PaperclipAgentPermissions{
+					CanAssignTasks:  true,
+					CanCreateAgents: true,
+					CanCreateSkills: true,
+				}
+			}
+			_ = json.NewEncoder(w).Encode(agent)
+			return
+		}
+		if r.URL.Path == "/api/agents/agent-created-1/permissions" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+			return
+		}
+		if r.URL.Path == "/api/agents/agent-created-1/instructions-bundle/file" {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(""))
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	cli, _ := client.NewClient(server.URL, "token")
+	agentResource.client = cli
+
+	createPlanModel := PaperclipAgentResourceModel{
+		CompanyID:       types.StringValue("comp-1"),
+		Name:            types.StringValue("agent-1"),
+		CanAssignTasks:  types.BoolValue(true),
+		CanCreateAgents: types.BoolValue(true),
+		AdapterConfig:   types.StringValue(`{"env":{"PRE_EXISTING":{"type":"plain","value":"pre"}}}`),
+		Env: map[string]EnvBindingModel{
+			"PLAIN_VAR": {
+				Type:  types.StringValue("plain"),
+				Value: types.StringValue("val1"),
+			},
+			"SEC_VAR": {
+				Type:     types.StringValue("secret_ref"),
+				SecretID: types.StringValue("sec-valid"),
+			},
+		},
+	}
+	var plan1 tfsdk.Plan
+	plan1.Schema = schemaResp.Schema
+	_ = plan1.Set(ctx, &createPlanModel)
+	var createResp resource.CreateResponse
+	createResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	agentResource.Create(ctx, resource.CreateRequest{Plan: plan1}, &createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected Create error: %v", createResp.Diagnostics)
+	}
+
+	if lastCreatedAgent.AdapterConfig == nil || lastCreatedAgent.AdapterConfig["env"] == nil {
+		t.Fatalf("expected adapterConfig.env to be populated on agent: %+v", lastCreatedAgent)
+	}
+	envMap := lastCreatedAgent.AdapterConfig["env"].(map[string]interface{})
+	if _, ok := envMap["PRE_EXISTING"]; !ok {
+		t.Fatalf("expected PRE_EXISTING in adapterConfig.env: %v", envMap)
+	}
+	if _, ok := envMap["PLAIN_VAR"]; !ok {
+		t.Fatalf("expected PLAIN_VAR in adapterConfig.env: %v", envMap)
+	}
+	if _, ok := envMap["SEC_VAR"]; !ok {
+		t.Fatalf("expected SEC_VAR in adapterConfig.env: %v", envMap)
+	}
+
+	var stateAfterCreate PaperclipAgentResourceModel
+	_ = createResp.State.Get(ctx, &stateAfterCreate)
+	if stateAfterCreate.Env == nil || len(stateAfterCreate.Env) != 2 {
+		t.Fatalf("expected 2 bindings in state after Create, got %v", stateAfterCreate.Env)
+	}
+
+	companySecrets = nil
+	badPlanModel := PaperclipAgentResourceModel{
+		CompanyID:       types.StringValue("comp-1"),
+		Name:            types.StringValue("agent-bad"),
+		CanAssignTasks:  types.BoolValue(true),
+		CanCreateAgents: types.BoolValue(true),
+		Env: map[string]EnvBindingModel{
+			"SEC_VAR": {
+				Type:     types.StringValue("secret_ref"),
+				SecretID: types.StringValue("sec-missing"),
+			},
+		},
+	}
+	var badPlan tfsdk.Plan
+	badPlan.Schema = schemaResp.Schema
+	_ = badPlan.Set(ctx, &badPlanModel)
+	var badCreateResp resource.CreateResponse
+	badCreateResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	agentResource.Create(ctx, resource.CreateRequest{Plan: badPlan}, &badCreateResp)
+	if !badCreateResp.Diagnostics.HasError() {
+		t.Fatal("expected Create to fail with missing secret")
+	}
+
+	badJSONPlanModel := PaperclipAgentResourceModel{
+		CompanyID:       types.StringValue("comp-1"),
+		Name:            types.StringValue("agent-bad-json"),
+		CanAssignTasks:  types.BoolValue(true),
+		CanCreateAgents: types.BoolValue(true),
+		AdapterConfig:   types.StringValue(`{"env":{"SEC_VAR":{"type":"secret_ref","secretId":"sec-missing"}}}`),
+	}
+	var badJSONPlan tfsdk.Plan
+	badJSONPlan.Schema = schemaResp.Schema
+	_ = badJSONPlan.Set(ctx, &badJSONPlanModel)
+	var badJSONCreateResp resource.CreateResponse
+	badJSONCreateResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	agentResource.Create(ctx, resource.CreateRequest{Plan: badJSONPlan}, &badJSONCreateResp)
+	if !badJSONCreateResp.Diagnostics.HasError() {
+		t.Fatal("expected Create to fail with missing secret in adapter_config")
+	}
+
+	var readResp resource.ReadResponse
+	readResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	agentResource.Read(ctx, resource.ReadRequest{State: createResp.State}, &readResp)
+	if readResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected Read error: %v", readResp.Diagnostics)
+	}
+	var stateAfterRead PaperclipAgentResourceModel
+	_ = readResp.State.Get(ctx, &stateAfterRead)
+	if stateAfterRead.Env == nil || len(stateAfterRead.Env) != 2 {
+		t.Fatalf("expected 2 bindings in state after Read, got %v", stateAfterRead.Env)
+	}
+
+	companySecrets = []client.PaperclipSecret{
+		{
+			ID:        "sec-valid",
+			CompanyID: "comp-1",
+			Name:      "valid-secret",
+		},
+	}
+	updatePlanModel := stateAfterCreate
+	updatePlanModel.Env = map[string]EnvBindingModel{
+		"SEC_VAR": {
+			Type:     types.StringValue("secret_ref"),
+			SecretID: types.StringValue("sec-valid"),
+		},
+		"NEW_VAR": {
+			Type:  types.StringValue("plain"),
+			Value: types.StringValue("new-val"),
+		},
+	}
+	var updatePlan tfsdk.Plan
+	updatePlan.Schema = schemaResp.Schema
+	_ = updatePlan.Set(ctx, &updatePlanModel)
+	var updateResp resource.UpdateResponse
+	updateResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	agentResource.Update(ctx, resource.UpdateRequest{Plan: updatePlan, State: createResp.State}, &updateResp)
+	if updateResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected Update error: %v", updateResp.Diagnostics)
+	}
+	updatedEnvMap := lastUpdatedAgent.AdapterConfig["env"].(map[string]interface{})
+	if _, ok := updatedEnvMap["PLAIN_VAR"]; ok {
+		t.Fatalf("expected PLAIN_VAR to be pruned on update, got: %v", updatedEnvMap)
+	}
+	if _, ok := updatedEnvMap["NEW_VAR"]; !ok {
+		t.Fatalf("expected NEW_VAR in adapterConfig.env on update: %v", updatedEnvMap)
+	}
+
+	clearPlanModel := updatePlanModel
+	clearPlanModel.Env = map[string]EnvBindingModel{}
+	var clearPlan tfsdk.Plan
+	clearPlan.Schema = schemaResp.Schema
+	_ = clearPlan.Set(ctx, &clearPlanModel)
+	var clearResp resource.UpdateResponse
+	clearResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	agentResource.Update(ctx, resource.UpdateRequest{Plan: clearPlan, State: updateResp.State}, &clearResp)
+	if clearResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected Update clear error: %v", clearResp.Diagnostics)
+	}
+
+	// Update with fresh env when adapterConfig has no "env"
+	noEnvAgent := lastCreatedAgent
+	noEnvAgent.AdapterConfig = map[string]interface{}{"mode": "fast"}
+	lastUpdatedAgent = noEnvAgent
+	noEnvStateModel := updatePlanModel
+	noEnvStateModel.AdapterConfig = types.StringValue(`{"mode":"fast"}`)
+	noEnvStateModel.Env = map[string]EnvBindingModel{}
+	var noEnvState tfsdk.State
+	noEnvState = tfsdk.State{Schema: schemaResp.Schema}
+	_ = noEnvState.Set(ctx, &noEnvStateModel)
+
+	noEnvPlanModel := noEnvStateModel
+	noEnvPlanModel.Env = map[string]EnvBindingModel{
+		"FRESH_VAR": {
+			Type:  types.StringValue("plain"),
+			Value: types.StringValue("fresh"),
+		},
+	}
+	var noEnvPlan tfsdk.Plan
+	noEnvPlan = tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = noEnvPlan.Set(ctx, &noEnvPlanModel)
+	var noEnvResp resource.UpdateResponse
+	noEnvResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	agentResource.Update(ctx, resource.UpdateRequest{Plan: noEnvPlan, State: noEnvState}, &noEnvResp)
+	if noEnvResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected Update error for fresh env: %v", noEnvResp.Diagnostics)
+	}
+
+	companySecrets = nil
+	badUpdateModel := updatePlanModel
+	badUpdateModel.Env = map[string]EnvBindingModel{
+		"SEC_VAR": {
+			Type:     types.StringValue("secret_ref"),
+			SecretID: types.StringValue("sec-missing"),
+		},
+	}
+	var badUpdatePlan tfsdk.Plan
+	badUpdatePlan.Schema = schemaResp.Schema
+	_ = badUpdatePlan.Set(ctx, &badUpdateModel)
+	var badUpdateResp resource.UpdateResponse
+	badUpdateResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	agentResource.Update(ctx, resource.UpdateRequest{Plan: badUpdatePlan, State: createResp.State}, &badUpdateResp)
+	if !badUpdateResp.Diagnostics.HasError() {
+		t.Fatal("expected Update to fail with missing secret")
+	}
+
+	badJSONUpdateModel := updatePlanModel
+	badJSONUpdateModel.Env = nil
+	badJSONUpdateModel.AdapterConfig = types.StringValue(`{"env":{"SEC_VAR":{"type":"secret_ref","secretId":"sec-missing"}}}`)
+	var badJSONUpdatePlan tfsdk.Plan
+	badJSONUpdatePlan.Schema = schemaResp.Schema
+	_ = badJSONUpdatePlan.Set(ctx, &badJSONUpdateModel)
+	var badJSONUpdateResp resource.UpdateResponse
+	badJSONUpdateResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	agentResource.Update(ctx, resource.UpdateRequest{Plan: badJSONUpdatePlan, State: createResp.State}, &badJSONUpdateResp)
+	if !badJSONUpdateResp.Diagnostics.HasError() {
+		t.Fatal("expected Update to fail with missing secret in adapter_config")
+	}
+
+	// Create agent with null adapter_config and non-empty Env (covers adapterMap == nil and !ok in Create)
+	createNoAdapterCfgModel := PaperclipAgentResourceModel{
+		CompanyID:       types.StringValue("comp-1"),
+		Name:            types.StringValue("agent-no-adapter-cfg"),
+		CanAssignTasks:  types.BoolValue(true),
+		CanCreateAgents: types.BoolValue(true),
+		Env: map[string]EnvBindingModel{
+			"PLAIN_VAR": {
+				Type:  types.StringValue("plain"),
+				Value: types.StringValue("val1"),
+			},
+		},
+	}
+	var planNoAdapter tfsdk.Plan
+	planNoAdapter.Schema = schemaResp.Schema
+	_ = planNoAdapter.Set(ctx, &createNoAdapterCfgModel)
+	var createNoAdapterResp resource.CreateResponse
+	createNoAdapterResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	agentResource.Create(ctx, resource.CreateRequest{Plan: planNoAdapter}, &createNoAdapterResp)
+	if createNoAdapterResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected Create error for no-adapter-cfg: %v", createNoAdapterResp.Diagnostics)
+	}
+
+	// Update when adapterConfig is null in both state and plan (covers adapterMap == nil in Update)
+	nilAdapterStateModel := updatePlanModel
+	nilAdapterStateModel.AdapterConfig = types.StringNull()
+	nilAdapterPlanModel := nilAdapterStateModel
+	nilAdapterPlanModel.AdapterConfig = types.StringNull()
+	nilAdapterPlanModel.Env = map[string]EnvBindingModel{
+		"V": {Type: types.StringValue("plain"), Value: types.StringValue("1")},
+	}
+	var nilAdapterState tfsdk.State
+	nilAdapterState = tfsdk.State{Schema: schemaResp.Schema}
+	_ = nilAdapterState.Set(ctx, &nilAdapterStateModel)
+	var nilAdapterPlan tfsdk.Plan
+	nilAdapterPlan = tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = nilAdapterPlan.Set(ctx, &nilAdapterPlanModel)
+	var nilAdapterResp resource.UpdateResponse
+	nilAdapterResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	agentResource.Update(ctx, resource.UpdateRequest{Plan: nilAdapterPlan, State: nilAdapterState}, &nilAdapterResp)
+	if nilAdapterResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected Update error for nil adapterMap: %v", nilAdapterResp.Diagnostics)
+	}
+
+	// Clear Env when adapterMap["env"] has no other keys -> delete(adapterMap, "env")
+	deleteEnvStateModel := updatePlanModel
+	deleteEnvStateModel.AdapterConfig = types.StringValue(`{"env":{"GONE":{"type":"plain","value":"1"}}}`)
+	deleteEnvStateModel.Env = map[string]EnvBindingModel{
+		"GONE": {Type: types.StringValue("plain"), Value: types.StringValue("1")},
+	}
+	deleteEnvPlanModel := deleteEnvStateModel
+	deleteEnvPlanModel.Env = map[string]EnvBindingModel{}
+	var deleteEnvState tfsdk.State
+	deleteEnvState = tfsdk.State{Schema: schemaResp.Schema}
+	_ = deleteEnvState.Set(ctx, &deleteEnvStateModel)
+	var deleteEnvPlan tfsdk.Plan
+	deleteEnvPlan = tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = deleteEnvPlan.Set(ctx, &deleteEnvPlanModel)
+	var deleteEnvResp resource.UpdateResponse
+	deleteEnvResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	agentResource.Update(ctx, resource.UpdateRequest{Plan: deleteEnvPlan, State: deleteEnvState}, &deleteEnvResp)
+	if deleteEnvResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected Clear error for delete env: %v", deleteEnvResp.Diagnostics)
+	}
+}
+
+func TestPaperclipSecretLatestVersionValidateConfig(t *testing.T) {
+	ctx := context.Background()
+	secretResource := NewPaperclipSecretResource().(*PaperclipSecretResource)
+	var schemaResp resource.SchemaResponse
+	secretResource.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
+
+	badModel := PaperclipSecretResourceModel{
+		CompanyID:     types.StringValue("comp-1"),
+		Name:          types.StringValue("sec-1"),
+		LatestVersion: types.Int64Value(0),
+	}
+	var plan1 tfsdk.Plan
+	plan1.Schema = schemaResp.Schema
+	_ = plan1.Set(ctx, &badModel)
+	config1 := tfsdk.Config{Schema: schemaResp.Schema, Raw: plan1.Raw}
+	var resp1 resource.ValidateConfigResponse
+	secretResource.ValidateConfig(ctx, resource.ValidateConfigRequest{Config: config1}, &resp1)
+	if !resp1.Diagnostics.HasError() {
+		t.Fatal("expected error for latest_version < 1")
+	}
+
+	goodModel := PaperclipSecretResourceModel{
+		CompanyID:     types.StringValue("comp-1"),
+		Name:          types.StringValue("sec-1"),
+		LatestVersion: types.Int64Value(1),
+	}
+	var plan2 tfsdk.Plan
+	plan2.Schema = schemaResp.Schema
+	_ = plan2.Set(ctx, &goodModel)
+	config2 := tfsdk.Config{Schema: schemaResp.Schema, Raw: plan2.Raw}
+	var resp2 resource.ValidateConfigResponse
+	secretResource.ValidateConfig(ctx, resource.ValidateConfigRequest{Config: config2}, &resp2)
+	if resp2.Diagnostics.HasError() {
+		t.Fatalf("unexpected error for latest_version = 1: %v", resp2.Diagnostics)
+	}
+}
+
+func TestPaperclipSecretOutOfBandRotationDrift(t *testing.T) {
+	ctx := context.Background()
+	secretResource := NewPaperclipSecretResource().(*PaperclipSecretResource)
+	var schemaResp resource.SchemaResponse
+	secretResource.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/api/companies/comp-1/secrets" {
+			_ = json.NewEncoder(w).Encode([]client.PaperclipSecret{
+				{
+					ID:            "sec-1",
+					CompanyID:     "comp-1",
+					Name:          "test-secret",
+					LatestVersion: 2,
+					LastRotatedAt: "2026-10-08T00:00:00Z",
+				},
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	cli, _ := client.NewClient(server.URL, "token")
+	secretResource.client = cli
+
+	stateModel := PaperclipSecretResourceModel{
+		ID:            types.StringValue("sec-1"),
+		CompanyID:     types.StringValue("comp-1"),
+		Name:          types.StringValue("test-secret"),
+		LatestVersion: types.Int64Value(1),
+		LastRotatedAt: types.StringValue("2026-10-01T00:00:00Z"),
+	}
+	rState := tfsdk.State{Schema: schemaResp.Schema}
+	_ = rState.Set(ctx, &stateModel)
+	var rResp resource.ReadResponse
+	rResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	secretResource.Read(ctx, resource.ReadRequest{State: rState}, &rResp)
+	if rResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected read error: %v", rResp.Diagnostics)
+	}
+
+	var resState PaperclipSecretResourceModel
+	_ = rResp.State.Get(ctx, &resState)
+	if resState.LatestVersion.ValueInt64() != 2 {
+		t.Fatalf("expected latest_version to reflect remote rotation to 2, got %v", resState.LatestVersion)
+	}
+	if resState.LastRotatedAt.ValueString() != "2026-10-08T00:00:00Z" {
+		t.Fatalf("expected last_rotated_at to reflect remote rotation, got %v", resState.LastRotatedAt)
+	}
+
+	// Pinned config with latest_version = 1 produces plan drift against state with latest_version = 2
+	cfgModel := PaperclipSecretResourceModel{
+		ID:            types.StringValue("sec-1"),
+		CompanyID:     types.StringValue("comp-1"),
+		Name:          types.StringValue("test-secret"),
+		LatestVersion: types.Int64Value(1),
+		LastRotatedAt: types.StringValue("2026-10-01T00:00:00Z"),
+	}
+	if cfgModel.LatestVersion.ValueInt64() == resState.LatestVersion.ValueInt64() {
+		t.Fatal("expected configuration latest_version (1) to drift from remote state (2)")
+	}
+}
+
+func TestPaperclipSecretModifyPlan(t *testing.T) {
+	ctx := context.Background()
+	secretResource := NewPaperclipSecretResource().(*PaperclipSecretResource)
+	var schemaResp resource.SchemaResponse
+	secretResource.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
+
+	// 1. Plan.Raw.IsNull()
+	var respNullPlan resource.ModifyPlanResponse
+	secretResource.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan: tfsdk.Plan{Schema: schemaResp.Schema},
+	}, &respNullPlan)
+	if respNullPlan.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on null plan: %v", respNullPlan.Diagnostics)
+	}
+
+	// 2. State.Raw.IsNull() (Create plan)
+	planModel := PaperclipSecretResourceModel{
+		CompanyID:    types.StringValue("comp-1"),
+		Name:         types.StringValue("sec-1"),
+		ProviderType: types.StringValue("local_encrypted"),
+		ManagedMode:  types.StringValue("paperclip_managed"),
+	}
+	var planCreate tfsdk.Plan
+	planCreate.Schema = schemaResp.Schema
+	_ = planCreate.Set(ctx, &planModel)
+	var respCreate resource.ModifyPlanResponse
+	respCreate.Plan = planCreate
+	secretResource.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:  planCreate,
+		State: tfsdk.State{Schema: schemaResp.Schema},
+	}, &respCreate)
+	if respCreate.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on create plan: %v", respCreate.Diagnostics)
+	}
+
+	// 3. State.Get error
+	badState := tfsdk.State{Schema: schemaResp.Schema, Raw: tftypes.NewValue(tftypes.String, "invalid")}
+	var respBadState resource.ModifyPlanResponse
+	respBadState.Plan = planCreate
+	secretResource.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:  planCreate,
+		State: badState,
+	}, &respBadState)
+	if !respBadState.Diagnostics.HasError() {
+		t.Fatal("expected error on bad state")
+	}
+
+	// 4. Config.Get error
+	stateModel := PaperclipSecretResourceModel{
+		ID:            types.StringValue("sec-1"),
+		CompanyID:     types.StringValue("comp-1"),
+		Name:          types.StringValue("sec-1"),
+		Rotation:      types.StringValue("rev-1"),
+		LatestVersion: types.Int64Value(1),
+		LastRotatedAt: types.StringValue("2026-10-01T00:00:00Z"),
+	}
+	var validState tfsdk.State
+	validState.Schema = schemaResp.Schema
+	_ = validState.Set(ctx, &stateModel)
+
+	badConfig := tfsdk.Config{Schema: schemaResp.Schema, Raw: tftypes.NewValue(tftypes.String, "invalid")}
+	var respBadConfig resource.ModifyPlanResponse
+	respBadConfig.Plan = planCreate
+	secretResource.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:   planCreate,
+		State:  validState,
+		Config: badConfig,
+	}, &respBadConfig)
+	if !respBadConfig.Diagnostics.HasError() {
+		t.Fatal("expected error on bad config")
+	}
+
+	// 5. Not rotating: plan.Rotation == state.Rotation
+	planNotRotatingModel := stateModel
+	var planNotRotating tfsdk.Plan
+	planNotRotating.Schema = schemaResp.Schema
+	_ = planNotRotating.Set(ctx, &planNotRotatingModel)
+	configNotRotating := tfsdk.Config{Schema: schemaResp.Schema, Raw: planNotRotating.Raw}
+	var respNotRotating resource.ModifyPlanResponse
+	respNotRotating.Plan = planNotRotating
+	secretResource.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:   planNotRotating,
+		State:  validState,
+		Config: configNotRotating,
+	}, &respNotRotating)
+	if respNotRotating.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on non-rotating plan: %v", respNotRotating.Diagnostics)
+	}
+
+	// 6. Rotating with unconfigured latest_version & last_rotated_at -> becomes unknown
+	planRotatingModel := stateModel
+	planRotatingModel.Rotation = types.StringValue("rev-2")
+	var planRotating tfsdk.Plan
+	planRotating.Schema = schemaResp.Schema
+	_ = planRotating.Set(ctx, &planRotatingModel)
+
+	configUnconfiguredModel := PaperclipSecretResourceModel{
+		CompanyID:     types.StringValue("comp-1"),
+		Name:          types.StringValue("sec-1"),
+		Rotation:      types.StringValue("rev-2"),
+		LatestVersion: types.Int64Null(),
+		LastRotatedAt: types.StringNull(),
+	}
+	var planConfigUnconfigured tfsdk.Plan
+	planConfigUnconfigured.Schema = schemaResp.Schema
+	_ = planConfigUnconfigured.Set(ctx, &configUnconfiguredModel)
+	configUnconfigured := tfsdk.Config{Schema: schemaResp.Schema, Raw: planConfigUnconfigured.Raw}
+
+	var respRotating resource.ModifyPlanResponse
+	respRotating.Plan = planRotating
+	secretResource.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:   planRotating,
+		State:  validState,
+		Config: configUnconfigured,
+	}, &respRotating)
+	if respRotating.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on rotating plan: %v", respRotating.Diagnostics)
+	}
+	var resRotatingModel PaperclipSecretResourceModel
+	_ = respRotating.Plan.Get(ctx, &resRotatingModel)
+	if !resRotatingModel.LatestVersion.IsUnknown() {
+		t.Fatal("expected LatestVersion to be unknown on rotation when unconfigured")
+	}
+	if !resRotatingModel.LastRotatedAt.IsUnknown() {
+		t.Fatal("expected LastRotatedAt to be unknown on rotation when unconfigured")
+	}
+
+	// 7. Rotating with configured latest_version & last_rotated_at -> retains values
+	configConfiguredModel := configUnconfiguredModel
+	configConfiguredModel.LatestVersion = types.Int64Value(2)
+	configConfiguredModel.LastRotatedAt = types.StringValue("2026-10-11T00:00:00Z")
+	var planConfigConfigured tfsdk.Plan
+	planConfigConfigured.Schema = schemaResp.Schema
+	_ = planConfigConfigured.Set(ctx, &configConfiguredModel)
+	configConfigured := tfsdk.Config{Schema: schemaResp.Schema, Raw: planConfigConfigured.Raw}
+
+	planRotatingConfiguredModel := planRotatingModel
+	planRotatingConfiguredModel.LatestVersion = types.Int64Value(2)
+	planRotatingConfiguredModel.LastRotatedAt = types.StringValue("2026-10-11T00:00:00Z")
+	var planRotatingConfigured tfsdk.Plan
+	planRotatingConfigured.Schema = schemaResp.Schema
+	_ = planRotatingConfigured.Set(ctx, &planRotatingConfiguredModel)
+
+	var respRotatingConfigured resource.ModifyPlanResponse
+	respRotatingConfigured.Plan = planRotatingConfigured
+	secretResource.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Plan:   planRotatingConfigured,
+		State:  validState,
+		Config: configConfigured,
+	}, &respRotatingConfigured)
+	if respRotatingConfigured.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on configured rotating plan: %v", respRotatingConfigured.Diagnostics)
+	}
+	var resConfiguredModel PaperclipSecretResourceModel
+	_ = respRotatingConfigured.Plan.Get(ctx, &resConfiguredModel)
+	if resConfiguredModel.LatestVersion.ValueInt64() != 2 {
+		t.Fatalf("expected LatestVersion to be 2, got %v", resConfiguredModel.LatestVersion)
+	}
+	if resConfiguredModel.LastRotatedAt.ValueString() != "2026-10-11T00:00:00Z" {
+		t.Fatalf("expected LastRotatedAt to match configured value, got %v", resConfiguredModel.LastRotatedAt)
+	}
+}
+
+func TestSecretProviderConfigCreateInvalidConfig(t *testing.T) {
+	ctx := context.Background()
+	r := NewPaperclipSecretProviderConfigResource().(*PaperclipSecretProviderConfigResource)
+	var schemaResp resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
+
+	var received client.PaperclipSecretProviderConfig
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/api/companies/comp-1/secret-provider-configs" {
+			_ = json.NewDecoder(r.Body).Decode(&received)
+			received.ID = "spc-1"
+			received.CompanyID = "comp-1"
+			_ = json.NewEncoder(w).Encode(received)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	cli, _ := client.NewClient(server.URL, "token")
+	r.client = cli
+
+	planModel := PaperclipSecretProviderConfigResourceModel{
+		CompanyID:    types.StringValue("comp-1"),
+		DisplayName:  types.StringValue("Vault"),
+		ProviderType: types.StringValue("vault"),
+		Config:       types.StringValue("{invalid-json"),
+	}
+	var plan tfsdk.Plan
+	plan.Schema = schemaResp.Schema
+	_ = plan.Set(ctx, &planModel)
+	var resp resource.CreateResponse
+	resp.State = tfsdk.State{Schema: schemaResp.Schema}
+	r.Create(ctx, resource.CreateRequest{Plan: plan}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected Create error: %v", resp.Diagnostics)
+	}
+	if len(received.Config) != 0 {
+		t.Fatalf("expected empty config for invalid JSON, got: %v", received.Config)
+	}
+
+	// Test Create with null config (covers else branch in Create)
+	planModelNull := planModel
+	planModelNull.Config = types.StringNull()
+	var planNull tfsdk.Plan
+	planNull.Schema = schemaResp.Schema
+	_ = planNull.Set(ctx, &planModelNull)
+	var respNull resource.CreateResponse
+	respNull.State = tfsdk.State{Schema: schemaResp.Schema}
+	r.Create(ctx, resource.CreateRequest{Plan: planNull}, &respNull)
+	if respNull.Diagnostics.HasError() {
+		t.Fatalf("unexpected Create error with null config: %v", respNull.Diagnostics)
+	}
+	if len(received.Config) != 0 {
+		t.Fatalf("expected empty config for null config, got: %v", received.Config)
 	}
 }

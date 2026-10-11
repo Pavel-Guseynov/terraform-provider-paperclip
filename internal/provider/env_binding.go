@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -294,12 +295,19 @@ func ValidateEnvBindingsApply(ctx context.Context, c *client.Client, companyID s
 			continue
 		}
 
-		secret, err := c.GetSecret(ctx, companyID, secretID)
-		if err != nil || secret == nil {
-			diags.AddError(
-				"Invalid Secret Reference",
-				fmt.Sprintf("Secret reference %q (for key %q) does not exist in target company %q (cross-company secret bindings are prohibited).", secretID, k, companyID),
-			)
+		_, err := c.GetSecret(ctx, companyID, secretID)
+		if err != nil {
+			if errors.Is(err, client.ErrNotFound) {
+				diags.AddError(
+					"Invalid Secret Reference",
+					fmt.Sprintf("Secret reference %q (for key %q) does not exist in target company %q (cross-company secret bindings are prohibited).", secretID, k, companyID),
+				)
+			} else {
+				diags.AddError(
+					"Secret Reference Verification Failed",
+					fmt.Sprintf("Failed to verify secret reference %q (for key %q): %s", secretID, k, err.Error()),
+				)
+			}
 		}
 	}
 
@@ -331,12 +339,19 @@ func ValidateEnvBindingsJSONApply(ctx context.Context, c *client.Client, company
 			continue
 		}
 
-		secret, err := c.GetSecret(ctx, companyID, secretID)
-		if err != nil || secret == nil {
-			diags.AddError(
-				"Invalid Secret Reference",
-				fmt.Sprintf("Secret reference %q (for key %q) does not exist in target company %q (cross-company secret bindings are prohibited).", secretID, k, companyID),
-			)
+		_, err := c.GetSecret(ctx, companyID, secretID)
+		if err != nil {
+			if errors.Is(err, client.ErrNotFound) {
+				diags.AddError(
+					"Invalid Secret Reference",
+					fmt.Sprintf("Secret reference %q (for key %q) does not exist in target company %q (cross-company secret bindings are prohibited).", secretID, k, companyID),
+				)
+			} else {
+				diags.AddError(
+					"Secret Reference Verification Failed",
+					fmt.Sprintf("Failed to verify secret reference %q (for key %q): %s", secretID, k, err.Error()),
+				)
+			}
 		}
 	}
 
