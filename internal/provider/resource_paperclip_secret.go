@@ -470,6 +470,15 @@ func (r *PaperclipSecretResource) Create(ctx context.Context, req resource.Creat
 		secret = updated
 	}
 
+	if !config.LatestVersion.IsNull() && !config.LatestVersion.IsUnknown() && config.LatestVersion.ValueInt64() != secret.LatestVersion {
+		resp.Diagnostics.AddError(
+			"Secret Version Mismatch",
+			fmt.Sprintf("Secret %q is at version %d remotely after creation, which cannot be reconciled with configured latest_version %d",
+				secret.Name, secret.LatestVersion, config.LatestVersion.ValueInt64()),
+		)
+		return
+	}
+
 	normalizePaperclipSecretState(&plan, secret)
 	if plan.Rotation.IsUnknown() {
 		plan.Rotation = types.StringNull()
@@ -596,6 +605,23 @@ func (r *PaperclipSecretResource) Update(ctx context.Context, req resource.Updat
 			return
 		}
 		secret = rotated
+	}
+
+	if !config.LatestVersion.IsNull() && !config.LatestVersion.IsUnknown() && config.LatestVersion.ValueInt64() != secret.LatestVersion {
+		resp.Diagnostics.AddError(
+			"Secret Version Mismatch",
+			fmt.Sprintf("Secret %q is at version %d remotely, which cannot be reconciled with configured latest_version %d; update configuration to %d to acknowledge rotation",
+				secret.Name, secret.LatestVersion, config.LatestVersion.ValueInt64(), secret.LatestVersion),
+		)
+		return
+	}
+	if !config.LastRotatedAt.IsNull() && !config.LastRotatedAt.IsUnknown() && config.LastRotatedAt.ValueString() != secret.LastRotatedAt {
+		resp.Diagnostics.AddError(
+			"Secret Rotation Timestamp Mismatch",
+			fmt.Sprintf("Secret %q has last_rotated_at %q remotely, which cannot be reconciled with configured last_rotated_at %q; update configuration to acknowledge rotation",
+				secret.Name, secret.LastRotatedAt, config.LastRotatedAt.ValueString()),
+		)
+		return
 	}
 
 	normalizePaperclipSecretState(&plan, secret)

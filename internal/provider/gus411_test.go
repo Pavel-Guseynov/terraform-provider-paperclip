@@ -2196,9 +2196,10 @@ func TestPaperclipSecretOutOfBandRotationDrift(t *testing.T) {
 	var schemaResp resource.SchemaResponse
 	secretResource.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
 
+	patchOrRotateCalled := false
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		if r.URL.Path == "/api/companies/comp-1/secrets" {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/secrets" {
 			_ = json.NewEncoder(w).Encode([]client.PaperclipSecret{
 				{
 					ID:            "sec-1",
@@ -2210,6 +2211,17 @@ func TestPaperclipSecretOutOfBandRotationDrift(t *testing.T) {
 			})
 			return
 		}
+		if r.Method == http.MethodPatch || strings.HasSuffix(r.URL.Path, "/rotate") {
+			patchOrRotateCalled = true
+			_ = json.NewEncoder(w).Encode(client.PaperclipSecret{
+				ID:            "sec-1",
+				CompanyID:     "comp-1",
+				Name:          "test-secret",
+				LatestVersion: 2,
+				LastRotatedAt: "2026-10-08T00:00:00Z",
+			})
+			return
+		}
 		http.NotFound(w, r)
 	}))
 	defer server.Close()
@@ -2217,6 +2229,7 @@ func TestPaperclipSecretOutOfBandRotationDrift(t *testing.T) {
 	cli, _ := client.NewClient(server.URL, "token")
 	secretResource.client = cli
 
+	// 1. Initial state before refresh: latest_version was 1
 	stateModel := PaperclipSecretResourceModel{
 		ID:            types.StringValue("sec-1"),
 		CompanyID:     types.StringValue("comp-1"),
@@ -2242,7 +2255,7 @@ func TestPaperclipSecretOutOfBandRotationDrift(t *testing.T) {
 		t.Fatalf("expected last_rotated_at to reflect remote rotation, got %v", resState.LastRotatedAt)
 	}
 
-	// Pinned config with latest_version = 1 produces plan drift against state with latest_version = 2
+	// 2. Exercise ModifyPlan: pinned config with latest_version = 1 preserves plan diff against refreshed state (2)
 	cfgModel := PaperclipSecretResourceModel{
 		ID:            types.StringValue("sec-1"),
 		CompanyID:     types.StringValue("comp-1"),
@@ -2250,8 +2263,212 @@ func TestPaperclipSecretOutOfBandRotationDrift(t *testing.T) {
 		LatestVersion: types.Int64Value(1),
 		LastRotatedAt: types.StringValue("2026-10-01T00:00:00Z"),
 	}
-	if cfgModel.LatestVersion.ValueInt64() == resState.LatestVersion.ValueInt64() {
-		t.Fatal("expected configuration latest_version (1) to drift from remote state (2)")
+	planModel := cfgModel
+	plan := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = plan.Set(ctx, &planModel)
+	cfg := tfsdk.Config{Schema: schemaResp.Schema, Raw: plan.Raw}
+
+	var mpResp resource.ModifyPlanResponse
+	mpResp.Plan = plan
+	secretResource.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		State:  rResp.State,
+		Config: cfg,
+		Plan:   plan,
+	}, &mpResp)
+	if mpResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected modify plan error: %v", mpResp.Diagnostics)
+	}
+
+	var plannedModel PaperclipSecretResourceModel
+	_ = mpResp.Plan.Get(ctx, &plannedModel)
+	if plannedModel.LatestVersion.ValueInt64() != 1 {
+		t.Fatalf("expected plan to preserve configured latest_version (1) to show drift, got %v", plannedModel.LatestVersion)
+	}
+
+	// 3. Exercise Update with drifted latest_version: must return explicit diagnostic Secret Version Mismatch
+	var uResp resource.UpdateResponse
+	uResp.State = rResp.State
+	secretResource.Update(ctx, resource.UpdateRequest{
+		Plan:   mpResp.Plan,
+		State:  rResp.State,
+		Config: cfg,
+	}, &uResp)
+	if !uResp.Diagnostics.HasError() {
+		t.Fatal("expected update to fail when applying out-of-band rotation drift")
+	}
+	foundVersionMismatch := false
+	for _, diag := range uResp.Diagnostics.Errors() {
+		if diag.Summary() == "Secret Version Mismatch" && strings.Contains(diag.Detail(), "reconciled with configured latest_version 1") {
+			foundVersionMismatch = true
+			break
+		}
+	}
+	if !foundVersionMismatch {
+		t.Fatalf("expected 'Secret Version Mismatch' diagnostic error, got: %v", uResp.Diagnostics)
+	}
+	if patchOrRotateCalled {
+		t.Fatal("expected no PATCH or rotate to be called on unacknowledged version mismatch")
+	}
+
+	// 4. Exercise Update with drifted last_rotated_at: must return Secret Rotation Timestamp Mismatch
+	cfgModelTimestampDrift := cfgModel
+	cfgModelTimestampDrift.LatestVersion = types.Int64Value(2) // version acknowledged
+	planTimestamp := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = planTimestamp.Set(ctx, &cfgModelTimestampDrift)
+	cfgTimestamp := tfsdk.Config{Schema: schemaResp.Schema, Raw: planTimestamp.Raw}
+
+	var uRespTimestamp resource.UpdateResponse
+	uRespTimestamp.State = rResp.State
+	secretResource.Update(ctx, resource.UpdateRequest{
+		Plan:   planTimestamp,
+		State:  rResp.State,
+		Config: cfgTimestamp,
+	}, &uRespTimestamp)
+	if !uRespTimestamp.Diagnostics.HasError() {
+		t.Fatal("expected update to fail when applying timestamp drift")
+	}
+	foundTimestampMismatch := false
+	for _, diag := range uRespTimestamp.Diagnostics.Errors() {
+		if diag.Summary() == "Secret Rotation Timestamp Mismatch" {
+			foundTimestampMismatch = true
+			break
+		}
+	}
+	if !foundTimestampMismatch {
+		t.Fatalf("expected 'Secret Rotation Timestamp Mismatch' diagnostic error, got: %v", uRespTimestamp.Diagnostics)
+	}
+
+	// 5. Exercise Update when configuration converges (both latest_version and last_rotated_at match)
+	cfgModelConverged := cfgModel
+	cfgModelConverged.LatestVersion = types.Int64Value(2)
+	cfgModelConverged.LastRotatedAt = types.StringValue("2026-10-08T00:00:00Z")
+	planConverged := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = planConverged.Set(ctx, &cfgModelConverged)
+	cfgConverged := tfsdk.Config{Schema: schemaResp.Schema, Raw: planConverged.Raw}
+
+	var uRespConverged resource.UpdateResponse
+	uRespConverged.State = rResp.State
+	secretResource.Update(ctx, resource.UpdateRequest{
+		Plan:   planConverged,
+		State:  rResp.State,
+		Config: cfgConverged,
+	}, &uRespConverged)
+	if uRespConverged.Diagnostics.HasError() {
+		t.Fatalf("expected converged update to succeed, got errors: %v", uRespConverged.Diagnostics)
+	}
+	var convergedState PaperclipSecretResourceModel
+	_ = uRespConverged.State.Get(ctx, &convergedState)
+	if convergedState.LatestVersion.ValueInt64() != 2 {
+		t.Fatalf("expected converged state latest_version 2, got %v", convergedState.LatestVersion)
+	}
+
+	// 6. Exercise Create with mismatched latest_version
+	createCfgModel := PaperclipSecretResourceModel{
+		CompanyID:     types.StringValue("comp-1"),
+		Name:          types.StringValue("test-create-secret"),
+		LatestVersion: types.Int64Value(2),
+	}
+	createPlan := tfsdk.Plan{Schema: schemaResp.Schema}
+	_ = createPlan.Set(ctx, &createCfgModel)
+	createCfg := tfsdk.Config{Schema: schemaResp.Schema, Raw: createPlan.Raw}
+
+	serverCreate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost && r.URL.Path == "/api/companies/comp-1/secrets" {
+			_ = json.NewEncoder(w).Encode(client.PaperclipSecret{
+				ID:            "sec-created",
+				CompanyID:     "comp-1",
+				Name:          "test-create-secret",
+				LatestVersion: 1,
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer serverCreate.Close()
+	cliCreate, _ := client.NewClient(serverCreate.URL, "token")
+	secretResource.client = cliCreate
+
+	var cResp resource.CreateResponse
+	cResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	secretResource.Create(ctx, resource.CreateRequest{
+		Plan:   createPlan,
+		Config: createCfg,
+	}, &cResp)
+	if !cResp.Diagnostics.HasError() {
+		t.Fatal("expected create to fail when configured latest_version does not match initial version")
+	}
+	foundCreateMismatch := false
+	for _, diag := range cResp.Diagnostics.Errors() {
+		if diag.Summary() == "Secret Version Mismatch" && strings.Contains(diag.Detail(), "after creation") {
+			foundCreateMismatch = true
+			break
+		}
+	}
+	if !foundCreateMismatch {
+		t.Fatalf("expected create 'Secret Version Mismatch' diagnostic error, got: %v", cResp.Diagnostics)
+	}
+}
+
+func TestAgentUpdateEnvPreReadError(t *testing.T) {
+	ctx := context.Background()
+	patchCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodGet && r.URL.Path == "/api/agents/agent-env-err" {
+			http.Error(w, "server error", http.StatusInternalServerError)
+			return
+		}
+		if r.Method == http.MethodPatch {
+			patchCalled = true
+			t.Errorf("unexpected PATCH request when GetAgent failed")
+			http.Error(w, "should not be called", http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	r := NewPaperclipAgentResource().(*PaperclipAgentResource)
+	schema := configureTestResource(t, server.URL, r)
+
+	envMap := map[string]EnvBindingModel{
+		"FOO": {
+			Type:  types.StringValue("plain"),
+			Value: types.StringValue("bar"),
+		},
+	}
+	plan := tfsdk.Plan{Schema: schema}
+	_ = plan.Set(ctx, &PaperclipAgentResourceModel{
+		ID:        types.StringValue("agent-env-err"),
+		CompanyID: types.StringValue("comp-1"),
+		Env:       envMap,
+	})
+	state := tfsdk.State{Schema: schema}
+	_ = state.Set(ctx, &PaperclipAgentResourceModel{
+		ID:        types.StringValue("agent-env-err"),
+		CompanyID: types.StringValue("comp-1"),
+	})
+	config := tfsdk.Config{Schema: schema, Raw: plan.Raw}
+
+	var updateResp resource.UpdateResponse
+	updateResp.State = state
+	r.Update(ctx, resource.UpdateRequest{Plan: plan, State: state, Config: config}, &updateResp)
+	if !updateResp.Diagnostics.HasError() {
+		t.Fatal("expected error when GetAgent fails during Update with env")
+	}
+	foundErr := false
+	for _, diag := range updateResp.Diagnostics.Errors() {
+		if diag.Summary() == "Error reading Paperclip agent before update" {
+			foundErr = true
+			break
+		}
+	}
+	if !foundErr {
+		t.Fatalf("expected 'Error reading Paperclip agent before update' diagnostic, got: %v", updateResp.Diagnostics)
+	}
+	if patchCalled {
+		t.Fatal("expected no PATCH to be sent when pre-update GetAgent fails")
 	}
 }
 

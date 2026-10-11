@@ -1086,13 +1086,25 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		}
 	}
 	var replaceAdapterConfig bool
+	var currentAgent *client.PaperclipAgent
+	getCurrentAgent := func() (*client.PaperclipAgent, error) {
+		if currentAgent != nil {
+			return currentAgent, nil
+		}
+		a, err := r.client.GetAgent(ctx, state.ID.ValueString())
+		if err != nil {
+			return nil, err
+		}
+		currentAgent = a
+		return currentAgent, nil
+	}
 	if !plan.AdapterConfig.IsNull() && !plan.AdapterConfig.IsUnknown() && plan.AdapterConfig.ValueString() != "" {
 		if err := json.Unmarshal([]byte(plan.AdapterConfig.ValueString()), &adapterMap); err != nil {
 			resp.Diagnostics.AddAttributeError(path.Root("adapter_config"), "Invalid JSON", err.Error())
 			return
 		}
 		if adapterMap != nil {
-			current, err := r.client.GetAgent(ctx, state.ID.ValueString())
+			current, err := getCurrentAgent()
 			if err != nil {
 				resp.Diagnostics.AddError("Error reading Paperclip agent before update", err.Error())
 				return
@@ -1102,7 +1114,7 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		}
 	} else if plan.AdapterConfig.IsNull() && !state.AdapterConfig.IsNull() {
 		adapterMap = make(map[string]interface{})
-		current, err := r.client.GetAgent(ctx, state.ID.ValueString())
+		current, err := getCurrentAgent()
 		if err != nil {
 			resp.Diagnostics.AddError("Error reading Paperclip agent before update", err.Error())
 			return
@@ -1129,8 +1141,12 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		if adapterMap == nil {
 			adapterMap = make(map[string]interface{})
 		}
-		current, err := r.client.GetAgent(ctx, state.ID.ValueString())
-		if err == nil && current.AdapterConfig != nil {
+		current, err := getCurrentAgent()
+		if err != nil {
+			resp.Diagnostics.AddError("Error reading Paperclip agent before update", err.Error())
+			return
+		}
+		if current.AdapterConfig != nil {
 			preservePaperclipManagedAdapterConfig(current.AdapterConfig, adapterMap)
 		}
 		if len(plan.Env) > 0 {
