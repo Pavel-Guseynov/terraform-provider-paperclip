@@ -1146,6 +1146,11 @@ func (c *Client) RegisterMintedKey(keyID, token, name string, isBoard bool, agen
 	}
 	c.mintedKeys[keyID] = rec
 	c.mintedKeysByName[lookupKey(name, isBoard, agentID)] = keyID
+	if isBoard {
+		c.activeEphemeralBoardKeys = append(c.activeEphemeralBoardKeys, keyID)
+	} else {
+		c.activeEphemeralAgentKeys = append(c.activeEphemeralAgentKeys, keyID)
+	}
 	delete(c.deliveredTokens, keyID)
 	c.acknowledgedDeliveries[keyID] = false
 }
@@ -1233,16 +1238,37 @@ func (c *Client) ListAgentKeys(ctx context.Context, agentID string) ([]Paperclip
 	return active, nil
 }
 
-func (c *Client) ReconcileUnconfirmedBoardKeys(ctx context.Context, name, currentKeyID string) error {
-	keys, err := c.ListBoardAPIKeys(ctx)
-	if err != nil {
-		return err
+func (c *Client) PopActiveEphemeralBoardKey() string {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	n := len(c.activeEphemeralBoardKeys)
+	if n == 0 {
+		return ""
 	}
+	keyID := c.activeEphemeralBoardKeys[n-1]
+	c.activeEphemeralBoardKeys = c.activeEphemeralBoardKeys[:n-1]
+	return keyID
+}
+
+func (c *Client) PopActiveEphemeralAgentKey() (string, string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	n := len(c.activeEphemeralAgentKeys)
+	if n == 0 {
+		return "", ""
+	}
+	keyID := c.activeEphemeralAgentKeys[n-1]
+	c.activeEphemeralAgentKeys = c.activeEphemeralAgentKeys[:n-1]
+	agentID := c.agentKeyAgents[keyID]
+	return keyID, agentID
+}
+
+func (c *Client) ReconcileUnconfirmedBoardKeys(ctx context.Context, name, currentKeyID string) error {
 	var toRevoke []string
 	c.credMu.RLock()
-	for _, k := range keys {
-		if k.Name == name && k.ID != currentKeyID && !c.acknowledgedDeliveries[k.ID] {
-			toRevoke = append(toRevoke, k.ID)
+	for id, rec := range c.mintedKeys {
+		if rec.isBoard && rec.name == name && id != currentKeyID && !c.acknowledgedDeliveries[id] {
+			toRevoke = append(toRevoke, id)
 		}
 	}
 	c.credMu.RUnlock()
@@ -1256,15 +1282,11 @@ func (c *Client) ReconcileUnconfirmedBoardKeys(ctx context.Context, name, curren
 }
 
 func (c *Client) ReconcileUnconfirmedAgentKeys(ctx context.Context, agentID, name, currentKeyID string) error {
-	keys, err := c.ListAgentKeys(ctx, agentID)
-	if err != nil {
-		return err
-	}
 	var toRevoke []string
 	c.credMu.RLock()
-	for _, k := range keys {
-		if k.Name == name && k.ID != currentKeyID && !c.acknowledgedDeliveries[k.ID] {
-			toRevoke = append(toRevoke, k.ID)
+	for id, rec := range c.mintedKeys {
+		if !rec.isBoard && rec.agentID == agentID && rec.name == name && id != currentKeyID && !c.acknowledgedDeliveries[id] {
+			toRevoke = append(toRevoke, id)
 		}
 	}
 	c.credMu.RUnlock()
@@ -1275,6 +1297,29 @@ func (c *Client) ReconcileUnconfirmedAgentKeys(ctx context.Context, agentID, nam
 		}
 	}
 	return nil
+}
+
+func (c *Client) CleanupUnconfirmedKeys(ctx context.Context) {
+	c.credMu.Lock()
+	var unconfirmed []mintedKeyRecord
+	for keyID, rec := range c.mintedKeys {
+		if !c.acknowledgedDeliveries[keyID] {
+			if rec.agentID == "" {
+				rec.agentID = c.agentKeyAgents[keyID]
+			}
+			unconfirmed = append(unconfirmed, rec)
+		}
+	}
+	c.credMu.Unlock()
+
+	for _, rec := range unconfirmed {
+		if rec.isBoard {
+			_ = c.RevokeBoardKey(ctx, rec.keyID)
+		} else if rec.agentID != "" {
+			_ = c.RevokeAgentKey(ctx, rec.agentID, rec.keyID)
+		}
+		c.ClearMintedToken(rec.keyID)
+	}
 }
 
 func (c *Client) GetAgentIDForKey(keyID string) (string, bool) {
@@ -1298,8 +1343,29 @@ func (c *Client) ClearMintedToken(keyID string) {
 	delete(c.supersededKeys, keyID)
 	delete(c.agentKeyAgents, keyID)
 	if rec, ok := c.mintedKeys[keyID]; ok {
-		delete(c.mintedKeysByName, lookupKey(rec.name, rec.isBoard, rec.agentID))
+		lk := lookupKey(rec.name, rec.isBoard, rec.agentID)
 		delete(c.mintedKeys, keyID)
+		if c.mintedKeysByName[lk] == keyID {
+			delete(c.mintedKeysByName, lk)
+			for otherID, otherRec := range c.mintedKeys {
+				if lookupKey(otherRec.name, otherRec.isBoard, otherRec.agentID) == lk {
+					c.mintedKeysByName[lk] = otherID
+					break
+				}
+			}
+		}
+	}
+	for i, id := range c.activeEphemeralBoardKeys {
+		if id == keyID {
+			c.activeEphemeralBoardKeys = append(c.activeEphemeralBoardKeys[:i], c.activeEphemeralBoardKeys[i+1:]...)
+			break
+		}
+	}
+	for i, id := range c.activeEphemeralAgentKeys {
+		if id == keyID {
+			c.activeEphemeralAgentKeys = append(c.activeEphemeralAgentKeys[:i], c.activeEphemeralAgentKeys[i+1:]...)
+			break
+		}
 	}
 }
 

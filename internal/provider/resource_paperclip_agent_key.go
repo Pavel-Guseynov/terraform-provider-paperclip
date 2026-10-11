@@ -258,24 +258,18 @@ func (r *PaperclipAgentKeyResource) Create(ctx context.Context, req resource.Cre
 	}
 
 	keyID := ""
-	if kID, _, ok := r.client.GetMintedKeyForName(plan.Name.ValueString(), false, plan.AgentID.ValueString()); ok && kID != "" {
+	if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() && plan.KeyID.ValueString() != "" {
+		keyID = plan.KeyID.ValueString()
+	} else if kID, _, ok := r.client.GetMintedKeyForName(plan.Name.ValueString(), false, plan.AgentID.ValueString()); ok && kID != "" {
 		keyID = kID
 	}
 
 	if keyID == "" {
-		scope, err := scopeModelToClient(ctx, plan.Scope)
-		if err != nil {
-			resp.Diagnostics.AddError("Invalid agent key scope", err.Error())
-			return
-		}
-
-		key, err := r.client.CreateAgentKey(ctx, plan.AgentID.ValueString(), plan.Name.ValueString(), scope)
-		if err != nil {
-			resp.Diagnostics.AddError("Error creating Paperclip agent key", err.Error())
-			return
-		}
-		keyID = key.ID
-		r.client.RegisterMintedKey(key.ID, key.Token, plan.Name.ValueString(), false, plan.AgentID.ValueString())
+		resp.Diagnostics.AddError(
+			"Missing Ephemeral Mint",
+			"No ephemeral agent key was minted for this generation. Ephemeral minting via ephemeral.paperclip_agent_key delivered to a consumer is required before creating the managed agent key record.",
+		)
+		return
 	}
 
 	r.client.AcknowledgeKeyDelivery(keyID)
@@ -360,19 +354,11 @@ func (r *PaperclipAgentKeyResource) Update(ctx context.Context, req resource.Upd
 		}
 
 		if newKeyID == "" {
-			scope, err := scopeModelToClient(ctx, plan.Scope)
-			if err != nil {
-				resp.Diagnostics.AddError("Invalid agent key scope", err.Error())
-				return
-			}
-
-			newKey, err := r.client.CreateAgentKey(ctx, plan.AgentID.ValueString(), plan.Name.ValueString(), scope)
-			if err != nil {
-				resp.Diagnostics.AddError("Error rotating Paperclip agent key", err.Error())
-				return
-			}
-			newKeyID = newKey.ID
-			r.client.RegisterMintedKey(newKey.ID, newKey.Token, plan.Name.ValueString(), false, plan.AgentID.ValueString())
+			resp.Diagnostics.AddError(
+				"Missing Ephemeral Mint",
+				"No ephemeral agent key was minted for generation rotation. Ephemeral minting via ephemeral.paperclip_agent_key delivered to a consumer is required before updating the managed agent key record.",
+			)
+			return
 		}
 
 		if oldKeyID != "" && oldKeyID != newKeyID {

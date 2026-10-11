@@ -448,12 +448,16 @@ func TestClientCredentialRegistry(t *testing.T) {
 	}
 
 	// ReconcileUnconfirmedBoardKeys and ReconcileUnconfirmedAgentKeys
+	cli.RegisterMintedKey("m-bk-unconf", "tok", "my-board-key", true, "")
+	cli.RegisterMintedKey("m-ak-unconf", "tok", "my-agent-key", false, "ag-1")
 	if err := cli.ReconcileUnconfirmedBoardKeys(ctx, "my-board-key", "different-bk-id"); err != nil {
 		t.Fatalf("unexpected error in ReconcileUnconfirmedBoardKeys: %v", err)
 	}
 	if err := cli.ReconcileUnconfirmedAgentKeys(ctx, "ag-1", "my-agent-key", "different-ak-id"); err != nil {
 		t.Fatalf("unexpected error in ReconcileUnconfirmedAgentKeys: %v", err)
 	}
+	cli.RegisterMintedKey("m-bk-fail", "tok", "my-board-key", true, "")
+	cli.RegisterMintedKey("m-ak-fail", "tok", "my-agent-key", false, "ag-1")
 	failDelete = true
 	if err := cli.ReconcileUnconfirmedBoardKeys(ctx, "my-board-key", "different-bk-id"); err == nil {
 		t.Fatal("expected error in ReconcileUnconfirmedBoardKeys when delete fails")
@@ -528,10 +532,60 @@ func TestClientCredentialRegistry(t *testing.T) {
 	if _, err := failCli.ListAgentKeys(ctx, "ag-1"); err == nil {
 		t.Fatal("expected error on connection failure in ListAgentKeys")
 	}
+	failCli.RegisterMintedKey("bk-unconfirmed-fail", "tok", "my-board-key", true, "")
+	failCli.RegisterMintedKey("ak-unconfirmed-fail", "tok", "my-agent-key", false, "ag-1")
 	if err := failCli.ReconcileUnconfirmedBoardKeys(ctx, "my-board-key", "active-bk-find"); err == nil {
 		t.Fatal("expected error on connection failure in ReconcileUnconfirmedBoardKeys")
 	}
 	if err := failCli.ReconcileUnconfirmedAgentKeys(ctx, "ag-1", "my-agent-key", "active-ak-find"); err == nil {
 		t.Fatal("expected error on connection failure in ReconcileUnconfirmedAgentKeys")
+	}
+
+	// Test PopActiveEphemeral*Key and ClearMintedToken branch coverage
+	emptyCli, _ := NewClient("http://127.0.0.1:8080", "tok")
+	if k := emptyCli.PopActiveEphemeralBoardKey(); k != "" {
+		t.Fatalf("expected empty board key from empty client, got %s", k)
+	}
+	if k, ag := emptyCli.PopActiveEphemeralAgentKey(); k != "" || ag != "" {
+		t.Fatalf("expected empty agent key from empty client, got %s, %s", k, ag)
+	}
+	emptyCli.RegisterMintedKey("bk-pop-1", "tok", "pop-board", true, "")
+	emptyCli.RegisterMintedKey("ak-pop-1", "tok", "pop-agent", false, "ag-pop")
+	if k := emptyCli.PopActiveEphemeralBoardKey(); k != "bk-pop-1" {
+		t.Fatalf("expected bk-pop-1, got %s", k)
+	}
+	if k, ag := emptyCli.PopActiveEphemeralAgentKey(); k != "ak-pop-1" || ag != "ag-pop" {
+		t.Fatalf("expected ak-pop-1, ag-pop, got %s, %s", k, ag)
+	}
+
+	// ClearMintedToken restore branch: duplicate key for same name
+	emptyCli.RegisterMintedKey("bk-dup-1", "tok1", "same-board-name", true, "")
+	emptyCli.RegisterMintedKey("bk-dup-2", "tok2", "same-board-name", true, "")
+	emptyCli.ClearMintedToken("bk-dup-2")
+	if k, _, ok := emptyCli.GetMintedKeyForName("same-board-name", true, ""); !ok || k != "bk-dup-1" {
+		t.Fatalf("expected restored key bk-dup-1 for same-board-name, got %s, ok=%v", k, ok)
+	}
+
+	// Test CleanupUnconfirmedKeys and CleanupAllUnconfirmedKeys
+	cleanupServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
+	}))
+	defer cleanupServer.Close()
+
+	cleanCli, _ := NewClient(cleanupServer.URL, "tok")
+	cleanCli.RegisterMintedKey("bk-clean-1", "tok", "clean-bk", true, "")
+	cleanCli.RegisterMintedKey("ak-clean-1", "tok", "clean-ak", false, "ag-clean")
+	cleanCli.RegisterMintedKey("ak-clean-noag", "tok", "clean-ak2", false, "")
+	cleanCli.agentKeyAgents["ak-clean-noag"] = "ag-fallback"
+	cleanCli.RegisterMintedKey("bk-ack-1", "tok", "clean-ack", true, "")
+	cleanCli.AcknowledgeKeyDelivery("bk-ack-1")
+
+	CleanupAllUnconfirmedKeys(ctx)
+	if _, ok := cleanCli.GetMintedToken("bk-clean-1"); ok {
+		t.Fatal("expected bk-clean-1 to be cleared after CleanupAllUnconfirmedKeys")
+	}
+	if _, ok := cleanCli.GetMintedToken("ak-clean-1"); ok {
+		t.Fatal("expected ak-clean-1 to be cleared after CleanupAllUnconfirmedKeys")
 	}
 }

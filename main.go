@@ -4,7 +4,12 @@ import (
 	"context"
 	"flag"
 	"log"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
+	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/provider"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 )
@@ -24,7 +29,16 @@ func main() {
 		Debug:   debug,
 	}
 
-	err := providerserver.Serve(context.Background(), provider.New(version), opts)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	defer func() {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		client.CleanupAllUnconfirmedKeys(cleanupCtx)
+	}()
+
+	err := providerserver.Serve(ctx, provider.New(version), opts)
 	if err != nil {
 		log.Fatal(err.Error())
 	}

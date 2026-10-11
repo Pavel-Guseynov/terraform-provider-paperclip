@@ -68,8 +68,10 @@ type Client struct {
 	agentKeyAgents         map[string]string // keyID -> agentID
 	mintedKeys             map[string]mintedKeyRecord
 	mintedKeysByName       map[string]string // lookupKey -> keyID
-	acknowledgedDeliveries map[string]bool   // keyID -> true
-	deliveredGenerations   map[string]int64  // lookupKey -> generation
+	acknowledgedDeliveries   map[string]bool   // keyID -> true
+	deliveredGenerations     map[string]int64  // lookupKey -> generation
+	activeEphemeralBoardKeys []string
+	activeEphemeralAgentKeys []string
 }
 
 type HealthResponse struct {
@@ -101,7 +103,30 @@ func NewClient(endpoint, token string) (*Client, error) {
 		acknowledgedDeliveries: make(map[string]bool),
 		deliveredGenerations:   make(map[string]int64),
 	}
+	registerActiveClient(c)
 	return c, nil
+}
+
+var (
+	activeClientsMu sync.Mutex
+	activeClients   []*Client
+)
+
+func registerActiveClient(c *Client) {
+	activeClientsMu.Lock()
+	defer activeClientsMu.Unlock()
+	activeClients = append(activeClients, c)
+}
+
+func CleanupAllUnconfirmedKeys(ctx context.Context) {
+	activeClientsMu.Lock()
+	clients := make([]*Client, len(activeClients))
+	copy(clients, activeClients)
+	activeClientsMu.Unlock()
+
+	for _, c := range clients {
+		c.CleanupUnconfirmedKeys(ctx)
+	}
 }
 
 func (c *Client) Health(ctx context.Context) (*HealthResponse, error) {

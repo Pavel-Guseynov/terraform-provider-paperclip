@@ -104,7 +104,7 @@ func (r *TestConsumerSecretResource) Schema(ctx context.Context, req resource.Sc
 			},
 			"value_wo": rschema.StringAttribute{
 				Description: "Sensitive write-only secret credential value.",
-				Required:    true,
+				Optional:    true,
 				Sensitive:   true,
 				WriteOnly:   true,
 			},
@@ -176,8 +176,8 @@ func (r *TestConsumerSecretResource) handleWrite(ctx context.Context, plan *Test
 	// Fault injection 1: mid-apply process restart
 	if os.Getenv("TESTCONSUMER_KILL_ON_WRITE") == "1" {
 		ppid := os.Getppid()
-		_ = syscall.Kill(ppid, syscall.SIGKILL)
-		os.Exit(1)
+		_ = syscall.Kill(ppid, syscall.SIGINT)
+		return fmt.Errorf("interrupted by SIGINT")
 	}
 
 	// Fault injection 2: consumer write failure

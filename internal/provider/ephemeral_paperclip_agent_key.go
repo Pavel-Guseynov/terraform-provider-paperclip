@@ -148,8 +148,14 @@ func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephem
 
 	// 0. Plan-phase deferral when applying is false (e.g. via tofu.applying)
 	if !data.Applying.IsNull() && !data.Applying.IsUnknown() && !data.Applying.ValueBool() {
-		data.KeyID = types.StringValue(fmt.Sprintf("(plan-agent-key-id-%d)", gen))
-		data.Token = types.StringValue(fmt.Sprintf("(plan-agent-token-%d)", gen))
+		if req.ClientCapabilities.DeferralAllowed {
+			resp.Deferred = &ephemeral.Deferred{
+				Reason: ephemeral.DeferredReasonUnknown,
+			}
+			return
+		}
+		data.KeyID = types.StringNull()
+		data.Token = types.StringNull()
 		resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 		return
 	}
@@ -279,6 +285,9 @@ func (r *PaperclipAgentKeyEphemeralResource) Close(ctx context.Context, req ephe
 	}
 	if keyID == "" {
 		keyID = r.keyID
+	}
+	if keyID == "" {
+		keyID, agentID = r.client.PopActiveEphemeralAgentKey()
 	}
 	if !isLookup {
 		isLookup = r.isLookup

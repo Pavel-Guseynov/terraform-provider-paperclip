@@ -116,28 +116,18 @@ func (r *PaperclipBoardKeyResource) Create(ctx context.Context, req resource.Cre
 	}
 
 	keyID := ""
-	if kID, _, ok := r.client.GetMintedKeyForName(plan.Name.ValueString(), true, ""); ok && kID != "" {
+	if !plan.KeyID.IsNull() && !plan.KeyID.IsUnknown() && plan.KeyID.ValueString() != "" {
+		keyID = plan.KeyID.ValueString()
+	} else if kID, _, ok := r.client.GetMintedKeyForName(plan.Name.ValueString(), true, ""); ok && kID != "" {
 		keyID = kID
 	}
 
 	if keyID == "" {
-		var expiresAt *time.Time
-		if !plan.ExpiresAt.IsNull() && !plan.ExpiresAt.IsUnknown() && plan.ExpiresAt.ValueString() != "" {
-			t, err := time.Parse(time.RFC3339, plan.ExpiresAt.ValueString())
-			if err != nil {
-				resp.Diagnostics.AddError("Invalid expires_at format", fmt.Sprintf("expires_at must be RFC3339 format: %s", err))
-				return
-			}
-			expiresAt = &t
-		}
-
-		key, err := r.client.CreateBoardKey(ctx, plan.Name.ValueString(), expiresAt, plan.RequestedCompanyID.ValueString())
-		if err != nil {
-			resp.Diagnostics.AddError("Error creating Paperclip board key", err.Error())
-			return
-		}
-		keyID = key.ID
-		r.client.RegisterMintedKey(key.ID, key.Token, plan.Name.ValueString(), true, "")
+		resp.Diagnostics.AddError(
+			"Missing Ephemeral Mint",
+			"No ephemeral board key was minted for this generation. Ephemeral minting via ephemeral.paperclip_board_key delivered to a consumer is required before creating the managed board key record.",
+		)
+		return
 	}
 
 	r.client.AcknowledgeKeyDelivery(keyID)
@@ -225,23 +215,11 @@ func (r *PaperclipBoardKeyResource) Update(ctx context.Context, req resource.Upd
 		}
 
 		if newKeyID == "" {
-			var expiresAt *time.Time
-			if !plan.ExpiresAt.IsNull() && !plan.ExpiresAt.IsUnknown() && plan.ExpiresAt.ValueString() != "" {
-				t, err := time.Parse(time.RFC3339, plan.ExpiresAt.ValueString())
-				if err != nil {
-					resp.Diagnostics.AddError("Invalid expires_at format", fmt.Sprintf("expires_at must be RFC3339 format: %s", err))
-					return
-				}
-				expiresAt = &t
-			}
-
-			newKey, err := r.client.CreateBoardKey(ctx, plan.Name.ValueString(), expiresAt, plan.RequestedCompanyID.ValueString())
-			if err != nil {
-				resp.Diagnostics.AddError("Error rotating Paperclip board key", err.Error())
-				return
-			}
-			newKeyID = newKey.ID
-			r.client.RegisterMintedKey(newKey.ID, newKey.Token, plan.Name.ValueString(), true, "")
+			resp.Diagnostics.AddError(
+				"Missing Ephemeral Mint",
+				"No ephemeral board key was minted for generation rotation. Ephemeral minting via ephemeral.paperclip_board_key delivered to a consumer is required before updating the managed board key record.",
+			)
+			return
 		}
 
 		if oldKeyID != "" && oldKeyID != newKeyID {

@@ -224,6 +224,12 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	mockState.failCreate = false
 
 	// Create - Success
+	mockState.keys["bk-1"] = client.PaperclipBoardKey{
+		ID:        "bk-1",
+		Name:      "initial",
+		ExpiresAt: &expFuture,
+	}
+	r.client.RegisterMintedKey("bk-1", "tok-1", "initial", true, "")
 	var createResp resource.CreateResponse
 	createResp.State = tfsdk.State{Schema: schema}
 	r.Create(ctx, resource.CreateRequest{Plan: validPlan}, &createResp)
@@ -266,6 +272,7 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	}
 
 	// Create - without expires_at
+	r.client.RegisterMintedKey("bk-noexp", "tok-noexp", "no-exp", true, "")
 	noExpModel := PaperclipBoardKeyResourceModel{
 		Name:       types.StringValue("no-exp"),
 		Generation: types.Int64Value(1),
@@ -278,6 +285,24 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	r.Create(ctx, resource.CreateRequest{Plan: noExpPlan}, &noExpResp)
 	if noExpResp.Diagnostics.HasError() {
 		t.Fatalf("create without expires_at failed: %v", noExpResp.Diagnostics)
+	}
+
+	// Create - with explicit KeyID and Unknown ExpiresAt
+	r.client.RegisterMintedKey("bk-explicit-keyid", "tok-exp", "explicit-keyid-name", true, "")
+	expKeyIDModel := PaperclipBoardKeyResourceModel{
+		ID:         types.StringNull(),
+		KeyID:      types.StringValue("bk-explicit-keyid"),
+		Name:       types.StringValue("explicit-keyid-name"),
+		Generation: types.Int64Value(1),
+		ExpiresAt:  types.StringUnknown(),
+	}
+	expKeyIDPlan := tfsdk.Plan{Schema: schema}
+	_ = expKeyIDPlan.Set(ctx, &expKeyIDModel)
+	var expKeyIDResp resource.CreateResponse
+	expKeyIDResp.State = tfsdk.State{Schema: schema}
+	r.Create(ctx, resource.CreateRequest{Plan: expKeyIDPlan}, &expKeyIDResp)
+	if expKeyIDResp.Diagnostics.HasError() {
+		t.Fatalf("create with explicit key_id failed: %v", expKeyIDResp.Diagnostics)
 	}
 
 	// Read - Success
@@ -414,6 +439,7 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 		t.Fatal("expected error on update mint failure")
 	}
 	mockState.failCreate = false
+	r.client.RegisterMintedKey("bk-2", "tok-2", "rotated", true, "")
 
 	// Update - Changed generation: revoke superseded key failure
 	mockState.failDelete = true
@@ -426,14 +452,22 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	mockState.failDelete = false
 
 	// Update - Changed generation: reconcile unconfirmed keys failure
-	mockState.failRead = true
+	r.client.RegisterMintedKey("bk-unconf", "tok", "rotated", true, "")
+	mockState.failDelete = true
 	var failRecRotResp resource.UpdateResponse
 	failRecRotResp.State = tfsdk.State{Schema: schema}
-	r.Update(ctx, resource.UpdateRequest{Plan: rotPlan, State: createResp.State}, &failRecRotResp)
+	noOldState := tfsdk.State{Schema: schema}
+	noOldModel := rotModel
+	noOldModel.KeyID = types.StringNull()
+	noOldModel.ID = types.StringNull()
+	noOldModel.Generation = types.Int64Value(1)
+	_ = noOldState.Set(ctx, &noOldModel)
+	r.Update(ctx, resource.UpdateRequest{Plan: rotPlan, State: noOldState}, &failRecRotResp)
 	if !failRecRotResp.Diagnostics.HasError() {
 		t.Fatal("expected error on reconcile unconfirmed keys failure during update")
 	}
-	mockState.failRead = false
+	mockState.failDelete = false
+	r.client.ClearMintedToken("bk-unconf")
 
 	// Update - Changed generation: Success (revokes predecessor immediately)
 	var rotUpdateResp resource.UpdateResponse
@@ -458,6 +492,7 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	}
 
 	// Update - Changed generation without expires_at and with KeyID empty in state
+	r.client.RegisterMintedKey("bk-no-exp-3", "tok", "rotated-no-exp", true, "")
 	rotNoExpModel := createdModel
 	rotNoExpModel.Name = types.StringValue("rotated-no-exp")
 	rotNoExpModel.Generation = types.Int64Value(3)
@@ -479,6 +514,7 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	}
 
 	// Update - With Private state tracking superseded key across generations
+	r.client.RegisterMintedKey("bk-with-priv-4", "tok", "rot-with-priv", true, "")
 	var privResp resource.UpdateResponse
 	privResp.State = tfsdk.State{Schema: schema}
 	privData := initUpdateResponsePrivate(&privResp)
@@ -501,6 +537,7 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	var recovPlan tfsdk.Plan = tfsdk.Plan{Schema: schema}
 	recovModel := createdModel
 	recovModel.Generation = types.Int64Value(5)
+	r.client.RegisterMintedKey("bk-recov-5", "tok", recovModel.Name.ValueString(), true, "")
 	_ = recovPlan.Set(ctx, &recovModel)
 	var recovReq resource.UpdateRequest
 	recovReq.Plan = recovPlan
@@ -511,6 +548,22 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	r.Update(ctx, recovReq, &recovResp)
 	if recovResp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error on recovery update with private: %v", recovResp.Diagnostics)
+	}
+
+	// Update - with explicit plan.KeyID and Unknown ExpiresAt
+	r.client.RegisterMintedKey("bk-upd-explicit", "tok-upd", "upd-explicit-name", true, "")
+	updExpModel := createdModel
+	updExpModel.Name = types.StringValue("upd-explicit-name")
+	updExpModel.Generation = types.Int64Value(6)
+	updExpModel.KeyID = types.StringValue("bk-upd-explicit")
+	updExpModel.ExpiresAt = types.StringUnknown()
+	updExpPlan := tfsdk.Plan{Schema: schema}
+	_ = updExpPlan.Set(ctx, &updExpModel)
+	var updExpResp resource.UpdateResponse
+	updExpResp.State = tfsdk.State{Schema: schema}
+	r.Update(ctx, resource.UpdateRequest{Plan: updExpPlan, State: rotUpdateResp.State}, &updExpResp)
+	if updExpResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on update with explicit key_id: %v", updExpResp.Diagnostics)
 	}
 
 	// Delete - API failure
@@ -825,6 +878,17 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	mockState.failCreate = false
 
 	// Create - Success
+	mockState.keys["ak-1"] = client.PaperclipAgentKey{
+		ID:      "ak-1",
+		AgentID: "ag-1",
+		Name:    "initial-agent-key",
+		Token:   "tok-ak-1",
+		Scope: &client.AgentKeyScope{
+			Kind:      "standard",
+			ProjectID: "proj-1",
+		},
+	}
+	r.client.RegisterMintedKey("ak-1", "tok-1", "initial-agent-key", false, "ag-1")
 	var createResp resource.CreateResponse
 	createResp.State = tfsdk.State{Schema: schema}
 	r.Create(ctx, resource.CreateRequest{Plan: validPlan}, &createResp)
@@ -867,6 +931,7 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	}
 
 	// Create - without scope
+	r.client.RegisterMintedKey("ak-noscope", "tok-noscope", "no-scope-key", false, "ag-1")
 	noScopeModel := PaperclipAgentKeyResourceModel{
 		AgentID:    types.StringValue("ag-1"),
 		Name:       types.StringValue("no-scope-key"),
@@ -882,6 +947,24 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	r.Create(ctx, resource.CreateRequest{Plan: noScopePlan}, &noScopeResp)
 	if noScopeResp.Diagnostics.HasError() {
 		t.Fatalf("create without scope failed: %v", noScopeResp.Diagnostics)
+	}
+
+	// Create - with explicit KeyID
+	r.client.RegisterMintedKey("ak-explicit-keyid", "tok-ak-exp", "explicit-ak-name", false, "ag-1")
+	expAkKeyIDModel := PaperclipAgentKeyResourceModel{
+		ID:         types.StringNull(),
+		KeyID:      types.StringValue("ak-explicit-keyid"),
+		AgentID:    types.StringValue("ag-1"),
+		Name:       types.StringValue("explicit-ak-name"),
+		Generation: types.Int64Value(1),
+	}
+	expAkKeyIDPlan := tfsdk.Plan{Schema: schema}
+	_ = expAkKeyIDPlan.Set(ctx, &expAkKeyIDModel)
+	var expAkKeyIDResp resource.CreateResponse
+	expAkKeyIDResp.State = tfsdk.State{Schema: schema}
+	r.Create(ctx, resource.CreateRequest{Plan: expAkKeyIDPlan}, &expAkKeyIDResp)
+	if expAkKeyIDResp.Diagnostics.HasError() {
+		t.Fatalf("create agent key with explicit key_id failed: %v", expAkKeyIDResp.Diagnostics)
 	}
 
 	// Read - Success
@@ -923,6 +1006,22 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	_ = emptyReadResp.State.Get(ctx, &emptyCheck)
 	if !emptyCheck.ID.IsNull() {
 		t.Fatal("expected resource removal on empty keyID/agentID")
+	}
+
+	// Read - Empty agentID with non-empty keyID removes resource
+	emptyAgOnlyState := tfsdk.State{Schema: schema}
+	emptyAgOnlyModel := PaperclipAgentKeyResourceModel{
+		KeyID:   types.StringValue("ak-1"),
+		AgentID: types.StringNull(),
+	}
+	_ = emptyAgOnlyState.Set(ctx, &emptyAgOnlyModel)
+	var emptyAgOnlyReadResp resource.ReadResponse
+	emptyAgOnlyReadResp.State = emptyAgOnlyState
+	r.Read(ctx, resource.ReadRequest{State: emptyAgOnlyState}, &emptyAgOnlyReadResp)
+	var emptyAgOnlyCheck PaperclipAgentKeyResourceModel
+	_ = emptyAgOnlyReadResp.State.Get(ctx, &emptyAgOnlyCheck)
+	if !emptyAgOnlyCheck.ID.IsNull() {
+		t.Fatal("expected resource removal on empty agentID")
 	}
 
 	// Read - API failure
@@ -1020,6 +1119,7 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 		t.Fatal("expected error on rotation mint failure")
 	}
 	mockState.failCreate = false
+	r.client.RegisterMintedKey("ak-2", "tok-2", "rotated-agent-key", false, "ag-1")
 
 	// Update - Changed generation: revoke superseded key failure
 	mockState.failDelete = true
@@ -1032,14 +1132,22 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	mockState.failDelete = false
 
 	// Update - Changed generation: reconcile unconfirmed keys failure
-	mockState.failRead = true
+	r.client.RegisterMintedKey("ak-unconf", "tok", "rotated-agent-key", false, "ag-1")
+	mockState.failDelete = true
 	var failRecAgentRotResp resource.UpdateResponse
 	failRecAgentRotResp.State = tfsdk.State{Schema: schema}
-	r.Update(ctx, resource.UpdateRequest{Plan: rotPlan, State: createResp.State}, &failRecAgentRotResp)
+	noOldAgState := tfsdk.State{Schema: schema}
+	noOldAgModel := rotModel
+	noOldAgModel.KeyID = types.StringNull()
+	noOldAgModel.ID = types.StringNull()
+	noOldAgModel.Generation = types.Int64Value(1)
+	_ = noOldAgState.Set(ctx, &noOldAgModel)
+	r.Update(ctx, resource.UpdateRequest{Plan: rotPlan, State: noOldAgState}, &failRecAgentRotResp)
 	if !failRecAgentRotResp.Diagnostics.HasError() {
 		t.Fatal("expected error on reconcile unconfirmed agent keys failure during update")
 	}
-	mockState.failRead = false
+	mockState.failDelete = false
+	r.client.ClearMintedToken("ak-unconf")
 
 	// Update - Changed generation: Success (revokes predecessor immediately)
 	var rotUpdateResp resource.UpdateResponse
@@ -1064,6 +1172,7 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	}
 
 	// Update - Changed generation with KeyID empty in state
+	r.client.RegisterMintedKey("ak-no-keyid-3", "tok", "rotated-ak-no-keyid", false, "ag-1")
 	rotAkNoKeyIDModel := createdModel
 	rotAkNoKeyIDModel.Name = types.StringValue("rotated-ak-no-keyid")
 	rotAkNoKeyIDModel.Generation = types.Int64Value(3)
@@ -1084,6 +1193,7 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	}
 
 	// Update - With Private state tracking superseded key across generations
+	r.client.RegisterMintedKey("ak-with-priv-4", "tok", "rot-ak-with-priv", false, "ag-1")
 	var privAgentResp resource.UpdateResponse
 	privAgentResp.State = tfsdk.State{Schema: schema}
 	privAgentData := initUpdateResponsePrivate(&privAgentResp)
@@ -1106,6 +1216,7 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	var recovAgentPlan tfsdk.Plan = tfsdk.Plan{Schema: schema}
 	recovAgentModel := createdModel
 	recovAgentModel.Generation = types.Int64Value(5)
+	r.client.RegisterMintedKey("ak-recov-5", "tok", recovAgentModel.Name.ValueString(), false, "ag-1")
 	_ = recovAgentPlan.Set(ctx, &recovAgentModel)
 	var recovAgentReq resource.UpdateRequest
 	recovAgentReq.Plan = recovAgentPlan
@@ -1116,6 +1227,22 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	r.Update(ctx, recovAgentReq, &recovAgentResp)
 	if recovAgentResp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error on recovery update with private: %v", recovAgentResp.Diagnostics)
+	}
+
+	// Update - with explicit plan.KeyID
+	r.client.RegisterMintedKey("ak-upd-explicit", "tok-ak-upd", "upd-explicit-agent-name", false, "ag-1")
+	updAkExpModel := createdModel
+	updAkExpModel.AgentID = types.StringValue("ag-1")
+	updAkExpModel.Name = types.StringValue("upd-explicit-agent-name")
+	updAkExpModel.Generation = types.Int64Value(6)
+	updAkExpModel.KeyID = types.StringValue("ak-upd-explicit")
+	updAkExpPlan := tfsdk.Plan{Schema: schema}
+	_ = updAkExpPlan.Set(ctx, &updAkExpModel)
+	var updAkExpResp resource.UpdateResponse
+	updAkExpResp.State = tfsdk.State{Schema: schema}
+	r.Update(ctx, resource.UpdateRequest{Plan: updAkExpPlan, State: rotUpdateResp.State}, &updAkExpResp)
+	if updAkExpResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error on agent key update with explicit key_id: %v", updAkExpResp.Diagnostics)
 	}
 
 	// Delete - API failure
@@ -1344,9 +1471,9 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 		}))
 		defer goodServer.Close()
 		goodCli, _ := client.NewClient(goodServer.URL, "test-token")
+		goodCli.RegisterMintedKey("bk-del-fail", "tok", "bk-name", true, "")
 		delFailRes := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
 		delFailRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: goodCli}, &confResp)
-		delFailRes.keyID = "bk-del-fail"
 		var delFailCloseResp ephemeral.CloseResponse
 		delFailRes.Close(ctx, ephemeral.CloseRequest{}, &delFailCloseResp)
 		if delFailCloseResp.Diagnostics.HasError() {
@@ -1511,10 +1638,9 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 		}))
 		defer goodAkServer.Close()
 		goodAkCli, _ := client.NewClient(goodAkServer.URL, "test-token")
-		goodAkCli.RegisterMintedAgentKey("agent-1", "ak-del-fail", "tok-1")
+		goodAkCli.RegisterMintedKey("ak-del-fail", "tok-1", "ak-name", false, "agent-1")
 		delFailAkRes := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
 		delFailAkRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: goodAkCli}, &confResp)
-		delFailAkRes.keyID = "ak-del-fail"
 		var delFailAkCloseResp ephemeral.CloseResponse
 		delFailAkRes.Close(ctx, ephemeral.CloseRequest{}, &delFailAkCloseResp)
 		if delFailAkCloseResp.Diagnostics.HasError() {
@@ -1791,7 +1917,7 @@ func TestGenerationRotationAndRevocationLifecycle(t *testing.T) {
 
 	var activeKeys = make(map[string]bool)
 	var revokedKeys = make(map[string]bool)
-	var createdCount int
+	var createdCount = 1
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -1850,6 +1976,8 @@ func TestGenerationRotationAndRevocationLifecycle(t *testing.T) {
 	_ = plan.Set(ctx, &model)
 	var createResp resource.CreateResponse
 	createResp.State = tfsdk.State{Schema: schema}
+	bkRes.client.RegisterMintedKey("bk-attempt-1", "tok-attempt-1", "delivery-reconcile-board-key", true, "")
+	activeKeys["bk-attempt-1"] = true
 	bkRes.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
 	if createResp.Diagnostics.HasError() {
 		t.Fatalf("create failed: %v", createResp.Diagnostics)
@@ -2093,8 +2221,17 @@ func TestEphemeralMintingApplyAndErrorCoverage(t *testing.T) {
 		}, &planApplyingFalseResp)
 		var planApplyingFalseResModel PaperclipBoardKeyEphemeralResourceModel
 		_ = planApplyingFalseResp.Result.Get(ctx, &planApplyingFalseResModel)
-		if planApplyingFalseResModel.Token.ValueString() != "(plan-board-token-2)" {
-			t.Fatalf("expected token '(plan-board-token-2)', got %q", planApplyingFalseResModel.Token.ValueString())
+		if !planApplyingFalseResModel.Token.IsNull() {
+			t.Fatalf("expected token to be null when applying is false and deferral disallowed, got %q", planApplyingFalseResModel.Token.ValueString())
+		}
+		var planApplyingFalseDefResp ephemeral.OpenResponse
+		planApplyingFalseDefResp.Result = tfsdk.EphemeralResultData{Raw: planApplyingFalseState.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, ephemeral.OpenRequest{
+			Config:             tfsdk.Config{Schema: schemaResp.Schema, Raw: planApplyingFalseState.Raw},
+			ClientCapabilities: ephemeral.OpenClientCapabilities{DeferralAllowed: true},
+		}, &planApplyingFalseDefResp)
+		if planApplyingFalseDefResp.Deferred == nil {
+			t.Fatal("expected deferred response when applying is false and deferral allowed")
 		}
 
 		// C. Apply time: invalid expires_at
@@ -2239,8 +2376,17 @@ func TestEphemeralMintingApplyAndErrorCoverage(t *testing.T) {
 		}, &planApplyingFalseResp)
 		var planApplyingFalseResModel PaperclipAgentKeyEphemeralResourceModel
 		_ = planApplyingFalseResp.Result.Get(ctx, &planApplyingFalseResModel)
-		if planApplyingFalseResModel.Token.ValueString() != "(plan-agent-token-2)" {
-			t.Fatalf("expected token '(plan-agent-token-2)', got %q", planApplyingFalseResModel.Token.ValueString())
+		if !planApplyingFalseResModel.Token.IsNull() {
+			t.Fatalf("expected token to be null when applying is false and deferral disallowed, got %q", planApplyingFalseResModel.Token.ValueString())
+		}
+		var planApplyingFalseDefResp ephemeral.OpenResponse
+		planApplyingFalseDefResp.Result = tfsdk.EphemeralResultData{Raw: planApplyingFalseState.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, ephemeral.OpenRequest{
+			Config:             tfsdk.Config{Schema: schemaResp.Schema, Raw: planApplyingFalseState.Raw},
+			ClientCapabilities: ephemeral.OpenClientCapabilities{DeferralAllowed: true},
+		}, &planApplyingFalseDefResp)
+		if planApplyingFalseDefResp.Deferred == nil {
+			t.Fatal("expected deferred response when applying is false and deferral allowed")
 		}
 
 		makeScopeModel := func(kind string) *AgentKeyScopeModel {
