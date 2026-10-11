@@ -428,55 +428,22 @@ func TestAgentReconciliationBranches(t *testing.T) {
 		t.Fatal("expected nulls for nil permissions")
 	}
 
-	// Agent Create instructions update error
-	srvInstrErr := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "comp-1"})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/companies/comp-1/agents":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "a1", "companyId": "comp-1", "name": "ag1", "role": "r", "adapterType": "antigravity",
-				"permissions": map[string]interface{}{"canAssignTasks": false, "canCreateAgents": false},
-			})
-		case r.Method == http.MethodPut && r.URL.Path == "/api/agents/a1/instructions-bundle/file":
-			http.Error(w, "instructions error", http.StatusInternalServerError)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/agents/a1":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "a1", "companyId": "comp-1", "name": "ag1", "role": "r", "adapterType": "antigravity",
-				"permissions": map[string]interface{}{"canAssignTasks": false, "canCreateAgents": false},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srvInstrErr.Close()
-	rInstrErr := NewPaperclipAgentResource().(*PaperclipAgentResource)
-	schema := configureTestResource(t, srvInstrErr.URL, rInstrErr)
-	plan := tfsdk.Plan{Schema: schema}
-	_ = plan.Set(ctx, &PaperclipAgentResourceModel{
-		CompanyID:       types.StringValue("comp-1"),
-		Name:            types.StringValue("ag1"),
-		Role:            types.StringValue("r"),
-		AdapterType:     types.StringValue("antigravity"),
-		Instructions:    types.StringValue("instructions"),
-		CanAssignTasks:  types.BoolValue(false),
-		CanCreateAgents: types.BoolValue(false),
-	})
-	var createResp resource.CreateResponse
-	createResp.State = tfsdk.State{Schema: schema}
-	rInstrErr.Create(ctx, resource.CreateRequest{Plan: plan}, &createResp)
-	if !createResp.Diagnostics.HasError() {
-		t.Fatal("expected error on instructions update failure")
-	}
-
 	// Agent Read 404
 	srv404 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}))
 	defer srv404.Close()
 	r404 := NewPaperclipAgentResource().(*PaperclipAgentResource)
-	configureTestResource(t, srv404.URL, r404)
+	schema := configureTestResource(t, srv404.URL, r404)
+	plan := tfsdk.Plan{Schema: schema}
+	_ = plan.Set(ctx, &PaperclipAgentResourceModel{
+		CompanyID:       types.StringValue("comp-1"),
+		Name:            types.StringValue("ag1"),
+		Role:            types.StringValue("r"),
+		AdapterType:     types.StringValue("antigravity"),
+		CanAssignTasks:  types.BoolValue(false),
+		CanCreateAgents: types.BoolValue(false),
+	})
 	var read404Resp resource.ReadResponse
 	read404Resp.State = tfsdk.State{Schema: schema}
 	state404 := tfsdk.State{Schema: schema}

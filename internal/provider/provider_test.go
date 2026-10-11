@@ -1039,8 +1039,8 @@ func TestProviderStructure(t *testing.T) {
 	}
 
 	res := p.Resources(ctx)
-	if len(res) != 22 {
-		t.Fatalf("expected exactly 22 resources, got %d", len(res))
+	if len(res) != 23 {
+		t.Fatalf("expected exactly 23 resources, got %d", len(res))
 	}
 	for _, rFn := range res {
 		r := rFn()
@@ -1420,7 +1420,7 @@ func TestAgentSchemaIdentityAttributes(t *testing.T) {
 			t.Fatalf("%s must be optional and computed to allow identity-only declarations: %+v", field, attr)
 		}
 	}
-	for _, field := range []string{"title", "runtime_config", "metadata", "instructions"} {
+	for _, field := range []string{"title", "runtime_config", "metadata"} {
 		attr, ok := resp.Schema.Attributes[field].(schema.StringAttribute)
 		if !ok {
 			t.Fatalf("%s attribute missing or not a string attribute", field)

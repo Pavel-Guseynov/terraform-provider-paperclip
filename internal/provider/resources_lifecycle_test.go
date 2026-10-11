@@ -961,7 +961,6 @@ func TestPaperclipAgentResourceLifecycle(t *testing.T) {
 		RuntimeConfig:   types.StringValue(`{"mode":"fast"}`),
 		AdapterConfig:   types.StringValue(`{"timeout":30}`),
 		Metadata:        types.StringValue(`{"tag":"v1"}`),
-		Instructions:    types.StringValue("# Instructions"),
 		CanAssignTasks:  types.BoolValue(true),
 		CanCreateAgents: types.BoolValue(false),
 	}

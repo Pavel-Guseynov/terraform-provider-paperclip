@@ -528,7 +528,7 @@ func TestBackwardCompatibilityExistingStatePlansWithoutReplacementAcrossResource
 		},
 		{
 			typeName: "paperclip_agent",
-			rawJSON:  `{"id":"agent-1","company_id":"comp-1","name":"agent-1","role":"engineer","title":"Senior Eng","icon":null,"reports_to":null,"capabilities":null,"default_environment_id":null,"adapter_type":"hermes_local","status":null,"runtime_config":null,"adapter_config":null,"metadata":null,"instructions":null,"can_assign_tasks":true,"can_create_agents":false,"can_create_skills":true,"trust_preset":null,"authorization_policy":null,"paused":false,"retirement":"delete"}`,
+			rawJSON:  `{"id":"agent-1","company_id":"comp-1","name":"agent-1","role":"engineer","title":"Senior Eng","icon":null,"reports_to":null,"capabilities":null,"default_environment_id":null,"adapter_type":"hermes_local","status":null,"runtime_config":null,"adapter_config":null,"metadata":null,"can_assign_tasks":true,"can_create_agents":false,"can_create_skills":true,"trust_preset":null,"authorization_policy":null,"paused":false,"retirement":"delete"}`,
 		},
 		{
 			typeName: "paperclip_app",
@@ -601,78 +601,6 @@ func TestBackwardCompatibilityExistingStatePlansWithoutReplacementAcrossResource
 				t.Fatalf("planned state introduces diff for %s: got %v, want %v", tc.typeName, plannedVal, val)
 			}
 		})
-	}
-}
-
-// 9. Agent Read treats only ErrNotFound as absent instructions and fails on other errors (such as 5xx)
-func TestRegressionAgentReadInstructionsErrorHandling(t *testing.T) {
-	ctx := context.Background()
-	var instructionsStatusCode int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/agent-1":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":          "agent-1",
-				"companyId":   "comp-1",
-				"name":        "agent-1",
-				"role":        "engineer",
-				"adapterType": "hermes_local",
-			})
-		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/agent-1/instructions-bundle/file":
-			if instructionsStatusCode == http.StatusNotFound {
-				http.NotFound(w, req)
-				return
-			}
-			w.WriteHeader(instructionsStatusCode)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "internal server error"})
-		default:
-			http.NotFound(w, req)
-		}
-	}))
-	defer server.Close()
-
-	cli, _ := client.NewClient(server.URL, "token")
-	r := NewPaperclipAgentResource().(*PaperclipAgentResource)
-	r.client = cli
-	var schemaResp resource.SchemaResponse
-	r.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
-
-	// Branch 1: 5xx server error must fail the read with diagnostic error and never null the attribute
-	instructionsStatusCode = http.StatusInternalServerError
-	state500 := tfsdk.State{Schema: schemaResp.Schema}
-	_ = state500.Set(ctx, &PaperclipAgentResourceModel{
-		ID:           types.StringValue("agent-1"),
-		CompanyID:    types.StringValue("comp-1"),
-		Name:         types.StringValue("agent-1"),
-		Instructions: types.StringValue("# Critical Prior Instructions"),
-	})
-	var readResp500 resource.ReadResponse
-	readResp500.State = tfsdk.State{Schema: schemaResp.Schema}
-	r.Read(ctx, resource.ReadRequest{State: state500}, &readResp500)
-	if !readResp500.Diagnostics.HasError() {
-		t.Fatalf("expected Read to fail when instructions endpoint returns 500, but got no error")
-	}
-
-	// Branch 2: 404 ErrNotFound treats instructions as absent and sets attribute to null without error
-	instructionsStatusCode = http.StatusNotFound
-	state404 := tfsdk.State{Schema: schemaResp.Schema}
-	_ = state404.Set(ctx, &PaperclipAgentResourceModel{
-		ID:           types.StringValue("agent-1"),
-		CompanyID:    types.StringValue("comp-1"),
-		Name:         types.StringValue("agent-1"),
-		Instructions: types.StringValue("# Prior Instructions"),
-	})
-	var readResp404 resource.ReadResponse
-	readResp404.State = tfsdk.State{Schema: schemaResp.Schema}
-	r.Read(ctx, resource.ReadRequest{State: state404}, &readResp404)
-	if readResp404.Diagnostics.HasError() {
-		t.Fatalf("unexpected error when instructions endpoint returns 404: %v", readResp404.Diagnostics)
-	}
-	var resulting404 PaperclipAgentResourceModel
-	_ = readResp404.State.Get(ctx, &resulting404)
-	if !resulting404.Instructions.IsNull() {
-		t.Fatalf("expected instructions to be null on 404 ErrNotFound, got: %v", resulting404.Instructions)
 	}
 }
 

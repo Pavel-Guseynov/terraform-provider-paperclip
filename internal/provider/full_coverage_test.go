@@ -246,24 +246,6 @@ func TestFullCoverageAgentRemaining(t *testing.T) {
 	r := NewPaperclipAgentResource().(*PaperclipAgentResource)
 	schema := configureTestResource(t, srv.URL, r)
 
-	// 1. Create with instructions error (line 248)
-	planInstErr := tfsdk.Plan{Schema: schema}
-	_ = planInstErr.Set(ctx, &PaperclipAgentResourceModel{
-		CompanyID:       types.StringValue("comp-1"),
-		Name:            types.StringValue("ag-inst-err"),
-		Role:            types.StringValue("engineer"),
-		AdapterType:     types.StringValue("antigravity"),
-		Instructions:    types.StringValue("some rules"),
-		CanAssignTasks:  types.BoolValue(false),
-		CanCreateAgents: types.BoolValue(false),
-	})
-	var createResp1 resource.CreateResponse
-	createResp1.State = tfsdk.State{Schema: schema}
-	r.Create(ctx, resource.CreateRequest{Plan: planInstErr}, &createResp1)
-	if !createResp1.Diagnostics.HasError() {
-		t.Fatal("expected error on instructions creation")
-	}
-
 	// 1b. Create with permissions reconciliation error (line 254)
 	planPermErr := tfsdk.Plan{Schema: schema}
 	_ = planPermErr.Set(ctx, &PaperclipAgentResourceModel{
@@ -271,7 +253,6 @@ func TestFullCoverageAgentRemaining(t *testing.T) {
 		Name:            types.StringValue("ag-perm-err"),
 		Role:            types.StringValue("engineer"),
 		AdapterType:     types.StringValue("antigravity"),
-		Instructions:    types.StringNull(),
 		CanAssignTasks:  types.BoolValue(false),
 		CanCreateAgents: types.BoolValue(false),
 	})
@@ -293,7 +274,6 @@ func TestFullCoverageAgentRemaining(t *testing.T) {
 		RuntimeConfig:   types.StringUnknown(),
 		AdapterConfig:   types.StringUnknown(),
 		Metadata:        types.StringUnknown(),
-		Instructions:    types.StringUnknown(),
 		CanAssignTasks:  types.BoolValue(false),
 		CanCreateAgents: types.BoolValue(false),
 	})
@@ -317,28 +297,6 @@ func TestFullCoverageAgentRemaining(t *testing.T) {
 		t.Fatalf("unexpected read error: %v", readResp.Diagnostics)
 	}
 
-	// 4. Update with instructions update error (line 423)
-	planUpdInstErr := tfsdk.Plan{Schema: schema}
-	_ = planUpdInstErr.Set(ctx, &PaperclipAgentResourceModel{
-		CompanyID:       types.StringValue("comp-1"),
-		Name:            types.StringValue("ag"),
-		Role:            types.StringValue("eng"),
-		AdapterType:     types.StringValue("antigravity"),
-		Instructions:    types.StringValue("new instructions"),
-		CanAssignTasks:  types.BoolValue(false),
-		CanCreateAgents: types.BoolValue(false),
-	})
-	stateUpdInstErr := tfsdk.State{Schema: schema}
-	_ = stateUpdInstErr.Set(ctx, &PaperclipAgentResourceModel{
-		ID: types.StringValue("ag-upd-inst-err"),
-	})
-	var updResp1 resource.UpdateResponse
-	updResp1.State = stateUpdInstErr
-	r.Update(ctx, resource.UpdateRequest{Plan: planUpdInstErr, State: stateUpdInstErr}, &updResp1)
-	if !updResp1.Diagnostics.HasError() {
-		t.Fatal("expected error on instructions update")
-	}
-
 	// 5. Update with permissions error (line 429)
 	planUpdPermErr := tfsdk.Plan{Schema: schema}
 	_ = planUpdPermErr.Set(ctx, &PaperclipAgentResourceModel{
@@ -346,7 +304,6 @@ func TestFullCoverageAgentRemaining(t *testing.T) {
 		Name:            types.StringValue("ag"),
 		Role:            types.StringValue("eng"),
 		AdapterType:     types.StringValue("antigravity"),
-		Instructions:    types.StringNull(),
 		CanAssignTasks:  types.BoolValue(false),
 		CanCreateAgents: types.BoolValue(false),
 	})

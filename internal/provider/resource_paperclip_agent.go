@@ -52,7 +52,6 @@ type PaperclipAgentResourceModel struct {
 	RuntimeConfig        types.String               `tfsdk:"runtime_config"`
 	AdapterConfig        types.String               `tfsdk:"adapter_config"`
 	Metadata             types.String               `tfsdk:"metadata"`
-	Instructions         types.String               `tfsdk:"instructions"`
 	CanAssignTasks       types.Bool                 `tfsdk:"can_assign_tasks"`
 	CanCreateAgents      types.Bool                 `tfsdk:"can_create_agents"`
 	CanCreateSkills      types.Bool                 `tfsdk:"can_create_skills"`
@@ -94,7 +93,7 @@ func (v stringOneOfValidator) ValidateString(ctx context.Context, req validator.
 
 func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Version:     1,
+		Version:     2,
 		Description: "Manages a Paperclip agent (project or company scope).",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
@@ -186,10 +185,6 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 				PlanModifiers: []planmodifier.String{
 					SemanticJSONPlanModifier(),
 				},
-			},
-			"instructions": schema.StringAttribute{
-				Description: "Managed AGENTS.md bundle instructions for this agent.",
-				Optional:    true,
 			},
 			"can_assign_tasks": schema.BoolAttribute{
 				Description: "Whether the agent holds the task-assignment permission. The protected project assignment policy gates assignment through the tasks:assign grant that can_assign_tasks mints, but it does not deny an agent key from creating an unassigned issue; a filing made inside a heartbeat run is detected after the fact by the paperclip-fleet-health finding issue_filed_from_heartbeat_run. Harness declares the value for every managed agent, reconciles it after each write, and reads it back from the board.",
@@ -297,7 +292,6 @@ func (r *PaperclipAgentResource) UpgradeState(ctx context.Context) map[int64]res
 					RuntimeConfig:        prior.RuntimeConfig,
 					AdapterConfig:        prior.AdapterConfig,
 					Metadata:             prior.Metadata,
-					Instructions:         prior.Instructions,
 					CanAssignTasks:       prior.CanAssignTasks,
 					CanCreateAgents:      prior.CanCreateAgents,
 					CanCreateSkills:      types.BoolValue(true),
@@ -305,6 +299,91 @@ func (r *PaperclipAgentResource) UpgradeState(ctx context.Context) map[int64]res
 					AuthorizationPolicy:  types.StringNull(),
 					Paused:               types.BoolValue(prior.Status.ValueString() == "paused"),
 					Retirement:           types.StringValue("delete"),
+				}
+				resp.Diagnostics.Append(resp.State.Set(ctx, &upgraded)...)
+			},
+		},
+		1: {
+			PriorSchema: &schema.Schema{
+				Attributes: map[string]schema.Attribute{
+					"id":                     schema.StringAttribute{Computed: true},
+					"company_id":             schema.StringAttribute{Required: true},
+					"name":                   schema.StringAttribute{Required: true},
+					"role":                   schema.StringAttribute{Optional: true, Computed: true},
+					"title":                  schema.StringAttribute{Optional: true},
+					"icon":                   schema.StringAttribute{Optional: true},
+					"reports_to":             schema.StringAttribute{Optional: true},
+					"capabilities":           schema.StringAttribute{Optional: true},
+					"default_environment_id": schema.StringAttribute{Optional: true},
+					"adapter_type":           schema.StringAttribute{Optional: true, Computed: true},
+					"status":                 schema.StringAttribute{Computed: true},
+					"runtime_config":         schema.StringAttribute{Optional: true},
+					"adapter_config":         schema.StringAttribute{Optional: true, Computed: true},
+					"metadata":               schema.StringAttribute{Optional: true},
+					"instructions":           schema.StringAttribute{Optional: true},
+					"can_assign_tasks":       schema.BoolAttribute{Required: true},
+					"can_create_agents":      schema.BoolAttribute{Required: true},
+					"can_create_skills":      schema.BoolAttribute{Optional: true, Computed: true},
+					"trust_preset":           schema.StringAttribute{Optional: true},
+					"authorization_policy":   schema.StringAttribute{Optional: true},
+					"paused":                 schema.BoolAttribute{Optional: true, Computed: true},
+					"retirement":             schema.StringAttribute{Optional: true, Computed: true},
+					"env":                    EnvBindingMapAttribute("Optional environment bindings for the agent (merged into adapter_config.env)."),
+				},
+			},
+			StateUpgrader: func(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+				var prior struct {
+					ID                   types.String               `tfsdk:"id"`
+					CompanyID            types.String               `tfsdk:"company_id"`
+					Name                 types.String               `tfsdk:"name"`
+					Role                 types.String               `tfsdk:"role"`
+					Title                types.String               `tfsdk:"title"`
+					Icon                 types.String               `tfsdk:"icon"`
+					ReportsTo            types.String               `tfsdk:"reports_to"`
+					Capabilities         types.String               `tfsdk:"capabilities"`
+					DefaultEnvironmentID types.String               `tfsdk:"default_environment_id"`
+					AdapterType          types.String               `tfsdk:"adapter_type"`
+					Status               types.String               `tfsdk:"status"`
+					RuntimeConfig        types.String               `tfsdk:"runtime_config"`
+					AdapterConfig        types.String               `tfsdk:"adapter_config"`
+					Metadata             types.String               `tfsdk:"metadata"`
+					Instructions         types.String               `tfsdk:"instructions"`
+					CanAssignTasks       types.Bool                 `tfsdk:"can_assign_tasks"`
+					CanCreateAgents      types.Bool                 `tfsdk:"can_create_agents"`
+					CanCreateSkills      types.Bool                 `tfsdk:"can_create_skills"`
+					TrustPreset          types.String               `tfsdk:"trust_preset"`
+					AuthorizationPolicy  types.String               `tfsdk:"authorization_policy"`
+					Paused               types.Bool                 `tfsdk:"paused"`
+					Retirement           types.String               `tfsdk:"retirement"`
+					Env                  map[string]EnvBindingModel `tfsdk:"env"`
+				}
+				resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
+				if resp.Diagnostics.HasError() {
+					return
+				}
+				upgraded := PaperclipAgentResourceModel{
+					ID:                   prior.ID,
+					CompanyID:            prior.CompanyID,
+					Name:                 prior.Name,
+					Role:                 prior.Role,
+					Title:                prior.Title,
+					Icon:                 prior.Icon,
+					ReportsTo:            prior.ReportsTo,
+					Capabilities:         prior.Capabilities,
+					DefaultEnvironmentID: prior.DefaultEnvironmentID,
+					AdapterType:          prior.AdapterType,
+					Status:               prior.Status,
+					RuntimeConfig:        prior.RuntimeConfig,
+					AdapterConfig:        prior.AdapterConfig,
+					Metadata:             prior.Metadata,
+					CanAssignTasks:       prior.CanAssignTasks,
+					CanCreateAgents:      prior.CanCreateAgents,
+					CanCreateSkills:      prior.CanCreateSkills,
+					TrustPreset:          prior.TrustPreset,
+					AuthorizationPolicy:  prior.AuthorizationPolicy,
+					Paused:               prior.Paused,
+					Retirement:           prior.Retirement,
+					Env:                  prior.Env,
 				}
 				resp.Diagnostics.Append(resp.State.Set(ctx, &upgraded)...)
 			},
@@ -667,13 +746,6 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 			fmt.Sprintf("Agent %s (%s) was submitted for board hiring approval (approval id: %s). The agent cannot be activated or modified until approved by the board.", created.ID, created.Name, approvalID),
 		)
 	} else {
-		if !plan.Instructions.IsNull() && !plan.Instructions.IsUnknown() && plan.Instructions.ValueString() != "" {
-			if err := r.client.UpdateAgentInstructionsFile(ctx, created.ID, "AGENTS.md", plan.Instructions.ValueString()); err != nil {
-				resp.Diagnostics.AddError("Error updating Paperclip agent instructions", err.Error())
-				return
-			}
-		}
-
 		reconcileCanCreateSkills := canCreateSkills
 		if plan.CanCreateSkills.IsNull() {
 			if created.Permissions != nil {
@@ -723,9 +795,6 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 	plan.RuntimeConfig = refreshManagedJSONState(plan.RuntimeConfig, created.RuntimeConfig)
 	plan.AdapterConfig = refreshAgentAdapterConfig(plan.AdapterConfig, created.AdapterConfig)
 	plan.Metadata = refreshManagedJSONState(plan.Metadata, created.Metadata)
-	if plan.Instructions.IsUnknown() {
-		plan.Instructions = types.StringNull()
-	}
 	plan.CanAssignTasks, plan.CanCreateAgents, plan.CanCreateSkills = permissionState(created.Permissions)
 	if created.Permissions != nil {
 		if created.Permissions.TrustPreset != "" {
@@ -813,20 +882,6 @@ func (r *PaperclipAgentResource) Read(ctx context.Context, req resource.ReadRequ
 	state.Paused = types.BoolValue(agent.Status == "paused")
 	if state.Retirement.IsNull() || state.Retirement.IsUnknown() {
 		state.Retirement = types.StringValue("delete")
-	}
-
-	instructions, err := r.client.GetAgentInstructionsFile(ctx, state.ID.ValueString(), "AGENTS.md")
-	if err != nil {
-		if errors.Is(err, client.ErrNotFound) {
-			state.Instructions = types.StringNull()
-		} else {
-			resp.Diagnostics.AddError("Error reading Paperclip agent instructions", err.Error())
-			return
-		}
-	} else if instructions != "" {
-		state.Instructions = types.StringValue(instructions)
-	} else {
-		state.Instructions = types.StringNull()
 	}
 
 	if state.Env != nil {
@@ -1253,18 +1308,6 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		return
 	}
 
-	if !plan.Instructions.IsNull() && !plan.Instructions.IsUnknown() && plan.Instructions.ValueString() != "" {
-		if err := r.client.UpdateAgentInstructionsFile(ctx, state.ID.ValueString(), "AGENTS.md", plan.Instructions.ValueString()); err != nil {
-			resp.Diagnostics.AddError("Error updating Paperclip agent instructions", err.Error())
-			return
-		}
-	} else if (plan.Instructions.IsNull() || plan.Instructions.ValueString() == "") && (!state.Instructions.IsNull() && state.Instructions.ValueString() != "") {
-		if err := r.client.UpdateAgentInstructionsFile(ctx, state.ID.ValueString(), "AGENTS.md", ""); err != nil {
-			resp.Diagnostics.AddError("Error clearing Paperclip agent instructions", err.Error())
-			return
-		}
-	}
-
 	canCreateSkills := true
 	if !plan.CanCreateSkills.IsNull() && !plan.CanCreateSkills.IsUnknown() {
 		canCreateSkills = plan.CanCreateSkills.ValueBool()
@@ -1344,10 +1387,6 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		} else {
 			plan.Retirement = types.StringValue("delete")
 		}
-	}
-
-	if plan.Instructions.IsNull() || plan.Instructions.IsUnknown() || plan.Instructions.ValueString() == "" {
-		plan.Instructions = types.StringNull()
 	}
 
 	if plan.Env != nil {

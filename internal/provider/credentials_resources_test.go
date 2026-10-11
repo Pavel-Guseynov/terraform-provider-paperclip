@@ -1661,7 +1661,7 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 
 		// Close when delivery not acknowledged: unconfirmed newly-minted key is revoked
 		goodAkServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodDelete && r.URL.Path == "/api/agents/agent-1/keys/ak-del-fail" {
+			if r.Method == http.MethodDelete && (r.URL.Path == "/api/agents/agent-1/keys/ak-del-fail" || r.URL.Path == "/api/agents/ag-fallback-1/keys/ak-fallback-id") {
 				w.WriteHeader(http.StatusNoContent)
 				return
 			}
@@ -1702,6 +1702,20 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 		delNoAgentRes.Close(ctx, noAgentCloseReq, &noAgentCloseResp)
 		if noAgentCloseResp.Diagnostics.HasError() {
 			t.Fatalf("unexpected error on close without agentID: %v", noAgentCloseResp.Diagnostics)
+		}
+
+		// Close when delivery failed with empty agentID but registered in client fallback
+		goodAkCli.RegisterMintedAgentKey("ag-fallback-1", "ak-fallback-id", "pcp_agent_val")
+		var fallbackOpenResp ephemeral.OpenResponse
+		privFb := initOpenResponsePrivate(&fallbackOpenResp)
+		fbBytes, _ := json.Marshal("ak-fallback-id")
+		_ = fallbackOpenResp.Private.SetKey(ctx, "key_id", fbBytes)
+		var fbCloseReq ephemeral.CloseRequest
+		initCloseRequestPrivate(&fbCloseReq, privFb)
+		var fbCloseResp ephemeral.CloseResponse
+		delNoAgentRes.Close(ctx, fbCloseReq, &fbCloseResp)
+		if fbCloseResp.Diagnostics.HasError() {
+			t.Fatalf("unexpected error on close with fallback agentID: %v", fbCloseResp.Diagnostics)
 		}
 
 		// KeyID is empty / null

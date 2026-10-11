@@ -2585,6 +2585,78 @@ func (c *Client) ListAgents(ctx context.Context, companyID string) ([]PaperclipA
 	return result, nil
 }
 
+type AgentInstructionsFileSummary struct {
+	Path        string `json:"path"`
+	Size        int64  `json:"size"`
+	Language    string `json:"language"`
+	Markdown    bool   `json:"markdown"`
+	IsEntryFile bool   `json:"isEntryFile"`
+	Editable    bool   `json:"editable"`
+	Deprecated  bool   `json:"deprecated"`
+	Virtual     bool   `json:"virtual"`
+}
+
+type AgentInstructionsBundle struct {
+	AgentID                             string                         `json:"agentId"`
+	CompanyID                           string                         `json:"companyId"`
+	Mode                                string                         `json:"mode"`
+	RootPath                            string                         `json:"rootPath"`
+	ManagedRootPath                     string                         `json:"managedRootPath"`
+	EntryFile                           string                         `json:"entryFile"`
+	ResolvedEntryPath                   string                         `json:"resolvedEntryPath"`
+	Editable                            bool                           `json:"editable"`
+	Warnings                            []string                       `json:"warnings"`
+	LegacyPromptTemplateActive          bool                           `json:"legacyPromptTemplateActive"`
+	LegacyBootstrapPromptTemplateActive bool                           `json:"legacyBootstrapPromptTemplateActive"`
+	Files                               []AgentInstructionsFileSummary `json:"files"`
+}
+
+type UpdateAgentInstructionsBundleRequest struct {
+	Mode                      string  `json:"mode,omitempty"`
+	RootPath                  *string `json:"rootPath,omitempty"`
+	EntryFile                 string  `json:"entryFile,omitempty"`
+	ClearLegacyPromptTemplate bool    `json:"clearLegacyPromptTemplate,omitempty"`
+}
+
+func (c *Client) GetAgentInstructionsBundle(ctx context.Context, agentID string) (*AgentInstructionsBundle, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent ID is required")
+	}
+	var resp AgentInstructionsBundle
+	reqPath := fmt.Sprintf("/api/agents/%s/instructions-bundle", url.PathEscape(agentID))
+	if err := c.paperclipRequest(ctx, http.MethodGet, reqPath, nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) UpdateAgentInstructionsBundle(ctx context.Context, agentID string, req UpdateAgentInstructionsBundleRequest) (*AgentInstructionsBundle, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return nil, errors.New("agent ID is required")
+	}
+	payload := map[string]interface{}{}
+	if req.Mode != "" {
+		payload["mode"] = req.Mode
+	}
+	if req.RootPath != nil {
+		payload["rootPath"] = *req.RootPath
+	}
+	if req.EntryFile != "" {
+		payload["entryFile"] = req.EntryFile
+	}
+	if req.ClearLegacyPromptTemplate {
+		payload["clearLegacyPromptTemplate"] = true
+	}
+	var resp AgentInstructionsBundle
+	reqPath := fmt.Sprintf("/api/agents/%s/instructions-bundle", url.PathEscape(agentID))
+	if err := c.paperclipRequest(ctx, http.MethodPatch, reqPath, payload, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
 func (c *Client) GetAgentInstructionsFile(ctx context.Context, agentID, filePath string) (string, error) {
 	var resp map[string]interface{}
 	reqPath := fmt.Sprintf("/api/agents/%s/instructions-bundle/file?path=%s", url.PathEscape(agentID), url.QueryEscape(filePath))
@@ -2598,12 +2670,32 @@ func (c *Client) GetAgentInstructionsFile(ctx context.Context, agentID, filePath
 }
 
 func (c *Client) UpdateAgentInstructionsFile(ctx context.Context, agentID, filePath, content string) error {
+	return c.UpdateAgentInstructionsFileWithClear(ctx, agentID, filePath, content, false)
+}
+
+func (c *Client) UpdateAgentInstructionsFileWithClear(ctx context.Context, agentID, filePath, content string, clearLegacyPromptTemplate bool) error {
 	payload := map[string]interface{}{
 		"path":    filePath,
 		"content": content,
 	}
+	if clearLegacyPromptTemplate {
+		payload["clearLegacyPromptTemplate"] = true
+	}
 	reqPath := fmt.Sprintf("/api/agents/%s/instructions-bundle/file", url.PathEscape(agentID))
 	return c.paperclipRequest(ctx, http.MethodPut, reqPath, payload, nil)
+}
+
+func (c *Client) DeleteAgentInstructionsFile(ctx context.Context, agentID, filePath string) error {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return errors.New("agent ID is required")
+	}
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return errors.New("file path is required")
+	}
+	reqPath := fmt.Sprintf("/api/agents/%s/instructions-bundle/file?path=%s", url.PathEscape(agentID), url.QueryEscape(filePath))
+	return c.paperclipRequest(ctx, http.MethodDelete, reqPath, nil, nil)
 }
 
 // Agent Keys

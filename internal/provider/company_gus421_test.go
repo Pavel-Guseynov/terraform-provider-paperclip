@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -903,70 +902,6 @@ func TestCompanyGUS421RemainingCoverage(t *testing.T) {
 	}
 	if outUpdateState.LogoAssetID.ValueString() != "logo-asset-421" {
 		t.Fatalf("expected updated logo asset ID, got %s", outUpdateState.LogoAssetID.ValueString())
-	}
-
-	// 3. Agent instructions error and empty instructions coverage during agent Read
-	var agentInstrStatus int = http.StatusInternalServerError
-	var agentInstrContent string = ""
-	agentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/agent-cov-test":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":          "agent-cov-test",
-				"companyId":   "comp-1",
-				"name":        "Coverage Agent",
-				"role":        "tester",
-				"adapterType": "antigravity",
-				"permissions": map[string]interface{}{"canAssignTasks": false, "canCreateAgents": false},
-			})
-		case req.Method == http.MethodGet && strings.HasPrefix(req.URL.Path, "/api/agents/agent-cov-test/instructions-bundle/file"):
-			if agentInstrStatus != http.StatusOK {
-				http.Error(w, "internal server error", agentInstrStatus)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"content": agentInstrContent})
-		default:
-			http.NotFound(w, req)
-		}
-	}))
-	defer agentServer.Close()
-
-	rAgent := NewPaperclipAgentResource().(*PaperclipAgentResource)
-	agentSchema := configureTestResource(t, agentServer.URL, rAgent)
-
-	agentStateModel := PaperclipAgentResourceModel{
-		ID:        types.StringValue("agent-cov-test"),
-		CompanyID: types.StringValue("comp-1"),
-	}
-	agentState := tfsdk.State{Schema: agentSchema}
-	if diags := agentState.Set(ctx, &agentStateModel); diags.HasError() {
-		t.Fatal(diags)
-	}
-
-	// Error path (500 from instructions endpoint)
-	var agentErrReadResp resource.ReadResponse
-	agentErrReadResp.State = tfsdk.State{Schema: agentSchema}
-	rAgent.Read(ctx, resource.ReadRequest{State: agentState}, &agentErrReadResp)
-	if !agentErrReadResp.Diagnostics.HasError() {
-		t.Fatal("expected error reading agent instructions on 500")
-	}
-
-	// Empty instructions path (200 with empty content)
-	agentInstrStatus = http.StatusOK
-	agentInstrContent = ""
-	var agentEmptyReadResp resource.ReadResponse
-	agentEmptyReadResp.State = tfsdk.State{Schema: agentSchema}
-	rAgent.Read(ctx, resource.ReadRequest{State: agentState}, &agentEmptyReadResp)
-	if agentEmptyReadResp.Diagnostics.HasError() {
-		t.Fatalf("unexpected error on empty instructions: %v", agentEmptyReadResp.Diagnostics)
-	}
-	var outAgentState PaperclipAgentResourceModel
-	if diags := agentEmptyReadResp.State.Get(ctx, &outAgentState); diags.HasError() {
-		t.Fatal(diags)
-	}
-	if !outAgentState.Instructions.IsNull() {
-		t.Fatalf("expected null instructions when content is empty, got %v", outAgentState.Instructions)
 	}
 }
 
