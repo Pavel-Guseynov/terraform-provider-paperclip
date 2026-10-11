@@ -264,45 +264,55 @@ func (r *PaperclipAgentInstructionBundleResource) ModifyPlan(ctx context.Context
 		return
 	}
 
+	filesOmittedInConfig := false
+	if !req.Config.Raw.IsNull() && req.Config.Schema != nil {
+		var configFiles types.Map
+		_ = req.Config.GetAttribute(ctx, tfpath.Root("files"), &configFiles)
+		if configFiles.IsNull() {
+			filesOmittedInConfig = true
+		}
+	}
+
+	if filesOmittedInConfig {
+		if !req.State.Raw.IsNull() {
+			var stateFiles types.Map
+			_ = req.State.GetAttribute(ctx, tfpath.Root("files"), &stateFiles)
+			plan.Files = stateFiles
+			resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
+		}
+		return
+	}
+
 	// 2. Validate declared files
 	if !plan.Files.IsNull() && !plan.Files.IsUnknown() {
 		var filesMap map[string]string
-		resp.Diagnostics.Append(plan.Files.ElementsAs(ctx, &filesMap, false)...)
+		_ = plan.Files.ElementsAs(ctx, &filesMap, false)
 
-		if len(filesMap) > 0 {
-			if _, hasEntry := filesMap[normEntry]; !hasEntry {
+		if _, hasEntry := filesMap[normEntry]; !hasEntry {
+			resp.Diagnostics.AddAttributeError(
+				tfpath.Root("files"),
+				"Missing Entry File in Files Map",
+				fmt.Sprintf("Entry file %q must be declared in files map; removing the bundle entry file is not supported.", normEntry),
+			)
+		}
+
+		for filePath := range filesMap {
+			cleanP := path.Clean(strings.ReplaceAll(filePath, "\\", "/"))
+			if cleanP == "." || cleanP == ".." || strings.HasPrefix(cleanP, "../") || strings.HasPrefix(cleanP, "/") {
 				resp.Diagnostics.AddAttributeError(
 					tfpath.Root("files"),
-					"Missing Entry File in Files Map",
-					fmt.Sprintf("Entry file %q must be declared in files map; removing the bundle entry file is not supported.", normEntry),
+					"Invalid File Path",
+					fmt.Sprintf("Instructions file path %q must stay within the bundle root.", filePath),
 				)
 			}
-
-			for filePath := range filesMap {
-				cleanP := path.Clean(strings.ReplaceAll(filePath, "\\", "/"))
-				if cleanP == "." || cleanP == ".." || strings.HasPrefix(cleanP, "../") || strings.HasPrefix(cleanP, "/") {
-					resp.Diagnostics.AddAttributeError(
-						tfpath.Root("files"),
-						"Invalid File Path",
-						fmt.Sprintf("Instructions file path %q must stay within the bundle root.", filePath),
-					)
-				}
-				if cleanP == "promptTemplate.legacy.md" {
-					resp.Diagnostics.AddAttributeError(
-						tfpath.Root("files"),
-						"Protected Virtual File Cannot Be Managed",
-						"Cannot manage virtual legacy prompt template pseudo-file 'promptTemplate.legacy.md' in files.",
-					)
-				}
+			if cleanP == "promptTemplate.legacy.md" {
+				resp.Diagnostics.AddAttributeError(
+					tfpath.Root("files"),
+					"Protected Virtual File Cannot Be Managed",
+					"Cannot manage virtual legacy prompt template pseudo-file 'promptTemplate.legacy.md' in files.",
+				)
 			}
 		}
-	} else if !resp.Diagnostics.HasError() && req.State.Raw.IsNull() && (plan.Files.IsNull() || plan.Files.IsUnknown()) {
-		defaultFiles := map[string]string{
-			normEntry: "",
-		}
-		mVal, _ := types.MapValueFrom(ctx, types.StringType, defaultFiles)
-		plan.Files = mVal
-		resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
 	}
 }
 
@@ -351,47 +361,73 @@ func (r *PaperclipAgentInstructionBundleResource) Create(ctx context.Context, re
 		return
 	}
 
-	var desiredFiles map[string]string
-	if !plan.Files.IsNull() && !plan.Files.IsUnknown() {
-		resp.Diagnostics.Append(plan.Files.ElementsAs(ctx, &desiredFiles, false)...)
-	}
-	if desiredFiles == nil {
-		desiredFiles = map[string]string{entryFile: ""}
+	filesConfigured := !plan.Files.IsNull() && !plan.Files.IsUnknown()
+	if !req.Config.Raw.IsNull() && req.Config.Schema != nil {
+		var configFiles types.Map
+		_ = req.Config.GetAttribute(ctx, tfpath.Root("files"), &configFiles)
+		filesConfigured = !configFiles.IsNull() && !configFiles.IsUnknown()
 	}
 
-	for fPath, content := range desiredFiles {
-		if err := r.client.UpdateAgentInstructionsFileWithClear(ctx, agentID, fPath, content, clearLegacy); err != nil {
-			resp.Diagnostics.AddError(
-				"Error writing Paperclip agent instructions file",
-				fmt.Sprintf("Failed to write file %q for agent %s: %s", fPath, agentID, err.Error()),
-			)
+	var remoteFiles map[string]string
+	if filesConfigured {
+		var desiredFiles map[string]string
+		_ = plan.Files.ElementsAs(ctx, &desiredFiles, false)
+
+		for fPath, content := range desiredFiles {
+			if err := r.client.UpdateAgentInstructionsFileWithClear(ctx, agentID, fPath, content, clearLegacy); err != nil {
+				resp.Diagnostics.AddError(
+					"Error writing Paperclip agent instructions file",
+					fmt.Sprintf("Failed to write file %q for agent %s: %s", fPath, agentID, err.Error()),
+				)
+				return
+			}
+		}
+
+		refreshedBundle, err := r.client.GetAgentInstructionsBundle(ctx, agentID)
+		if err != nil {
+			resp.Diagnostics.AddError("Error fetching updated Paperclip instructions bundle", err.Error())
 			return
 		}
-	}
 
-	refreshedBundle, err := r.client.GetAgentInstructionsBundle(ctx, agentID)
-	if err != nil {
-		resp.Diagnostics.AddError("Error fetching updated Paperclip instructions bundle", err.Error())
-		return
-	}
-
-	for _, f := range refreshedBundle.Files {
-		if f.Editable && !f.Virtual {
-			if _, declared := desiredFiles[f.Path]; !declared {
-				if f.Path == entryFile {
-					resp.Diagnostics.AddError(
-						"Cannot Remove Entry File",
-						fmt.Sprintf("Cannot delete entry file %q from instructions bundle", f.Path),
-					)
+		for _, f := range refreshedBundle.Files {
+			if f.Editable && !f.Virtual {
+				if _, declared := desiredFiles[f.Path]; !declared {
+					if f.Path == entryFile {
+						resp.Diagnostics.AddError(
+							"Cannot Remove Entry File",
+							fmt.Sprintf("Cannot delete entry file %q from instructions bundle", f.Path),
+						)
+						return
+					}
+					if err := r.client.DeleteAgentInstructionsFile(ctx, agentID, f.Path); err != nil {
+						resp.Diagnostics.AddError(
+							"Error removing undeclared instructions file",
+							fmt.Sprintf("Failed to remove undeclared file %q for agent %s: %s", f.Path, agentID, err.Error()),
+						)
+						return
+					}
+				}
+			}
+		}
+		remoteFiles = desiredFiles
+	} else {
+		bundle, err := r.client.GetAgentInstructionsBundle(ctx, agentID)
+		if err != nil {
+			resp.Diagnostics.AddError("Error fetching instructions bundle", err.Error())
+			return
+		}
+		remoteFiles = make(map[string]string)
+		for _, f := range bundle.Files {
+			if f.Editable && !f.Virtual {
+				content, ferr := r.client.GetAgentInstructionsFile(ctx, agentID, f.Path)
+				if ferr != nil {
+					if errors.Is(ferr, client.ErrNotFound) {
+						continue
+					}
+					resp.Diagnostics.AddError("Error reading instructions file content", ferr.Error())
 					return
 				}
-				if err := r.client.DeleteAgentInstructionsFile(ctx, agentID, f.Path); err != nil {
-					resp.Diagnostics.AddError(
-						"Error removing undeclared instructions file",
-						fmt.Sprintf("Failed to remove undeclared file %q for agent %s: %s", f.Path, agentID, err.Error()),
-					)
-					return
-				}
+				remoteFiles[f.Path] = content
 			}
 		}
 	}
@@ -402,7 +438,7 @@ func (r *PaperclipAgentInstructionBundleResource) Create(ctx context.Context, re
 		return
 	}
 
-	r.populateState(ctx, &plan, finalBundle, desiredFiles)
+	r.populateState(ctx, &plan, finalBundle, remoteFiles)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -502,47 +538,74 @@ func (r *PaperclipAgentInstructionBundleResource) Update(ctx context.Context, re
 		return
 	}
 
-	var desiredFiles map[string]string
-	if !plan.Files.IsNull() && !plan.Files.IsUnknown() {
-		resp.Diagnostics.Append(plan.Files.ElementsAs(ctx, &desiredFiles, false)...)
-	}
-	if desiredFiles == nil {
-		desiredFiles = map[string]string{entryFile: ""}
+	filesConfigured := !plan.Files.IsNull() && !plan.Files.IsUnknown()
+	if !req.Config.Raw.IsNull() && req.Config.Schema != nil {
+		var configFiles types.Map
+		_ = req.Config.GetAttribute(ctx, tfpath.Root("files"), &configFiles)
+		filesConfigured = !configFiles.IsNull() && !configFiles.IsUnknown()
 	}
 
-	for fPath, content := range desiredFiles {
-		if err := r.client.UpdateAgentInstructionsFileWithClear(ctx, agentID, fPath, content, clearLegacy); err != nil {
-			resp.Diagnostics.AddError(
-				"Error writing Paperclip agent instructions file",
-				fmt.Sprintf("Failed to write file %q for agent %s: %s", fPath, agentID, err.Error()),
-			)
+	var remoteFiles map[string]string
+	if filesConfigured {
+		var desiredFiles map[string]string
+		_ = plan.Files.ElementsAs(ctx, &desiredFiles, false)
+
+		for fPath, content := range desiredFiles {
+			if err := r.client.UpdateAgentInstructionsFileWithClear(ctx, agentID, fPath, content, clearLegacy); err != nil {
+				resp.Diagnostics.AddError(
+					"Error writing Paperclip agent instructions file",
+					fmt.Sprintf("Failed to write file %q for agent %s: %s", fPath, agentID, err.Error()),
+				)
+				return
+			}
+		}
+
+		refreshedBundle, err := r.client.GetAgentInstructionsBundle(ctx, agentID)
+		if err != nil {
+			resp.Diagnostics.AddError("Error fetching updated Paperclip instructions bundle", err.Error())
 			return
 		}
-	}
 
-	refreshedBundle, err := r.client.GetAgentInstructionsBundle(ctx, agentID)
-	if err != nil {
-		resp.Diagnostics.AddError("Error fetching updated Paperclip instructions bundle", err.Error())
-		return
-	}
-
-	for _, f := range refreshedBundle.Files {
-		if f.Editable && !f.Virtual {
-			if _, declared := desiredFiles[f.Path]; !declared {
-				if f.Path == entryFile {
-					resp.Diagnostics.AddError(
-						"Cannot Remove Entry File",
-						fmt.Sprintf("Cannot delete entry file %q from instructions bundle", f.Path),
-					)
+		for _, f := range refreshedBundle.Files {
+			if f.Editable && !f.Virtual {
+				if _, declared := desiredFiles[f.Path]; !declared {
+					if f.Path == entryFile {
+						resp.Diagnostics.AddError(
+							"Cannot Remove Entry File",
+							fmt.Sprintf("Cannot delete entry file %q from instructions bundle", f.Path),
+						)
+						return
+					}
+					if err := r.client.DeleteAgentInstructionsFile(ctx, agentID, f.Path); err != nil {
+						resp.Diagnostics.AddError(
+							"Error removing undeclared instructions file",
+							fmt.Sprintf("Failed to remove undeclared file %q for agent %s: %s", f.Path, agentID, err.Error()),
+						)
+						return
+					}
+				}
+			}
+		}
+		remoteFiles = desiredFiles
+	} else {
+		// When files is omitted in config, do NOT mutate or delete files.
+		bundle, err := r.client.GetAgentInstructionsBundle(ctx, agentID)
+		if err != nil {
+			resp.Diagnostics.AddError("Error fetching instructions bundle", err.Error())
+			return
+		}
+		remoteFiles = make(map[string]string)
+		for _, f := range bundle.Files {
+			if f.Editable && !f.Virtual {
+				content, ferr := r.client.GetAgentInstructionsFile(ctx, agentID, f.Path)
+				if ferr != nil {
+					if errors.Is(ferr, client.ErrNotFound) {
+						continue
+					}
+					resp.Diagnostics.AddError("Error reading instructions file content", ferr.Error())
 					return
 				}
-				if err := r.client.DeleteAgentInstructionsFile(ctx, agentID, f.Path); err != nil {
-					resp.Diagnostics.AddError(
-						"Error removing undeclared instructions file",
-						fmt.Sprintf("Failed to remove undeclared file %q for agent %s: %s", f.Path, agentID, err.Error()),
-					)
-					return
-				}
+				remoteFiles[f.Path] = content
 			}
 		}
 	}
@@ -553,7 +616,7 @@ func (r *PaperclipAgentInstructionBundleResource) Update(ctx context.Context, re
 		return
 	}
 
-	r.populateState(ctx, &plan, finalBundle, desiredFiles)
+	r.populateState(ctx, &plan, finalBundle, remoteFiles)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -582,17 +645,35 @@ func (r *PaperclipAgentInstructionBundleResource) Delete(ctx context.Context, re
 
 	for _, f := range bundle.Files {
 		if f.Editable && !f.Virtual && f.Path != bundle.EntryFile {
-			_ = r.client.DeleteAgentInstructionsFile(ctx, agentID, f.Path)
+			if err := r.client.DeleteAgentInstructionsFile(ctx, agentID, f.Path); err != nil {
+				resp.Diagnostics.AddError(
+					"Error deleting instructions bundle file",
+					fmt.Sprintf("Failed to delete file %q for agent %s during destroy: %s", f.Path, agentID, err.Error()),
+				)
+				return
+			}
 		}
 	}
 
-	_ = r.client.UpdateAgentInstructionsFile(ctx, agentID, bundle.EntryFile, "")
+	if err := r.client.UpdateAgentInstructionsFile(ctx, agentID, bundle.EntryFile, ""); err != nil {
+		resp.Diagnostics.AddError(
+			"Error clearing entry file",
+			fmt.Sprintf("Failed to clear entry file %q for agent %s during destroy: %s", bundle.EntryFile, agentID, err.Error()),
+		)
+		return
+	}
 
 	if bundle.Mode == "external" {
-		_, _ = r.client.UpdateAgentInstructionsBundle(ctx, agentID, client.UpdateAgentInstructionsBundleRequest{
+		if _, err := r.client.UpdateAgentInstructionsBundle(ctx, agentID, client.UpdateAgentInstructionsBundleRequest{
 			Mode:      "managed",
 			EntryFile: "AGENTS.md",
-		})
+		}); err != nil {
+			resp.Diagnostics.AddError(
+				"Error resetting bundle mode",
+				fmt.Sprintf("Failed to reset bundle mode to managed for agent %s during destroy: %s", agentID, err.Error()),
+			)
+			return
+		}
 	}
 }
 

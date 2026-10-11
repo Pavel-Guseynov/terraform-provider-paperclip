@@ -852,15 +852,32 @@ func TestPaperclipAgentInstructionBundleCoverageExhaustive(t *testing.T) {
 			t.Fatalf("unexpected error in Create external with null files: %v", cResp.Diagnostics)
 		}
 
+		extModelWithFiles := extModel
+		extFiles, _ := types.MapValueFrom(ctx, types.StringType, map[string]string{"AGENTS.md": "content"})
+		extModelWithFiles.Files = extFiles
+		var extPlanWithFiles tfsdk.Plan
+		extPlanWithFiles.Schema = sResp.Schema
+		_ = extPlanWithFiles.Set(ctx, &extModelWithFiles)
+
 		// Create: second Get error
 		failSecondGet = true
 		getCount = 0
 		cResp = resource.CreateResponse{State: tfsdk.State{Schema: sResp.Schema}}
-		crR.Create(ctx, resource.CreateRequest{Plan: extPlan}, &cResp)
+		crR.Create(ctx, resource.CreateRequest{Plan: extPlanWithFiles}, &cResp)
 		if !cResp.Diagnostics.HasError() {
 			t.Fatal("expected error on second Get failure in Create")
 		}
 		failSecondGet = false
+
+		// Create: final Get error
+		failFinalGet = true
+		getCount = 0
+		cResp = resource.CreateResponse{State: tfsdk.State{Schema: sResp.Schema}}
+		crR.Create(ctx, resource.CreateRequest{Plan: extPlanWithFiles}, &cResp)
+		if !cResp.Diagnostics.HasError() {
+			t.Fatal("expected error on final Get failure in Create")
+		}
+		failFinalGet = false
 
 		// Create: undeclared entry file removal rejection
 		noEntryModel := PaperclipAgentInstructionBundleResourceModel{
@@ -1062,15 +1079,32 @@ func TestPaperclipAgentInstructionBundleCoverageExhaustive(t *testing.T) {
 			t.Fatalf("unexpected error in Update external with null files: %v", uResp.Diagnostics)
 		}
 
+		extModelWithFiles := extModel
+		extFiles, _ := types.MapValueFrom(ctx, types.StringType, map[string]string{"AGENTS.md": "content"})
+		extModelWithFiles.Files = extFiles
+		var extPlanWithFiles tfsdk.Plan
+		extPlanWithFiles.Schema = sResp.Schema
+		_ = extPlanWithFiles.Set(ctx, &extModelWithFiles)
+
 		// Update: second Get error
 		failSecondGet = true
 		getCount = 0
 		uResp = resource.UpdateResponse{State: priorState}
-		updR.Update(ctx, resource.UpdateRequest{Plan: extPlan, State: priorState}, &uResp)
+		updR.Update(ctx, resource.UpdateRequest{Plan: extPlanWithFiles, State: priorState}, &uResp)
 		if !uResp.Diagnostics.HasError() {
 			t.Fatal("expected error on second Get failure in Update")
 		}
 		failSecondGet = false
+
+		// Update: final Get error
+		failFinalGet = true
+		getCount = 0
+		uResp = resource.UpdateResponse{State: priorState}
+		updR.Update(ctx, resource.UpdateRequest{Plan: extPlanWithFiles, State: priorState}, &uResp)
+		if !uResp.Diagnostics.HasError() {
+			t.Fatal("expected error on final Get failure in Update")
+		}
+		failFinalGet = false
 
 		// Update: undeclared entry file removal rejection
 		noEntryModel := PaperclipAgentInstructionBundleResourceModel{
@@ -1205,6 +1239,590 @@ func TestPaperclipAgentInstructionBundleCoverageExhaustive(t *testing.T) {
 		if !resetToManagedCalled {
 			t.Fatal("expected UpdateAgentInstructionsBundle to reset external mode to managed on Delete")
 		}
+	}
+}
+
+func TestPaperclipAgentInstructionBundleOmittedFilesPreservation(t *testing.T) {
+	ctx := context.Background()
+
+	var putCalls []string
+	var deleteCalls []string
+
+	serverFiles := map[string]string{
+		"AGENTS.md":     "# Original AGENTS.md content",
+		"extra.md":      "# Original extra file content",
+		"sub/nested.md": "# Original nested file content",
+	}
+
+	mode := "managed"
+	clearLegacy := false
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/ag-pres/instructions-bundle":
+			var summaries []client.AgentInstructionsFileSummary
+			for p, c := range serverFiles {
+				summaries = append(summaries, client.AgentInstructionsFileSummary{
+					Path:        p,
+					Size:        int64(len(c)),
+					Language:    "markdown",
+					Markdown:    true,
+					IsEntryFile: p == "AGENTS.md",
+					Editable:    true,
+					Virtual:     false,
+				})
+			}
+			_ = json.NewEncoder(w).Encode(client.AgentInstructionsBundle{
+				AgentID:   "ag-pres",
+				CompanyID: "comp-1",
+				Mode:      mode,
+				EntryFile: "AGENTS.md",
+				Editable:  true,
+				Files:     summaries,
+			})
+		case req.Method == http.MethodPatch && req.URL.Path == "/api/agents/ag-pres/instructions-bundle":
+			var body map[string]interface{}
+			_ = json.NewDecoder(req.Body).Decode(&body)
+			if m, ok := body["mode"].(string); ok && m != "" {
+				mode = m
+			}
+			if cl, ok := body["clearLegacyPromptTemplate"].(bool); ok {
+				clearLegacy = cl
+			}
+			_ = json.NewEncoder(w).Encode(client.AgentInstructionsBundle{
+				AgentID:   "ag-pres",
+				CompanyID: "comp-1",
+				Mode:      mode,
+				EntryFile: "AGENTS.md",
+				Editable:  true,
+			})
+		case req.Method == http.MethodPut && req.URL.Path == "/api/agents/ag-pres/instructions-bundle/file":
+			var body map[string]interface{}
+			_ = json.NewDecoder(req.Body).Decode(&body)
+			p := body["path"].(string)
+			putCalls = append(putCalls, p)
+			serverFiles[p] = body["content"].(string)
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/ag-pres/instructions-bundle/file":
+			p := req.URL.Query().Get("path")
+			if c, ok := serverFiles[p]; ok {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"content": c})
+				return
+			}
+			http.NotFound(w, req)
+		case req.Method == http.MethodDelete && req.URL.Path == "/api/agents/ag-pres/instructions-bundle/file":
+			p := req.URL.Query().Get("path")
+			deleteCalls = append(deleteCalls, p)
+			delete(serverFiles, p)
+			w.WriteHeader(http.StatusOK)
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	defer srv.Close()
+
+	cli, _ := client.NewClient(srv.URL, "token")
+	r := NewPaperclipAgentInstructionBundleResource().(*PaperclipAgentInstructionBundleResource)
+	var confResp resource.ConfigureResponse
+	r.Configure(ctx, resource.ConfigureRequest{ProviderData: cli}, &confResp)
+	if confResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected configure error: %v", confResp.Diagnostics)
+	}
+
+	var schemaResp resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
+
+	// Step 1: Create resource with `files` omitted from config
+	createPlanModel := PaperclipAgentInstructionBundleResourceModel{
+		ID:                        types.StringNull(),
+		AgentID:                   types.StringValue("ag-pres"),
+		Mode:                      types.StringValue("managed"),
+		RootPath:                  types.StringNull(),
+		EntryFile:                 types.StringValue("AGENTS.md"),
+		ClearLegacyPromptTemplate: types.BoolValue(false),
+		Files:                     types.MapNull(types.StringType),
+		FileInventory:             types.ListNull(types.ObjectType{AttrTypes: instructionBundleFileInventoryAttrTypes}),
+	}
+	var createPlan tfsdk.Plan
+	createPlan.Schema = schemaResp.Schema
+	_ = createPlan.Set(ctx, &createPlanModel)
+
+	cfgEmptyFiles := tfsdk.Config{
+		Schema: schemaResp.Schema,
+		Raw:    createPlan.Raw,
+	}
+
+	var createResp resource.CreateResponse
+	createResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	r.Create(ctx, resource.CreateRequest{
+		Config: cfgEmptyFiles,
+		Plan:   createPlan,
+	}, &createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected create error: %v", createResp.Diagnostics)
+	}
+
+	// Verify Finding F2: NO PUT or DELETE calls were made during create with omitted files!
+	if len(putCalls) != 0 {
+		t.Fatalf("expected 0 PUT calls during create with files omitted, got %v", putCalls)
+	}
+	if len(deleteCalls) != 0 {
+		t.Fatalf("expected 0 DELETE calls during create with files omitted, got %v", deleteCalls)
+	}
+	// Verify all server files remain intact
+	if serverFiles["AGENTS.md"] != "# Original AGENTS.md content" ||
+		serverFiles["extra.md"] != "# Original extra file content" ||
+		serverFiles["sub/nested.md"] != "# Original nested file content" {
+		t.Fatalf("server files were unexpectedly modified during create: %+v", serverFiles)
+	}
+
+	var createdState PaperclipAgentInstructionBundleResourceModel
+	_ = createResp.State.Get(ctx, &createdState)
+	var stateFiles map[string]string
+	_ = createdState.Files.ElementsAs(ctx, &stateFiles, false)
+	if len(stateFiles) != 3 || stateFiles["AGENTS.md"] != "# Original AGENTS.md content" {
+		t.Fatalf("expected 3 files in state, got %+v", stateFiles)
+	}
+
+	// Step 2: Update another attribute (clear_legacy_prompt_template = true) with `files` omitted in config
+	updatePlanModel := PaperclipAgentInstructionBundleResourceModel{
+		ID:                        createdState.ID,
+		AgentID:                   types.StringValue("ag-pres"),
+		Mode:                      types.StringValue("managed"),
+		RootPath:                  types.StringNull(),
+		EntryFile:                 types.StringValue("AGENTS.md"),
+		ClearLegacyPromptTemplate: types.BoolValue(true),
+		Files:                     types.MapUnknown(types.StringType), // Framework marks computed omitted attribute as unknown
+		FileInventory:             types.ListNull(types.ObjectType{AttrTypes: instructionBundleFileInventoryAttrTypes}),
+	}
+	var updatePlan tfsdk.Plan
+	updatePlan.Schema = schemaResp.Schema
+	_ = updatePlan.Set(ctx, &updatePlanModel)
+
+	updateCfgModel := PaperclipAgentInstructionBundleResourceModel{
+		ID:                        types.StringNull(),
+		AgentID:                   types.StringValue("ag-pres"),
+		Mode:                      types.StringValue("managed"),
+		RootPath:                  types.StringNull(),
+		EntryFile:                 types.StringValue("AGENTS.md"),
+		ClearLegacyPromptTemplate: types.BoolValue(true),
+		Files:                     types.MapNull(types.StringType), // omitted in HCL config
+		FileInventory:             types.ListNull(types.ObjectType{AttrTypes: instructionBundleFileInventoryAttrTypes}),
+	}
+	var cfgPlan tfsdk.Plan
+	cfgPlan.Schema = schemaResp.Schema
+	_ = cfgPlan.Set(ctx, &updateCfgModel)
+	updateConfig := tfsdk.Config{
+		Schema: schemaResp.Schema,
+		Raw:    cfgPlan.Raw,
+	}
+
+	// Test ModifyPlan: files should be preserved from prior state, not unknown
+	var mpResp resource.ModifyPlanResponse
+	mpResp.Plan = updatePlan
+	r.ModifyPlan(ctx, resource.ModifyPlanRequest{
+		Config: updateConfig,
+		State:  createResp.State,
+		Plan:   updatePlan,
+	}, &mpResp)
+	if mpResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected ModifyPlan error: %v", mpResp.Diagnostics)
+	}
+
+	var plannedMod PaperclipAgentInstructionBundleResourceModel
+	_ = mpResp.Plan.Get(ctx, &plannedMod)
+	if plannedMod.Files.IsUnknown() {
+		t.Fatal("expected planned Files to NOT be unknown when files is omitted from config during update")
+	}
+	var plannedFiles map[string]string
+	_ = plannedMod.Files.ElementsAs(ctx, &plannedFiles, false)
+	if len(plannedFiles) != 3 {
+		t.Fatalf("expected 3 files preserved in plan, got %+v", plannedFiles)
+	}
+
+	// Execute Update: verify zero file PUT or DELETE calls and remote content survives
+	putCalls = nil
+	deleteCalls = nil
+	var updateResp resource.UpdateResponse
+	updateResp.State = tfsdk.State{Schema: schemaResp.Schema}
+	r.Update(ctx, resource.UpdateRequest{
+		Config: updateConfig,
+		State:  createResp.State,
+		Plan:   mpResp.Plan,
+	}, &updateResp)
+	if updateResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected Update error: %v", updateResp.Diagnostics)
+	}
+
+	if len(putCalls) != 0 {
+		t.Fatalf("expected 0 PUT calls during update with files omitted, got %v", putCalls)
+	}
+	if len(deleteCalls) != 0 {
+		t.Fatalf("expected 0 DELETE calls during update with files omitted, got %v", deleteCalls)
+	}
+	if !clearLegacy {
+		t.Fatal("expected clearLegacy to be updated to true on server")
+	}
+	if serverFiles["AGENTS.md"] != "# Original AGENTS.md content" ||
+		serverFiles["extra.md"] != "# Original extra file content" ||
+		serverFiles["sub/nested.md"] != "# Original nested file content" {
+		t.Fatalf("server files were corrupted during update: %+v", serverFiles)
+	}
+}
+
+func TestPaperclipAgentInstructionBundleDeleteErrorHandling(t *testing.T) {
+	ctx := context.Background()
+
+	failDeleteFile := false
+	failClearEntry := false
+	failResetMode := false
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/ag-err/instructions-bundle":
+			_ = json.NewEncoder(w).Encode(client.AgentInstructionsBundle{
+				AgentID:   "ag-err",
+				CompanyID: "comp-1",
+				Mode:      "external",
+				EntryFile: "AGENTS.md",
+				Files: []client.AgentInstructionsFileSummary{
+					{
+						Path:        "AGENTS.md",
+						IsEntryFile: true,
+						Editable:    true,
+						Virtual:     false,
+					},
+					{
+						Path:        "extra.md",
+						IsEntryFile: false,
+						Editable:    true,
+						Virtual:     false,
+					},
+				},
+			})
+		case req.Method == http.MethodDelete && req.URL.Path == "/api/agents/ag-err/instructions-bundle/file":
+			if failDeleteFile {
+				http.Error(w, "disk failure on delete", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		case req.Method == http.MethodPut && req.URL.Path == "/api/agents/ag-err/instructions-bundle/file":
+			if failClearEntry {
+				http.Error(w, "disk failure on clear entry file", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"ok": true})
+		case req.Method == http.MethodPatch && req.URL.Path == "/api/agents/ag-err/instructions-bundle":
+			if failResetMode {
+				http.Error(w, "database failure on reset mode", http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(client.AgentInstructionsBundle{
+				AgentID:   "ag-err",
+				Mode:      "managed",
+				EntryFile: "AGENTS.md",
+			})
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	defer srv.Close()
+
+	cli, _ := client.NewClient(srv.URL, "token")
+	r := NewPaperclipAgentInstructionBundleResource().(*PaperclipAgentInstructionBundleResource)
+	var confResp resource.ConfigureResponse
+	r.Configure(ctx, resource.ConfigureRequest{ProviderData: cli}, &confResp)
+
+	var schemaResp resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
+
+	stModel := PaperclipAgentInstructionBundleResourceModel{
+		ID:                        types.StringValue("ag-err"),
+		AgentID:                   types.StringValue("ag-err"),
+		Mode:                      types.StringValue("external"),
+		RootPath:                  types.StringNull(),
+		EntryFile:                 types.StringValue("AGENTS.md"),
+		ClearLegacyPromptTemplate: types.BoolValue(false),
+		Files:                     types.MapNull(types.StringType),
+		FileInventory:             types.ListNull(types.ObjectType{AttrTypes: instructionBundleFileInventoryAttrTypes}),
+	}
+	var state tfsdk.State
+	state.Schema = schemaResp.Schema
+	_ = state.Set(ctx, &stModel)
+
+	// Finding F3: Case 1: DeleteAgentInstructionsFile returns 500 -> Delete must report error
+	failDeleteFile = true
+	var dResp1 resource.DeleteResponse
+	r.Delete(ctx, resource.DeleteRequest{State: state}, &dResp1)
+	if !dResp1.Diagnostics.HasError() {
+		t.Fatal("expected error diagnostic when DeleteAgentInstructionsFile fails")
+	}
+	failDeleteFile = false
+
+	// Finding F3: Case 2: UpdateAgentInstructionsFile (entry file clear) returns 500 -> Delete must report error
+	failClearEntry = true
+	var dResp2 resource.DeleteResponse
+	r.Delete(ctx, resource.DeleteRequest{State: state}, &dResp2)
+	if !dResp2.Diagnostics.HasError() {
+		t.Fatal("expected error diagnostic when clearing entry file fails")
+	}
+	failClearEntry = false
+
+	// Finding F3: Case 3: UpdateAgentInstructionsBundle (mode reset) returns 500 -> Delete must report error
+	failResetMode = true
+	var dResp3 resource.DeleteResponse
+	r.Delete(ctx, resource.DeleteRequest{State: state}, &dResp3)
+	if !dResp3.Diagnostics.HasError() {
+		t.Fatal("expected error diagnostic when resetting bundle mode fails")
+	}
+	failResetMode = false
+}
+
+func TestPaperclipAgentInstructionBundleOmittedFilesErrorBranches(t *testing.T) {
+	ctx := context.Background()
+
+	failBundleGet := false
+	failFileGet500 := false
+	failFileGet404 := false
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case req.Method == http.MethodPatch && req.URL.Path == "/api/agents/ag-omitted-err/instructions-bundle":
+			_ = json.NewEncoder(w).Encode(client.AgentInstructionsBundle{
+				AgentID:   "ag-omitted-err",
+				Mode:      "managed",
+				EntryFile: "AGENTS.md",
+			})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/ag-omitted-err/instructions-bundle":
+			if failBundleGet {
+				http.Error(w, "bundle get error", http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(client.AgentInstructionsBundle{
+				AgentID:   "ag-omitted-err",
+				CompanyID: "comp-1",
+				Mode:      "managed",
+				EntryFile: "AGENTS.md",
+				Files: []client.AgentInstructionsFileSummary{
+					{
+						Path:        "AGENTS.md",
+						IsEntryFile: true,
+						Editable:    true,
+						Virtual:     false,
+					},
+				},
+			})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/ag-omitted-err/instructions-bundle/file":
+			if failFileGet500 {
+				http.Error(w, "file get error", http.StatusInternalServerError)
+				return
+			}
+			if failFileGet404 {
+				http.NotFound(w, req)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"content": "# Test"})
+		default:
+			http.NotFound(w, req)
+		}
+	}))
+	defer srv.Close()
+
+	cli, _ := client.NewClient(srv.URL, "token")
+	r := NewPaperclipAgentInstructionBundleResource().(*PaperclipAgentInstructionBundleResource)
+	var confResp resource.ConfigureResponse
+	r.Configure(ctx, resource.ConfigureRequest{ProviderData: cli}, &confResp)
+
+	var schemaResp resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
+
+	planModel := PaperclipAgentInstructionBundleResourceModel{
+		ID:                        types.StringNull(),
+		AgentID:                   types.StringValue("ag-omitted-err"),
+		Mode:                      types.StringValue("managed"),
+		RootPath:                  types.StringNull(),
+		EntryFile:                 types.StringValue("AGENTS.md"),
+		ClearLegacyPromptTemplate: types.BoolValue(false),
+		Files:                     types.MapNull(types.StringType),
+		FileInventory:             types.ListNull(types.ObjectType{AttrTypes: instructionBundleFileInventoryAttrTypes}),
+	}
+	var plan tfsdk.Plan
+	plan.Schema = schemaResp.Schema
+	_ = plan.Set(ctx, &planModel)
+
+	cfg := tfsdk.Config{
+		Schema: schemaResp.Schema,
+		Raw:    plan.Raw,
+	}
+
+	stateModel := PaperclipAgentInstructionBundleResourceModel{
+		ID:                        types.StringValue("ag-omitted-err"),
+		AgentID:                   types.StringValue("ag-omitted-err"),
+		Mode:                      types.StringValue("managed"),
+		RootPath:                  types.StringNull(),
+		EntryFile:                 types.StringValue("AGENTS.md"),
+		ClearLegacyPromptTemplate: types.BoolValue(false),
+		Files:                     types.MapNull(types.StringType),
+		FileInventory:             types.ListNull(types.ObjectType{AttrTypes: instructionBundleFileInventoryAttrTypes}),
+	}
+	var state tfsdk.State
+	state.Schema = schemaResp.Schema
+	_ = state.Set(ctx, &stateModel)
+
+	// Create: Bundle get error
+	failBundleGet = true
+	var cResp1 resource.CreateResponse
+	cResp1.State = tfsdk.State{Schema: schemaResp.Schema}
+	r.Create(ctx, resource.CreateRequest{Config: cfg, Plan: plan}, &cResp1)
+	if !cResp1.Diagnostics.HasError() {
+		t.Fatal("expected error in Create when bundle get fails")
+	}
+	failBundleGet = false
+
+	// Create: File get 500 error
+	failFileGet500 = true
+	var cResp2 resource.CreateResponse
+	cResp2.State = tfsdk.State{Schema: schemaResp.Schema}
+	r.Create(ctx, resource.CreateRequest{Config: cfg, Plan: plan}, &cResp2)
+	if !cResp2.Diagnostics.HasError() {
+		t.Fatal("expected error in Create when file get fails with 500")
+	}
+	failFileGet500 = false
+
+	// Create: File get 404 (handled gracefully by skipping)
+	failFileGet404 = true
+	var cResp3 resource.CreateResponse
+	cResp3.State = tfsdk.State{Schema: schemaResp.Schema}
+	r.Create(ctx, resource.CreateRequest{Config: cfg, Plan: plan}, &cResp3)
+	if cResp3.Diagnostics.HasError() {
+		t.Fatalf("unexpected error in Create when file get returns 404: %v", cResp3.Diagnostics)
+	}
+	failFileGet404 = false
+
+	// Update: Bundle get error
+	failBundleGet = true
+	var uResp1 resource.UpdateResponse
+	uResp1.State = tfsdk.State{Schema: schemaResp.Schema}
+	r.Update(ctx, resource.UpdateRequest{Config: cfg, Plan: plan, State: state}, &uResp1)
+	if !uResp1.Diagnostics.HasError() {
+		t.Fatal("expected error in Update when bundle get fails")
+	}
+	failBundleGet = false
+
+	// Update: File get 500 error
+	failFileGet500 = true
+	var uResp2 resource.UpdateResponse
+	uResp2.State = tfsdk.State{Schema: schemaResp.Schema}
+	r.Update(ctx, resource.UpdateRequest{Config: cfg, Plan: plan, State: state}, &uResp2)
+	if !uResp2.Diagnostics.HasError() {
+		t.Fatal("expected error in Update when file get fails with 500")
+	}
+	failFileGet500 = false
+
+	// Update: File get 404 (handled gracefully by skipping)
+	failFileGet404 = true
+	var uResp3 resource.UpdateResponse
+	uResp3.State = tfsdk.State{Schema: schemaResp.Schema}
+	r.Update(ctx, resource.UpdateRequest{Config: cfg, Plan: plan, State: state}, &uResp3)
+	if uResp3.Diagnostics.HasError() {
+		t.Fatalf("unexpected error in Update when file get returns 404: %v", uResp3.Diagnostics)
+	}
+	failFileGet404 = false
+}
+
+func TestPaperclipAgentV1ToV2UpgradeIssuesZeroWrites(t *testing.T) {
+	ctx := context.Background()
+
+	var calls []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		calls = append(calls, req.Method+" "+req.URL.String())
+		http.Error(w, "no HTTP calls expected during state upgrade", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	r := NewPaperclipAgentResource().(*PaperclipAgentResource)
+	upgraders := r.UpgradeState(ctx)
+	u1, ok := upgraders[1]
+	if !ok {
+		t.Fatal("missing v1 state upgrader")
+	}
+
+	priorState := tfsdk.State{Schema: *u1.PriorSchema}
+	_ = priorState.Set(ctx, &struct {
+		ID                   types.String               `tfsdk:"id"`
+		CompanyID            types.String               `tfsdk:"company_id"`
+		Name                 types.String               `tfsdk:"name"`
+		Role                 types.String               `tfsdk:"role"`
+		Title                types.String               `tfsdk:"title"`
+		Icon                 types.String               `tfsdk:"icon"`
+		ReportsTo            types.String               `tfsdk:"reports_to"`
+		Capabilities         types.String               `tfsdk:"capabilities"`
+		DefaultEnvironmentID types.String               `tfsdk:"default_environment_id"`
+		AdapterType          types.String               `tfsdk:"adapter_type"`
+		Status               types.String               `tfsdk:"status"`
+		RuntimeConfig        types.String               `tfsdk:"runtime_config"`
+		AdapterConfig        types.String               `tfsdk:"adapter_config"`
+		Metadata             types.String               `tfsdk:"metadata"`
+		Instructions         types.String               `tfsdk:"instructions"`
+		CanAssignTasks       types.Bool                 `tfsdk:"can_assign_tasks"`
+		CanCreateAgents      types.Bool                 `tfsdk:"can_create_agents"`
+		CanCreateSkills      types.Bool                 `tfsdk:"can_create_skills"`
+		TrustPreset          types.String               `tfsdk:"trust_preset"`
+		AuthorizationPolicy  types.String               `tfsdk:"authorization_policy"`
+		Paused               types.Bool                 `tfsdk:"paused"`
+		Retirement           types.String               `tfsdk:"retirement"`
+		Env                  map[string]EnvBindingModel `tfsdk:"env"`
+	}{
+		ID:                   types.StringValue("ag-v1-proof"),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("agent-proof"),
+		Role:                 types.StringValue("engineer"),
+		Title:                types.StringValue("Staff"),
+		Icon:                 types.StringValue("robot"),
+		ReportsTo:            types.StringValue("lead-1"),
+		Capabilities:         types.StringValue("coding"),
+		DefaultEnvironmentID: types.StringValue("env-1"),
+		AdapterType:          types.StringValue("antigravity_local"),
+		Status:               types.StringValue("active"),
+		RuntimeConfig:        types.StringValue(`{}`),
+		AdapterConfig:        types.StringValue(`{}`),
+		Metadata:             types.StringValue(`{}`),
+		Instructions:         types.StringValue("# Critical Untouched Instructions in AGENTS.md"),
+		CanAssignTasks:       types.BoolValue(true),
+		CanCreateAgents:      types.BoolValue(false),
+		CanCreateSkills:      types.BoolValue(true),
+		TrustPreset:          types.StringValue("standard"),
+		AuthorizationPolicy:  types.StringNull(),
+		Paused:               types.BoolValue(false),
+		Retirement:           types.StringValue("delete"),
+		Env:                  nil,
+	})
+
+	var sResp resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sResp)
+
+	var upgResp resource.UpgradeStateResponse
+	upgResp.State = tfsdk.State{Schema: sResp.Schema}
+	u1.StateUpgrader(ctx, resource.UpgradeStateRequest{State: &priorState}, &upgResp)
+	if upgResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected upgrader error: %v", upgResp.Diagnostics)
+	}
+
+	var upgraded PaperclipAgentResourceModel
+	_ = upgResp.State.Get(ctx, &upgraded)
+	if upgraded.ID.ValueString() != "ag-v1-proof" {
+		t.Fatalf("expected ID ag-v1-proof, got %s", upgraded.ID.ValueString())
+	}
+
+	// Verify Finding F4: zero HTTP requests issued during state migration
+	if len(calls) != 0 {
+		t.Fatalf("expected 0 HTTP writes during state upgrade, but %d calls were made: %v", len(calls), calls)
 	}
 }
 
