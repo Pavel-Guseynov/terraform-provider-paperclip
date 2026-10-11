@@ -540,35 +540,27 @@ func TestClientCredentialRegistry(t *testing.T) {
 	if err := failCli.ReconcileUnconfirmedAgentKeys(ctx, "ag-1", "my-agent-key", "active-ak-find"); err == nil {
 		t.Fatal("expected error on connection failure in ReconcileUnconfirmedAgentKeys")
 	}
-
-	// Test PopActiveEphemeral*Key and ClearMintedToken branch coverage
-	emptyCli, _ := NewClient("http://127.0.0.1:8080", "tok")
-	if k := emptyCli.PopActiveEphemeralBoardKey(); k != "" {
-		t.Fatalf("expected empty board key from empty client, got %s", k)
-	}
-	if k, ag := emptyCli.PopActiveEphemeralAgentKey(); k != "" || ag != "" {
-		t.Fatalf("expected empty agent key from empty client, got %s, %s", k, ag)
-	}
-	emptyCli.RegisterMintedKey("bk-pop-1", "tok", "pop-board", true, "")
-	emptyCli.RegisterMintedKey("ak-pop-1", "tok", "pop-agent", false, "ag-pop")
-	if k := emptyCli.PopActiveEphemeralBoardKey(); k != "bk-pop-1" {
-		t.Fatalf("expected bk-pop-1, got %s", k)
-	}
-	if k, ag := emptyCli.PopActiveEphemeralAgentKey(); k != "ak-pop-1" || ag != "ag-pop" {
-		t.Fatalf("expected ak-pop-1, ag-pop, got %s, %s", k, ag)
-	}
+	failCli.ClearMintedToken("bk-unconfirmed-fail")
+	failCli.ClearMintedToken("ak-unconfirmed-fail")
 
 	// ClearMintedToken restore branch: duplicate key for same name
+	emptyCli, _ := NewClient("http://127.0.0.1:8080", "tok")
 	emptyCli.RegisterMintedKey("bk-dup-1", "tok1", "same-board-name", true, "")
 	emptyCli.RegisterMintedKey("bk-dup-2", "tok2", "same-board-name", true, "")
 	emptyCli.ClearMintedToken("bk-dup-2")
 	if k, _, ok := emptyCli.GetMintedKeyForName("same-board-name", true, ""); !ok || k != "bk-dup-1" {
 		t.Fatalf("expected restored key bk-dup-1 for same-board-name, got %s, ok=%v", k, ok)
 	}
+	emptyCli.ClearMintedToken("bk-dup-1")
 
-	// Test CleanupUnconfirmedKeys and CleanupAllUnconfirmedKeys
+	// Test CleanupUnconfirmedKeys and CleanupAllUnconfirmedKeys with revoke failure injection
+	var shouldFailRevoke bool
 	cleanupServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if shouldFailRevoke && r.Method == http.MethodDelete {
+			http.Error(w, "injected revocation error", http.StatusInternalServerError)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 	}))
 	defer cleanupServer.Close()
@@ -581,11 +573,27 @@ func TestClientCredentialRegistry(t *testing.T) {
 	cleanCli.RegisterMintedKey("bk-ack-1", "tok", "clean-ack", true, "")
 	cleanCli.AcknowledgeKeyDelivery("bk-ack-1")
 
-	CleanupAllUnconfirmedKeys(ctx)
+	// Inject revocation failure: must return error, emit structured diagnostic, and preserve record
+	shouldFailRevoke = true
+	if err := CleanupAllUnconfirmedKeys(ctx); err == nil {
+		t.Fatal("expected error on failed CleanupAllUnconfirmedKeys")
+	}
+	if _, ok := cleanCli.GetMintedToken("bk-clean-1"); !ok {
+		t.Fatal("expected bk-clean-1 to be retained in client records after revocation failure")
+	}
+	if _, ok := cleanCli.GetMintedToken("ak-clean-1"); !ok {
+		t.Fatal("expected ak-clean-1 to be retained in client records after revocation failure")
+	}
+
+	// Recover with successful revocation: now must clear records
+	shouldFailRevoke = false
+	if err := CleanupAllUnconfirmedKeys(ctx); err != nil {
+		t.Fatalf("unexpected error on successful CleanupAllUnconfirmedKeys: %v", err)
+	}
 	if _, ok := cleanCli.GetMintedToken("bk-clean-1"); ok {
-		t.Fatal("expected bk-clean-1 to be cleared after CleanupAllUnconfirmedKeys")
+		t.Fatal("expected bk-clean-1 to be cleared after successful CleanupAllUnconfirmedKeys")
 	}
 	if _, ok := cleanCli.GetMintedToken("ak-clean-1"); ok {
-		t.Fatal("expected ak-clean-1 to be cleared after CleanupAllUnconfirmedKeys")
+		t.Fatal("expected ak-clean-1 to be cleared after successful CleanupAllUnconfirmedKeys")
 	}
 }

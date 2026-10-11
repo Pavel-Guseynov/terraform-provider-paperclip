@@ -19,9 +19,7 @@ var (
 )
 
 type PaperclipAgentKeyEphemeralResource struct {
-	client   *client.Client
-	keyID    string
-	isLookup bool
+	client *client.Client
 }
 
 type PaperclipAgentKeyEphemeralResourceModel struct {
@@ -183,16 +181,14 @@ func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephem
 			return
 		}
 		data.Token = types.StringValue(token)
-		r.keyID = keyID
-		r.isLookup = true
 		if resp.Private != nil {
 			keyBytes, _ := json.Marshal(keyID)
-			resp.Diagnostics.Append(resp.Private.SetKey(ctx, "key_id", keyBytes)...)
+			resp.Private.SetKey(ctx, "key_id", keyBytes)
 			lookupBytes, _ := json.Marshal(true)
-			resp.Diagnostics.Append(resp.Private.SetKey(ctx, "is_lookup", lookupBytes)...)
+			resp.Private.SetKey(ctx, "is_lookup", lookupBytes)
 			if aID, ok := r.client.GetAgentIDForKey(keyID); ok && aID != "" {
 				agentBytes, _ := json.Marshal(aID)
-				resp.Diagnostics.Append(resp.Private.SetKey(ctx, "agent_id", agentBytes)...)
+				resp.Private.SetKey(ctx, "agent_id", agentBytes)
 			}
 		}
 		resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
@@ -242,56 +238,51 @@ func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephem
 	}
 
 	r.client.RegisterMintedKey(newKey.ID, newKey.Token, name, false, agentID)
-	r.keyID = newKey.ID
 
 	data.KeyID = types.StringValue(newKey.ID)
 	data.Token = types.StringValue(newKey.Token)
 
 	if resp.Private != nil {
 		keyBytes, _ := json.Marshal(newKey.ID)
-		resp.Diagnostics.Append(resp.Private.SetKey(ctx, "key_id", keyBytes)...)
+		resp.Private.SetKey(ctx, "key_id", keyBytes)
 		agentBytes, _ := json.Marshal(agentID)
-		resp.Diagnostics.Append(resp.Private.SetKey(ctx, "agent_id", agentBytes)...)
+		resp.Private.SetKey(ctx, "agent_id", agentBytes)
 	}
 
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 }
 
 func (r *PaperclipAgentKeyEphemeralResource) Close(ctx context.Context, req ephemeral.CloseRequest, resp *ephemeral.CloseResponse) {
-	if r.client == nil {
+	if r.client == nil || req.Private == nil {
 		return
 	}
 	var keyID string
 	var agentID string
 	var isLookup bool
-	if req.Private != nil {
-		keyIDBytes, diags := req.Private.GetKey(ctx, "key_id")
-		resp.Diagnostics.Append(diags...)
-		if len(keyIDBytes) > 0 {
-			_ = json.Unmarshal(keyIDBytes, &keyID)
+	keyIDBytes, _ := req.Private.GetKey(ctx, "key_id")
+	if len(keyIDBytes) > 0 {
+		if err := json.Unmarshal(keyIDBytes, &keyID); err != nil {
+			resp.Diagnostics.AddError("Error decoding private state key_id", err.Error())
+			return
 		}
+	}
 
-		lookupBytes, diagsLookup := req.Private.GetKey(ctx, "is_lookup")
-		resp.Diagnostics.Append(diagsLookup...)
-		if len(lookupBytes) > 0 {
-			_ = json.Unmarshal(lookupBytes, &isLookup)
+	lookupBytes, _ := req.Private.GetKey(ctx, "is_lookup")
+	if len(lookupBytes) > 0 {
+		if err := json.Unmarshal(lookupBytes, &isLookup); err != nil {
+			resp.Diagnostics.AddError("Error decoding private state is_lookup", err.Error())
+			return
 		}
+	}
 
-		agentIDBytes, diags := req.Private.GetKey(ctx, "agent_id")
-		resp.Diagnostics.Append(diags...)
-		if len(agentIDBytes) > 0 {
-			_ = json.Unmarshal(agentIDBytes, &agentID)
+	agentIDBytes, _ := req.Private.GetKey(ctx, "agent_id")
+	if len(agentIDBytes) > 0 {
+		if err := json.Unmarshal(agentIDBytes, &agentID); err != nil {
+			resp.Diagnostics.AddError("Error decoding private state agent_id", err.Error())
+			return
 		}
 	}
-	if keyID == "" {
-		keyID = r.keyID
-	}
-	if keyID == "" {
-		keyID, agentID = r.client.PopActiveEphemeralAgentKey()
-	}
-	if !isLookup {
-		isLookup = r.isLookup
-	}
+
 	if keyID == "" {
 		return
 	}
@@ -313,8 +304,10 @@ func (r *PaperclipAgentKeyEphemeralResource) Close(ctx context.Context, req ephe
 			defer cancel()
 			if err := r.client.RevokeAgentKey(cleanupCtx, agentID, keyID); err != nil {
 				resp.Diagnostics.AddError("Error revoking unconfirmed agent key", err.Error())
+				return
 			}
 		}
+		r.client.ClearMintedToken(keyID)
 		return
 	}
 

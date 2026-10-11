@@ -69,9 +69,7 @@ type Client struct {
 	mintedKeys             map[string]mintedKeyRecord
 	mintedKeysByName       map[string]string // lookupKey -> keyID
 	acknowledgedDeliveries   map[string]bool   // keyID -> true
-	deliveredGenerations     map[string]int64  // lookupKey -> generation
-	activeEphemeralBoardKeys []string
-	activeEphemeralAgentKeys []string
+	deliveredGenerations   map[string]int64 // lookupKey -> generation
 }
 
 type HealthResponse struct {
@@ -118,15 +116,19 @@ func registerActiveClient(c *Client) {
 	activeClients = append(activeClients, c)
 }
 
-func CleanupAllUnconfirmedKeys(ctx context.Context) {
+func CleanupAllUnconfirmedKeys(ctx context.Context) error {
 	activeClientsMu.Lock()
 	clients := make([]*Client, len(activeClients))
 	copy(clients, activeClients)
 	activeClientsMu.Unlock()
 
+	var errs []error
 	for _, c := range clients {
-		c.CleanupUnconfirmedKeys(ctx)
+		if err := c.CleanupUnconfirmedKeys(ctx); err != nil {
+			errs = append(errs, err)
+		}
 	}
+	return errors.Join(errs...)
 }
 
 func (c *Client) Health(ctx context.Context) (*HealthResponse, error) {

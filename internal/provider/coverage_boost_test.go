@@ -189,14 +189,17 @@ func TestEphemeralsLifecycle(t *testing.T) {
 	// success
 	cli.RegisterMintedToken("bk-boost", "tok-boost")
 	var bkOpenSuccess ephemeral.OpenResponse
+	privBk := initOpenResponsePrivate(&bkOpenSuccess)
 	bkOpenSuccess.Result = tfsdk.EphemeralResultData{Schema: bkSchema.Schema}
 	bk.Open(ctx, ephemeral.OpenRequest{Config: goodConfig}, &bkOpenSuccess)
 	if bkOpenSuccess.Diagnostics.HasError() {
 		t.Fatalf("bk open failed: %v", bkOpenSuccess.Diagnostics)
 	}
 
+	var bkCloseReq ephemeral.CloseRequest
+	initCloseRequestPrivate(&bkCloseReq, privBk)
 	var bkCloseResp ephemeral.CloseResponse
-	bk.Close(ctx, ephemeral.CloseRequest{}, &bkCloseResp)
+	bk.Close(ctx, bkCloseReq, &bkCloseResp)
 	if bkCloseResp.Diagnostics.HasError() {
 		t.Fatalf("bk close failed: %v", bkCloseResp.Diagnostics)
 	}
@@ -251,14 +254,17 @@ func TestEphemeralsLifecycle(t *testing.T) {
 	// success
 	cli.RegisterMintedToken("ak-boost", "ak-tok-boost")
 	var akOpenSuccess ephemeral.OpenResponse
+	privAk := initOpenResponsePrivate(&akOpenSuccess)
 	akOpenSuccess.Result = tfsdk.EphemeralResultData{Schema: akSchema.Schema}
 	ak.Open(ctx, ephemeral.OpenRequest{Config: akGoodConfig}, &akOpenSuccess)
 	if akOpenSuccess.Diagnostics.HasError() {
 		t.Fatalf("ak open failed: %v", akOpenSuccess.Diagnostics)
 	}
 
+	var akCloseReq ephemeral.CloseRequest
+	initCloseRequestPrivate(&akCloseReq, privAk)
 	var akCloseResp ephemeral.CloseResponse
-	ak.Close(ctx, ephemeral.CloseRequest{}, &akCloseResp)
+	ak.Close(ctx, akCloseReq, &akCloseResp)
 	if akCloseResp.Diagnostics.HasError() {
 		t.Fatalf("ak close failed: %v", akCloseResp.Diagnostics)
 	}

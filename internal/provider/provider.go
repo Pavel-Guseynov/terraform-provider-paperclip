@@ -154,9 +154,7 @@ func (p *PaperclipProvider) Configure(ctx context.Context, req provider.Configur
 }
 
 type PaperclipBoardKeyEphemeralResource struct {
-	client   *client.Client
-	keyID    string
-	isLookup bool
+	client *client.Client
 }
 
 type PaperclipBoardKeyEphemeralResourceModel struct {
@@ -283,13 +281,11 @@ func (r *PaperclipBoardKeyEphemeralResource) Open(ctx context.Context, req ephem
 			return
 		}
 		data.Token = types.StringValue(token)
-		r.keyID = keyID
-		r.isLookup = true
 		if resp.Private != nil {
 			keyBytes, _ := json.Marshal(keyID)
-			resp.Diagnostics.Append(resp.Private.SetKey(ctx, "key_id", keyBytes)...)
+			resp.Private.SetKey(ctx, "key_id", keyBytes)
 			lookupBytes, _ := json.Marshal(true)
-			resp.Diagnostics.Append(resp.Private.SetKey(ctx, "is_lookup", lookupBytes)...)
+			resp.Private.SetKey(ctx, "is_lookup", lookupBytes)
 		}
 		resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 		return
@@ -342,46 +338,39 @@ func (r *PaperclipBoardKeyEphemeralResource) Open(ctx context.Context, req ephem
 	}
 
 	r.client.RegisterMintedKey(newKey.ID, newKey.Token, name, true, "")
-	r.keyID = newKey.ID
 
 	data.KeyID = types.StringValue(newKey.ID)
 	data.Token = types.StringValue(newKey.Token)
 
 	if resp.Private != nil {
 		keyBytes, _ := json.Marshal(newKey.ID)
-		resp.Diagnostics.Append(resp.Private.SetKey(ctx, "key_id", keyBytes)...)
+		resp.Private.SetKey(ctx, "key_id", keyBytes)
 	}
 
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
 }
 
 func (r *PaperclipBoardKeyEphemeralResource) Close(ctx context.Context, req ephemeral.CloseRequest, resp *ephemeral.CloseResponse) {
-	if r.client == nil {
+	if r.client == nil || req.Private == nil {
 		return
 	}
 	var keyID string
 	var isLookup bool
-	if req.Private != nil {
-		keyIDBytes, diags := req.Private.GetKey(ctx, "key_id")
-		resp.Diagnostics.Append(diags...)
-		if len(keyIDBytes) > 0 {
-			_ = json.Unmarshal(keyIDBytes, &keyID)
-		}
-		lookupBytes, diagsLookup := req.Private.GetKey(ctx, "is_lookup")
-		resp.Diagnostics.Append(diagsLookup...)
-		if len(lookupBytes) > 0 {
-			_ = json.Unmarshal(lookupBytes, &isLookup)
+	keyIDBytes, _ := req.Private.GetKey(ctx, "key_id")
+	if len(keyIDBytes) > 0 {
+		if err := json.Unmarshal(keyIDBytes, &keyID); err != nil {
+			resp.Diagnostics.AddError("Error decoding private state key_id", err.Error())
+			return
 		}
 	}
-	if keyID == "" {
-		keyID = r.keyID
+	lookupBytes, _ := req.Private.GetKey(ctx, "is_lookup")
+	if len(lookupBytes) > 0 {
+		if err := json.Unmarshal(lookupBytes, &isLookup); err != nil {
+			resp.Diagnostics.AddError("Error decoding private state is_lookup", err.Error())
+			return
+		}
 	}
-	if keyID == "" {
-		keyID = r.client.PopActiveEphemeralBoardKey()
-	}
-	if !isLookup {
-		isLookup = r.isLookup
-	}
+
 	if keyID == "" {
 		return
 	}
@@ -397,7 +386,9 @@ func (r *PaperclipBoardKeyEphemeralResource) Close(ctx context.Context, req ephe
 		defer cancel()
 		if err := r.client.RevokeBoardKey(cleanupCtx, keyID); err != nil {
 			resp.Diagnostics.AddError("Error revoking unconfirmed board key", err.Error())
+			return
 		}
+		r.client.ClearMintedToken(keyID)
 		return
 	}
 

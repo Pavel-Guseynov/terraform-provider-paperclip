@@ -485,8 +485,13 @@ func TestPaperclipBoardKeyResourceFullLifecycle(t *testing.T) {
 	var closeResp ephemeral.CloseResponse
 	ephRes := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
 	ephRes.client = r.client
-	ephRes.keyID = "bk-2"
-	ephRes.Close(ctx, ephemeral.CloseRequest{}, &closeResp)
+	var closeReq ephemeral.CloseRequest
+	var openResp ephemeral.OpenResponse
+	priv := initOpenResponsePrivate(&openResp)
+	b, _ := json.Marshal("bk-2")
+	_ = openResp.Private.SetKey(ctx, "key_id", b)
+	initCloseRequestPrivate(&closeReq, priv)
+	ephRes.Close(ctx, closeReq, &closeResp)
 	if closeResp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error on close: %v", closeResp.Diagnostics)
 	}
@@ -1165,8 +1170,15 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	var closeResp ephemeral.CloseResponse
 	ephRes := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
 	ephRes.client = r.client
-	ephRes.keyID = "ak-2"
-	ephRes.Close(ctx, ephemeral.CloseRequest{}, &closeResp)
+	var closeReq ephemeral.CloseRequest
+	var openResp ephemeral.OpenResponse
+	priv := initOpenResponsePrivate(&openResp)
+	b, _ := json.Marshal("ak-2")
+	_ = openResp.Private.SetKey(ctx, "key_id", b)
+	agB, _ := json.Marshal("ag-1")
+	_ = openResp.Private.SetKey(ctx, "agent_id", agB)
+	initCloseRequestPrivate(&closeReq, priv)
+	ephRes.Close(ctx, closeReq, &closeResp)
 	if closeResp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error on close: %v", closeResp.Diagnostics)
 	}
@@ -1454,9 +1466,14 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 		failCli, _ := client.NewClient(failServer.URL, "test-token")
 		failRes := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
 		failRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: failCli}, &confResp)
-		failRes.keyID = "bk-fail-new"
+		var failOpenResp ephemeral.OpenResponse
+		privFail := initOpenResponsePrivate(&failOpenResp)
+		failBkBytes, _ := json.Marshal("bk-fail-new")
+		_ = failOpenResp.Private.SetKey(ctx, "key_id", failBkBytes)
+		var failCloseReq ephemeral.CloseRequest
+		initCloseRequestPrivate(&failCloseReq, privFail)
 		var failCloseResp ephemeral.CloseResponse
-		failRes.Close(ctx, ephemeral.CloseRequest{}, &failCloseResp)
+		failRes.Close(ctx, failCloseReq, &failCloseResp)
 		if !failCloseResp.Diagnostics.HasError() {
 			t.Fatal("expected error diagnostic on failed close revoking unconfirmed board key")
 		}
@@ -1474,8 +1491,14 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 		goodCli.RegisterMintedKey("bk-del-fail", "tok", "bk-name", true, "")
 		delFailRes := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
 		delFailRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: goodCli}, &confResp)
+		var delFailOpenResp ephemeral.OpenResponse
+		privDelFail := initOpenResponsePrivate(&delFailOpenResp)
+		delBkBytes, _ := json.Marshal("bk-del-fail")
+		_ = delFailOpenResp.Private.SetKey(ctx, "key_id", delBkBytes)
+		var delFailCloseReq ephemeral.CloseRequest
+		initCloseRequestPrivate(&delFailCloseReq, privDelFail)
 		var delFailCloseResp ephemeral.CloseResponse
-		delFailRes.Close(ctx, ephemeral.CloseRequest{}, &delFailCloseResp)
+		delFailRes.Close(ctx, delFailCloseReq, &delFailCloseResp)
 		if delFailCloseResp.Diagnostics.HasError() {
 			t.Fatalf("unexpected error on failed delivery close: %v", delFailCloseResp.Diagnostics)
 		}
@@ -1621,9 +1644,16 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 		failCli.RegisterMintedAgentKey("agent-fail", "ak-fail-new", "tok-fail")
 		failRes := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
 		failRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: failCli}, &confResp)
-		failRes.keyID = "ak-fail-new"
+		var failOpenResp ephemeral.OpenResponse
+		privFail := initOpenResponsePrivate(&failOpenResp)
+		failAkBytes, _ := json.Marshal("ak-fail-new")
+		_ = failOpenResp.Private.SetKey(ctx, "key_id", failAkBytes)
+		failAgBytes, _ := json.Marshal("agent-fail")
+		_ = failOpenResp.Private.SetKey(ctx, "agent_id", failAgBytes)
+		var failCloseReq ephemeral.CloseRequest
+		initCloseRequestPrivate(&failCloseReq, privFail)
 		var failCloseResp ephemeral.CloseResponse
-		failRes.Close(ctx, ephemeral.CloseRequest{}, &failCloseResp)
+		failRes.Close(ctx, failCloseReq, &failCloseResp)
 		if !failCloseResp.Diagnostics.HasError() {
 			t.Fatal("expected error diagnostic on failed close revoking unconfirmed agent key")
 		}
@@ -1641,8 +1671,16 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 		goodAkCli.RegisterMintedKey("ak-del-fail", "tok-1", "ak-name", false, "agent-1")
 		delFailAkRes := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
 		delFailAkRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: goodAkCli}, &confResp)
+		var delFailAkOpenResp ephemeral.OpenResponse
+		privDelFailAk := initOpenResponsePrivate(&delFailAkOpenResp)
+		delAkBytes, _ := json.Marshal("ak-del-fail")
+		_ = delFailAkOpenResp.Private.SetKey(ctx, "key_id", delAkBytes)
+		delAgBytes, _ := json.Marshal("agent-1")
+		_ = delFailAkOpenResp.Private.SetKey(ctx, "agent_id", delAgBytes)
+		var delFailAkCloseReq ephemeral.CloseRequest
+		initCloseRequestPrivate(&delFailAkCloseReq, privDelFailAk)
 		var delFailAkCloseResp ephemeral.CloseResponse
-		delFailAkRes.Close(ctx, ephemeral.CloseRequest{}, &delFailAkCloseResp)
+		delFailAkRes.Close(ctx, delFailAkCloseReq, &delFailAkCloseResp)
 		if delFailAkCloseResp.Diagnostics.HasError() {
 			t.Fatalf("unexpected error on failed delivery agent close: %v", delFailAkCloseResp.Diagnostics)
 		}
@@ -1653,9 +1691,14 @@ func TestEphemeralResourcesDeferralAndClose(t *testing.T) {
 		// Close when delivery failed with empty agentID
 		delNoAgentRes := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
 		delNoAgentRes.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: goodAkCli}, &confResp)
-		delNoAgentRes.keyID = "ak-no-agent"
+		var delNoAgentOpenResp ephemeral.OpenResponse
+		privNoAg := initOpenResponsePrivate(&delNoAgentOpenResp)
+		noAgBytes, _ := json.Marshal("ak-no-agent")
+		_ = delNoAgentOpenResp.Private.SetKey(ctx, "key_id", noAgBytes)
+		var noAgentCloseReq ephemeral.CloseRequest
+		initCloseRequestPrivate(&noAgentCloseReq, privNoAg)
 		var noAgentCloseResp ephemeral.CloseResponse
-		delNoAgentRes.Close(ctx, ephemeral.CloseRequest{}, &noAgentCloseResp)
+		delNoAgentRes.Close(ctx, noAgentCloseReq, &noAgentCloseResp)
 		if noAgentCloseResp.Diagnostics.HasError() {
 			t.Fatalf("unexpected error on close without agentID: %v", noAgentCloseResp.Diagnostics)
 		}
@@ -2525,5 +2568,478 @@ func TestEphemeralMintingApplyAndErrorCoverage(t *testing.T) {
 		}
 	})
 }
+
+func TestPaperclipBoardKeyEphemeralTwoInstances(t *testing.T) {
+	t.Setenv("PAPERCLIP_SCRATCH_DIR", t.TempDir())
+	ctx := context.Background()
+
+	var revokedKeys []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/board-api-keys":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":    "bk-inst1",
+				"name":  "bk-inst1",
+				"token": "tok-inst1",
+			})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/board-api-keys/"):
+			keyID := strings.TrimPrefix(r.URL.Path, "/api/board-api-keys/")
+			revokedKeys = append(revokedKeys, keyID)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	t.Run("delivery acknowledged: instance 2 close does not affect instance 1", func(t *testing.T) {
+		revokedKeys = nil
+		r1 := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
+		r2 := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
+
+		var confResp1, confResp2 ephemeral.ConfigureResponse
+		r1.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp1)
+		r2.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp2)
+
+		var schemaResp ephemeral.SchemaResponse
+		r1.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
+
+		// Instance 1: Open and mint key
+		m1 := PaperclipBoardKeyEphemeralResourceModel{
+			Name:       types.StringValue("bk-inst1"),
+			Generation: types.Int64Value(1),
+		}
+		s1 := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s1.Set(ctx, &m1)
+		var openResp1 ephemeral.OpenResponse
+		priv1 := initOpenResponsePrivate(&openResp1)
+		openResp1.Result = tfsdk.EphemeralResultData{Raw: s1.Raw, Schema: schemaResp.Schema}
+		r1.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s1.Raw}}, &openResp1)
+		if openResp1.Diagnostics.HasError() {
+			t.Fatalf("instance 1 open failed: %v", openResp1.Diagnostics)
+		}
+
+		var res1 PaperclipBoardKeyEphemeralResourceModel
+		_ = openResp1.Result.Get(ctx, &res1)
+		if res1.KeyID.ValueString() != "bk-inst1" || res1.Token.ValueString() != "tok-inst1" {
+			t.Fatalf("unexpected res1: %+v", res1)
+		}
+
+		// Instance 2: Generation already delivered (no mint)
+		cli.RecordDeliveredGeneration("bk-inst2", true, "", 1, "bk-prior2")
+		m2 := PaperclipBoardKeyEphemeralResourceModel{
+			Name:       types.StringValue("bk-inst2"),
+			Generation: types.Int64Value(1),
+		}
+		s2 := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s2.Set(ctx, &m2)
+		var openResp2 ephemeral.OpenResponse
+		priv2 := initOpenResponsePrivate(&openResp2)
+		openResp2.Result = tfsdk.EphemeralResultData{Raw: s2.Raw, Schema: schemaResp.Schema}
+		r2.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s2.Raw}}, &openResp2)
+		if openResp2.Diagnostics.HasError() {
+			t.Fatalf("instance 2 open failed: %v", openResp2.Diagnostics)
+		}
+
+		// Instance 2 Close: Private state has no key_id, must not touch instance 1's key
+		var closeReq2 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq2, priv2)
+		var closeResp2 ephemeral.CloseResponse
+		r2.Close(ctx, closeReq2, &closeResp2)
+		if closeResp2.Diagnostics.HasError() {
+			t.Fatalf("instance 2 close failed: %v", closeResp2.Diagnostics)
+		}
+
+		// Verify instance 1 key is completely intact
+		if tok, ok := cli.GetMintedToken("bk-inst1"); !ok || tok != "tok-inst1" {
+			t.Fatalf("instance 1 key was affected by instance 2 close: ok=%v, tok=%v", ok, tok)
+		}
+		if len(revokedKeys) != 0 {
+			t.Fatalf("keys revoked prematurely: %v", revokedKeys)
+		}
+
+		// Instance 1 delivered and closes
+		cli.AcknowledgeKeyDelivery("bk-inst1")
+		var closeReq1 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq1, priv1)
+		var closeResp1 ephemeral.CloseResponse
+		r1.Close(ctx, closeReq1, &closeResp1)
+		if closeResp1.Diagnostics.HasError() {
+			t.Fatalf("instance 1 close failed: %v", closeResp1.Diagnostics)
+		}
+
+		// Token is cleared from cache on success, but key is NOT revoked
+		if _, ok := cli.GetMintedToken("bk-inst1"); ok {
+			t.Fatal("expected bk-inst1 token to be cleared after acknowledged close")
+		}
+		if len(revokedKeys) != 0 {
+			t.Fatalf("expected no keys revoked, got %v", revokedKeys)
+		}
+	})
+
+	t.Run("delivery failed: instance 2 close does not affect instance 1, unconfirmed instance 1 is revoked", func(t *testing.T) {
+		revokedKeys = nil
+		r1 := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
+		r2 := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
+
+		var confResp1, confResp2 ephemeral.ConfigureResponse
+		r1.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp1)
+		r2.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp2)
+
+		var schemaResp ephemeral.SchemaResponse
+		r1.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
+
+		// Instance 1: Open and mint key
+		m1 := PaperclipBoardKeyEphemeralResourceModel{
+			Name:       types.StringValue("bk-unconf1"),
+			Generation: types.Int64Value(1),
+		}
+		s1 := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s1.Set(ctx, &m1)
+		var openResp1 ephemeral.OpenResponse
+		priv1 := initOpenResponsePrivate(&openResp1)
+		openResp1.Result = tfsdk.EphemeralResultData{Raw: s1.Raw, Schema: schemaResp.Schema}
+		r1.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s1.Raw}}, &openResp1)
+		if openResp1.Diagnostics.HasError() {
+			t.Fatalf("instance 1 open failed: %v", openResp1.Diagnostics)
+		}
+
+		// Instance 2: Generation already delivered (no mint)
+		cli.RecordDeliveredGeneration("bk-inst2-unconf", true, "", 1, "bk-prior2")
+		m2 := PaperclipBoardKeyEphemeralResourceModel{
+			Name:       types.StringValue("bk-inst2-unconf"),
+			Generation: types.Int64Value(1),
+		}
+		s2 := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s2.Set(ctx, &m2)
+		var openResp2 ephemeral.OpenResponse
+		priv2 := initOpenResponsePrivate(&openResp2)
+		openResp2.Result = tfsdk.EphemeralResultData{Raw: s2.Raw, Schema: schemaResp.Schema}
+		r2.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s2.Raw}}, &openResp2)
+		if openResp2.Diagnostics.HasError() {
+			t.Fatalf("instance 2 open failed: %v", openResp2.Diagnostics)
+		}
+
+		// Instance 2 Close: Private state has no key_id, must not touch instance 1's key
+		var closeReq2 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq2, priv2)
+		var closeResp2 ephemeral.CloseResponse
+		r2.Close(ctx, closeReq2, &closeResp2)
+		if closeResp2.Diagnostics.HasError() {
+			t.Fatalf("instance 2 close failed: %v", closeResp2.Diagnostics)
+		}
+
+		// Verify instance 1 key is intact before its own close
+		if len(revokedKeys) != 0 {
+			t.Fatalf("instance 1 key revoked by instance 2 close: %v", revokedKeys)
+		}
+
+		// Instance 1 Close without delivery acknowledgement -> must revoke bk-inst1
+		var closeReq1 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq1, priv1)
+		var closeResp1 ephemeral.CloseResponse
+		r1.Close(ctx, closeReq1, &closeResp1)
+		if closeResp1.Diagnostics.HasError() {
+			t.Fatalf("instance 1 close failed: %v", closeResp1.Diagnostics)
+		}
+
+		if len(revokedKeys) != 1 || revokedKeys[0] != "bk-inst1" {
+			t.Fatalf("expected bk-inst1 to be revoked, got %v", revokedKeys)
+		}
+	})
+}
+
+func TestPaperclipAgentKeyEphemeralTwoInstances(t *testing.T) {
+	t.Setenv("PAPERCLIP_SCRATCH_DIR", t.TempDir())
+	ctx := context.Background()
+
+	var revokedKeys []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/agents/ag-1/keys":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":       "ak-inst1",
+				"agent_id": "ag-1",
+				"name":     "ak-inst1",
+				"token":    "tok-ak-inst1",
+			})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/agents/ag-1/keys/"):
+			keyID := strings.TrimPrefix(r.URL.Path, "/api/agents/ag-1/keys/")
+			revokedKeys = append(revokedKeys, keyID)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	t.Run("delivery acknowledged: instance 2 close does not affect instance 1", func(t *testing.T) {
+		revokedKeys = nil
+		r1 := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
+		r2 := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
+
+		var confResp1, confResp2 ephemeral.ConfigureResponse
+		r1.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp1)
+		r2.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp2)
+
+		var schemaResp ephemeral.SchemaResponse
+		r1.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
+
+		// Instance 1: Open and mint agent key
+		m1 := PaperclipAgentKeyEphemeralResourceModel{
+			AgentID:    types.StringValue("ag-1"),
+			Name:       types.StringValue("ak-inst1"),
+			Generation: types.Int64Value(1),
+		}
+		s1 := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s1.Set(ctx, &m1)
+		var openResp1 ephemeral.OpenResponse
+		priv1 := initOpenResponsePrivate(&openResp1)
+		openResp1.Result = tfsdk.EphemeralResultData{Raw: s1.Raw, Schema: schemaResp.Schema}
+		r1.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s1.Raw}}, &openResp1)
+		if openResp1.Diagnostics.HasError() {
+			t.Fatalf("instance 1 open failed: %v", openResp1.Diagnostics)
+		}
+
+		var res1 PaperclipAgentKeyEphemeralResourceModel
+		_ = openResp1.Result.Get(ctx, &res1)
+		if res1.KeyID.ValueString() != "ak-inst1" || res1.Token.ValueString() != "tok-ak-inst1" {
+			t.Fatalf("unexpected res1: %+v", res1)
+		}
+
+		// Instance 2: Generation already delivered (no mint)
+		cli.RecordDeliveredGeneration("ak-inst2", false, "ag-1", 1, "ak-prior2")
+		m2 := PaperclipAgentKeyEphemeralResourceModel{
+			AgentID:    types.StringValue("ag-1"),
+			Name:       types.StringValue("ak-inst2"),
+			Generation: types.Int64Value(1),
+		}
+		s2 := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s2.Set(ctx, &m2)
+		var openResp2 ephemeral.OpenResponse
+		priv2 := initOpenResponsePrivate(&openResp2)
+		openResp2.Result = tfsdk.EphemeralResultData{Raw: s2.Raw, Schema: schemaResp.Schema}
+		r2.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s2.Raw}}, &openResp2)
+		if openResp2.Diagnostics.HasError() {
+			t.Fatalf("instance 2 open failed: %v", openResp2.Diagnostics)
+		}
+
+		// Instance 2 Close: Private state has no key_id, must not touch instance 1's key
+		var closeReq2 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq2, priv2)
+		var closeResp2 ephemeral.CloseResponse
+		r2.Close(ctx, closeReq2, &closeResp2)
+		if closeResp2.Diagnostics.HasError() {
+			t.Fatalf("instance 2 close failed: %v", closeResp2.Diagnostics)
+		}
+
+		// Verify instance 1 key is completely intact
+		if tok, ok := cli.GetMintedToken("ak-inst1"); !ok || tok != "tok-ak-inst1" {
+			t.Fatalf("instance 1 key was affected by instance 2 close: ok=%v, tok=%v", ok, tok)
+		}
+		if len(revokedKeys) != 0 {
+			t.Fatalf("keys revoked prematurely: %v", revokedKeys)
+		}
+
+		// Instance 1 delivered and closes
+		cli.AcknowledgeKeyDelivery("ak-inst1")
+		var closeReq1 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq1, priv1)
+		var closeResp1 ephemeral.CloseResponse
+		r1.Close(ctx, closeReq1, &closeResp1)
+		if closeResp1.Diagnostics.HasError() {
+			t.Fatalf("instance 1 close failed: %v", closeResp1.Diagnostics)
+		}
+
+		// Token is cleared from cache on success, but key is NOT revoked
+		if _, ok := cli.GetMintedToken("ak-inst1"); ok {
+			t.Fatal("expected ak-inst1 token to be cleared after acknowledged close")
+		}
+		if len(revokedKeys) != 0 {
+			t.Fatalf("expected no keys revoked, got %v", revokedKeys)
+		}
+	})
+
+	t.Run("delivery failed: instance 2 close does not affect instance 1, unconfirmed instance 1 is revoked", func(t *testing.T) {
+		revokedKeys = nil
+		r1 := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
+		r2 := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
+
+		var confResp1, confResp2 ephemeral.ConfigureResponse
+		r1.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp1)
+		r2.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp2)
+
+		var schemaResp ephemeral.SchemaResponse
+		r1.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
+
+		// Instance 1: Open and mint agent key
+		m1 := PaperclipAgentKeyEphemeralResourceModel{
+			AgentID:    types.StringValue("ag-1"),
+			Name:       types.StringValue("ak-unconf1"),
+			Generation: types.Int64Value(1),
+		}
+		s1 := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s1.Set(ctx, &m1)
+		var openResp1 ephemeral.OpenResponse
+		priv1 := initOpenResponsePrivate(&openResp1)
+		openResp1.Result = tfsdk.EphemeralResultData{Raw: s1.Raw, Schema: schemaResp.Schema}
+		r1.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s1.Raw}}, &openResp1)
+		if openResp1.Diagnostics.HasError() {
+			t.Fatalf("instance 1 open failed: %v", openResp1.Diagnostics)
+		}
+
+		// Instance 2: Generation already delivered (no mint)
+		cli.RecordDeliveredGeneration("ak-inst2-unconf", false, "ag-1", 1, "ak-prior2")
+		m2 := PaperclipAgentKeyEphemeralResourceModel{
+			AgentID:    types.StringValue("ag-1"),
+			Name:       types.StringValue("ak-inst2-unconf"),
+			Generation: types.Int64Value(1),
+		}
+		s2 := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s2.Set(ctx, &m2)
+		var openResp2 ephemeral.OpenResponse
+		priv2 := initOpenResponsePrivate(&openResp2)
+		openResp2.Result = tfsdk.EphemeralResultData{Raw: s2.Raw, Schema: schemaResp.Schema}
+		r2.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s2.Raw}}, &openResp2)
+		if openResp2.Diagnostics.HasError() {
+			t.Fatalf("instance 2 open failed: %v", openResp2.Diagnostics)
+		}
+
+		// Instance 2 Close: Private state has no key_id, must not touch instance 1's key
+		var closeReq2 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq2, priv2)
+		var closeResp2 ephemeral.CloseResponse
+		r2.Close(ctx, closeReq2, &closeResp2)
+		if closeResp2.Diagnostics.HasError() {
+			t.Fatalf("instance 2 close failed: %v", closeResp2.Diagnostics)
+		}
+
+		if len(revokedKeys) != 0 {
+			t.Fatalf("instance 1 key revoked by instance 2 close: %v", revokedKeys)
+		}
+
+		// Instance 1 Close without delivery acknowledgement -> must revoke ak-inst1
+		var closeReq1 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq1, priv1)
+		var closeResp1 ephemeral.CloseResponse
+		r1.Close(ctx, closeReq1, &closeResp1)
+		if closeResp1.Diagnostics.HasError() {
+			t.Fatalf("instance 1 close failed: %v", closeResp1.Diagnostics)
+		}
+
+		if len(revokedKeys) != 1 || revokedKeys[0] != "ak-inst1" {
+			t.Fatalf("expected ak-inst1 to be revoked, got %v", revokedKeys)
+		}
+	})
+}
+
+func TestEphemeralResourcesPrivateDecodeErrors(t *testing.T) {
+	t.Setenv("PAPERCLIP_SCRATCH_DIR", t.TempDir())
+	ctx := context.Background()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	t.Run("board_key private decode errors", func(t *testing.T) {
+		r := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
+		var confResp ephemeral.ConfigureResponse
+		r.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp)
+
+		// Incompatible key_id type (number instead of string)
+		var openResp1 ephemeral.OpenResponse
+		priv1 := initOpenResponsePrivate(&openResp1)
+		_ = openResp1.Private.SetKey(ctx, "key_id", []byte("123"))
+		var closeReq1 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq1, priv1)
+		var closeResp1 ephemeral.CloseResponse
+		r.Close(ctx, closeReq1, &closeResp1)
+		if !closeResp1.Diagnostics.HasError() {
+			t.Fatal("expected error on incompatible key_id private state")
+		}
+
+		// Incompatible is_lookup type (string instead of bool)
+		var openResp2 ephemeral.OpenResponse
+		priv2 := initOpenResponsePrivate(&openResp2)
+		bValid, _ := json.Marshal("bk-test")
+		_ = openResp2.Private.SetKey(ctx, "key_id", bValid)
+		_ = openResp2.Private.SetKey(ctx, "is_lookup", []byte("\"not-a-bool\""))
+		var closeReq2 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq2, priv2)
+		var closeResp2 ephemeral.CloseResponse
+		r.Close(ctx, closeReq2, &closeResp2)
+		if !closeResp2.Diagnostics.HasError() {
+			t.Fatal("expected error on incompatible is_lookup private state")
+		}
+	})
+
+	t.Run("agent_key private decode errors", func(t *testing.T) {
+		r := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
+		var confResp ephemeral.ConfigureResponse
+		r.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp)
+
+		// Incompatible key_id type (number instead of string)
+		var openResp1 ephemeral.OpenResponse
+		priv1 := initOpenResponsePrivate(&openResp1)
+		_ = openResp1.Private.SetKey(ctx, "key_id", []byte("123"))
+		var closeReq1 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq1, priv1)
+		var closeResp1 ephemeral.CloseResponse
+		r.Close(ctx, closeReq1, &closeResp1)
+		if !closeResp1.Diagnostics.HasError() {
+			t.Fatal("expected error on incompatible key_id private state")
+		}
+
+		// Incompatible is_lookup type (string instead of bool)
+		var openResp2 ephemeral.OpenResponse
+		priv2 := initOpenResponsePrivate(&openResp2)
+		bValid, _ := json.Marshal("ak-test")
+		_ = openResp2.Private.SetKey(ctx, "key_id", bValid)
+		_ = openResp2.Private.SetKey(ctx, "is_lookup", []byte("\"not-a-bool\""))
+		var closeReq2 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq2, priv2)
+		var closeResp2 ephemeral.CloseResponse
+		r.Close(ctx, closeReq2, &closeResp2)
+		if !closeResp2.Diagnostics.HasError() {
+			t.Fatal("expected error on incompatible is_lookup private state")
+		}
+
+		// Incompatible agent_id type (number instead of string)
+		var openResp3 ephemeral.OpenResponse
+		priv3 := initOpenResponsePrivate(&openResp3)
+		_ = openResp3.Private.SetKey(ctx, "key_id", bValid)
+		bLookup, _ := json.Marshal(false)
+		_ = openResp3.Private.SetKey(ctx, "is_lookup", bLookup)
+		_ = openResp3.Private.SetKey(ctx, "agent_id", []byte("123"))
+		var closeReq3 ephemeral.CloseRequest
+		initCloseRequestPrivate(&closeReq3, priv3)
+		var closeResp3 ephemeral.CloseResponse
+		r.Close(ctx, closeReq3, &closeResp3)
+		if !closeResp3.Diagnostics.HasError() {
+			t.Fatal("expected error on incompatible agent_id private state")
+		}
+	})
+}
+
 
 

@@ -1137,6 +1137,7 @@ func TestPaperclipBoardKeyEphemeralResource(t *testing.T) {
 
 	var opened ephemeral.OpenResponse
 	opened.Result = tfsdk.EphemeralResultData{Raw: tmpState.Raw, Schema: schemaResp.Schema}
+	priv := initOpenResponsePrivate(&opened)
 	r.Open(ctx, request, &opened)
 	if opened.Diagnostics.HasError() {
 		t.Fatalf("open failed: %v", opened.Diagnostics)
@@ -1150,8 +1151,10 @@ func TestPaperclipBoardKeyEphemeralResource(t *testing.T) {
 	}
 
 	// Close marks delivery and revokes superseded key
+	var closeReq ephemeral.CloseRequest
+	initCloseRequestPrivate(&closeReq, priv)
 	var closeResp ephemeral.CloseResponse
-	r.Close(ctx, ephemeral.CloseRequest{}, &closeResp)
+	r.Close(ctx, closeReq, &closeResp)
 	if closeResp.Diagnostics.HasError() {
 		t.Fatalf("close failed: %v", closeResp.Diagnostics)
 	}
@@ -1240,6 +1243,7 @@ func TestPaperclipAgentKeyEphemeralResource(t *testing.T) {
 	cli.RegisterMintedToken("key-1", "pcp_agent_value")
 
 	opened := newResponse()
+	priv := initOpenResponsePrivate(&opened)
 	r.Open(ctx, request, &opened)
 	if opened.Diagnostics.HasError() {
 		t.Fatalf("open failed: %v", opened.Diagnostics)
@@ -1253,8 +1257,10 @@ func TestPaperclipAgentKeyEphemeralResource(t *testing.T) {
 	}
 
 	// Close marks delivery and revokes superseded key
+	var closeReq ephemeral.CloseRequest
+	initCloseRequestPrivate(&closeReq, priv)
 	var closeResp ephemeral.CloseResponse
-	r.Close(ctx, ephemeral.CloseRequest{}, &closeResp)
+	r.Close(ctx, closeReq, &closeResp)
 	if closeResp.Diagnostics.HasError() {
 		t.Fatalf("close failed: %v", closeResp.Diagnostics)
 	}
