@@ -2398,6 +2398,11 @@ func TestPaperclipSecretOutOfBandRotationDrift(t *testing.T) {
 	if !cResp.Diagnostics.HasError() {
 		t.Fatal("expected create to fail when configured latest_version does not match initial version")
 	}
+	var createdState PaperclipSecretResourceModel
+	_ = cResp.State.Get(ctx, &createdState)
+	if createdState.ID.ValueString() != "sec-created" {
+		t.Fatalf("expected created secret ID 'sec-created' in resp.State to prevent orphaning, got: %v", createdState.ID)
+	}
 	foundCreateMismatch := false
 	for _, diag := range cResp.Diagnostics.Errors() {
 		if diag.Summary() == "Secret Version Mismatch" && strings.Contains(diag.Detail(), "after creation") {

@@ -470,6 +470,13 @@ func (r *PaperclipSecretResource) Create(ctx context.Context, req resource.Creat
 		secret = updated
 	}
 
+	normalizePaperclipSecretState(&plan, secret)
+	if plan.Rotation.IsUnknown() {
+		plan.Rotation = types.StringNull()
+	}
+
+	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+
 	if !config.LatestVersion.IsNull() && !config.LatestVersion.IsUnknown() && config.LatestVersion.ValueInt64() != secret.LatestVersion {
 		resp.Diagnostics.AddError(
 			"Secret Version Mismatch",
@@ -478,13 +485,6 @@ func (r *PaperclipSecretResource) Create(ctx context.Context, req resource.Creat
 		)
 		return
 	}
-
-	normalizePaperclipSecretState(&plan, secret)
-	if plan.Rotation.IsUnknown() {
-		plan.Rotation = types.StringNull()
-	}
-
-	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 func (r *PaperclipSecretResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
