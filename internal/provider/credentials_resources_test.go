@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -3037,6 +3038,262 @@ func TestEphemeralResourcesPrivateDecodeErrors(t *testing.T) {
 		r.Close(ctx, closeReq3, &closeResp3)
 		if !closeResp3.Diagnostics.HasError() {
 			t.Fatal("expected error on incompatible agent_id private state")
+		}
+	})
+}
+
+type mockPrivateStateSetter struct {
+	diags diag.Diagnostics
+}
+
+func (m *mockPrivateStateSetter) SetKey(ctx context.Context, key string, val []byte) diag.Diagnostics {
+	return m.diags
+}
+
+type mockPrivateStateGetter struct {
+	data  []byte
+	diags diag.Diagnostics
+}
+
+func (m *mockPrivateStateGetter) GetKey(ctx context.Context, key string) ([]byte, diag.Diagnostics) {
+	return m.data, m.diags
+}
+
+func TestPrivateStateHelpers(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("setPrivateStateKey", func(t *testing.T) {
+		var diags diag.Diagnostics
+		setPrivateStateKey(ctx, nil, "key", "val", &diags)
+		if diags.HasError() {
+			t.Fatal("expected no error for nil private setter")
+		}
+
+		origMarshal := jsonMarshal
+		defer func() { jsonMarshal = origMarshal }()
+		jsonMarshal = func(v any) ([]byte, error) {
+			return nil, fmt.Errorf("injected marshal error")
+		}
+		setter := &mockPrivateStateSetter{}
+		setPrivateStateKey(ctx, setter, "key", "val", &diags)
+		if !diags.HasError() {
+			t.Fatal("expected error on marshal failure")
+		}
+
+		jsonMarshal = origMarshal
+		diags = nil
+		failingSetter := &mockPrivateStateSetter{
+			diags: diag.Diagnostics{diag.NewErrorDiagnostic("SetKey error", "disk full")},
+		}
+		setPrivateStateKey(ctx, failingSetter, "key", "val", &diags)
+		if !diags.HasError() {
+			t.Fatal("expected error from failing SetKey")
+		}
+	})
+
+	t.Run("getPrivateStateKey", func(t *testing.T) {
+		var diags diag.Diagnostics
+		var val string
+		getPrivateStateKey(ctx, nil, "key", &val, &diags)
+		if diags.HasError() {
+			t.Fatal("expected no error for nil private getter")
+		}
+
+		getterWithDiags := &mockPrivateStateGetter{
+			diags: diag.Diagnostics{diag.NewErrorDiagnostic("GetKey error", "read error")},
+		}
+		getPrivateStateKey(ctx, getterWithDiags, "key", &val, &diags)
+		if !diags.HasError() {
+			t.Fatal("expected error from failing GetKey")
+		}
+
+		diags = nil
+		getterEmpty := &mockPrivateStateGetter{data: []byte{}}
+		getPrivateStateKey(ctx, getterEmpty, "key", &val, &diags)
+		if diags.HasError() {
+			t.Fatal("expected no error on empty data")
+		}
+
+		diags = nil
+		getterBadJSON := &mockPrivateStateGetter{data: []byte("not-json{")}
+		getPrivateStateKey(ctx, getterBadJSON, "key", &val, &diags)
+		if !diags.HasError() {
+			t.Fatal("expected error on unmarshal failure")
+		}
+
+		diags = nil
+		getterOK := &mockPrivateStateGetter{data: []byte(`"good"`)}
+		getPrivateStateKey(ctx, getterOK, "key", &val, &diags)
+		if diags.HasError() || val != "good" {
+			t.Fatalf("expected good value, got %s (diags=%v)", val, diags)
+		}
+	})
+}
+
+func TestEphemeralOpenPrivateWriteFailure(t *testing.T) {
+	t.Setenv("PAPERCLIP_SCRATCH_DIR", t.TempDir())
+	ctx := context.Background()
+
+	var revokedBoardKeys []string
+	var revokedAgentKeys []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/board-api-keys":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":    "bk-fail-pw",
+				"name":  "bk-fail-pw",
+				"token": "tok-fail-pw",
+			})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/board-api-keys/"):
+			keyID := strings.TrimPrefix(r.URL.Path, "/api/board-api-keys/")
+			revokedBoardKeys = append(revokedBoardKeys, keyID)
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/agents/ag-pw/keys":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"id":       "ak-fail-pw",
+				"agent_id": "ag-pw",
+				"name":     "ak-fail-pw",
+				"token":    "tok-ak-fail-pw",
+			})
+		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/agents/ag-pw/keys/"):
+			keyID := strings.TrimPrefix(r.URL.Path, "/api/agents/ag-pw/keys/")
+			revokedAgentKeys = append(revokedAgentKeys, keyID)
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cli, err := client.NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatalf("failed to create client: %v", err)
+	}
+
+	t.Run("board_key mint private write failure revokes key and surfaces error", func(t *testing.T) {
+		r := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
+		var confResp ephemeral.ConfigureResponse
+		r.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp)
+		var schemaResp ephemeral.SchemaResponse
+		r.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
+
+		origMarshal := jsonMarshal
+		defer func() { jsonMarshal = origMarshal }()
+		// Inject invalid JSON to cause SetKey validation failure
+		jsonMarshal = func(v any) ([]byte, error) {
+			return []byte("invalid-json{"), nil
+		}
+
+		m := PaperclipBoardKeyEphemeralResourceModel{
+			Name:       types.StringValue("bk-fail-pw"),
+			Generation: types.Int64Value(1),
+		}
+		s := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s.Set(ctx, &m)
+		var openResp ephemeral.OpenResponse
+		initOpenResponsePrivate(&openResp)
+		openResp.Result = tfsdk.EphemeralResultData{Raw: s.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s.Raw}}, &openResp)
+		if !openResp.Diagnostics.HasError() {
+			t.Fatal("expected error on failed private state write during board key Open")
+		}
+		if len(revokedBoardKeys) != 1 || revokedBoardKeys[0] != "bk-fail-pw" {
+			t.Fatalf("expected bk-fail-pw to be revoked on private write failure, got %v", revokedBoardKeys)
+		}
+		if _, ok := cli.GetMintedToken("bk-fail-pw"); ok {
+			t.Fatal("expected bk-fail-pw token to be cleared after failed private write")
+		}
+	})
+
+	t.Run("board_key lookup private write failure surfaces error", func(t *testing.T) {
+		r := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
+		var confResp ephemeral.ConfigureResponse
+		r.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp)
+		var schemaResp ephemeral.SchemaResponse
+		r.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
+
+		cli.RegisterMintedToken("bk-lookup-fail", "tok-lookup")
+		origMarshal := jsonMarshal
+		defer func() { jsonMarshal = origMarshal }()
+		jsonMarshal = func(v any) ([]byte, error) {
+			return []byte("invalid-json{"), nil
+		}
+
+		m := PaperclipBoardKeyEphemeralResourceModel{
+			KeyID: types.StringValue("bk-lookup-fail"),
+		}
+		s := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s.Set(ctx, &m)
+		var openResp ephemeral.OpenResponse
+		initOpenResponsePrivate(&openResp)
+		openResp.Result = tfsdk.EphemeralResultData{Raw: s.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s.Raw}}, &openResp)
+		if !openResp.Diagnostics.HasError() {
+			t.Fatal("expected error on failed private state write during board key lookup Open")
+		}
+	})
+
+	t.Run("agent_key mint private write failure revokes key and surfaces error", func(t *testing.T) {
+		r := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
+		var confResp ephemeral.ConfigureResponse
+		r.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp)
+		var schemaResp ephemeral.SchemaResponse
+		r.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
+
+		origMarshal := jsonMarshal
+		defer func() { jsonMarshal = origMarshal }()
+		jsonMarshal = func(v any) ([]byte, error) {
+			return []byte("invalid-json{"), nil
+		}
+
+		m := PaperclipAgentKeyEphemeralResourceModel{
+			AgentID:    types.StringValue("ag-pw"),
+			Name:       types.StringValue("ak-fail-pw"),
+			Generation: types.Int64Value(1),
+		}
+		s := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s.Set(ctx, &m)
+		var openResp ephemeral.OpenResponse
+		initOpenResponsePrivate(&openResp)
+		openResp.Result = tfsdk.EphemeralResultData{Raw: s.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s.Raw}}, &openResp)
+		if !openResp.Diagnostics.HasError() {
+			t.Fatal("expected error on failed private state write during agent key Open")
+		}
+		if len(revokedAgentKeys) != 1 || revokedAgentKeys[0] != "ak-fail-pw" {
+			t.Fatalf("expected ak-fail-pw to be revoked on private write failure, got %v", revokedAgentKeys)
+		}
+		if _, ok := cli.GetMintedToken("ak-fail-pw"); ok {
+			t.Fatal("expected ak-fail-pw token to be cleared after failed private write")
+		}
+	})
+
+	t.Run("agent_key lookup private write failure surfaces error", func(t *testing.T) {
+		r := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
+		var confResp ephemeral.ConfigureResponse
+		r.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp)
+		var schemaResp ephemeral.SchemaResponse
+		r.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
+
+		cli.RegisterMintedAgentKey("ag-pw", "ak-lookup-fail", "tok-lookup")
+		origMarshal := jsonMarshal
+		defer func() { jsonMarshal = origMarshal }()
+		jsonMarshal = func(v any) ([]byte, error) {
+			return []byte("invalid-json{"), nil
+		}
+
+		m := PaperclipAgentKeyEphemeralResourceModel{
+			KeyID: types.StringValue("ak-lookup-fail"),
+		}
+		s := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s.Set(ctx, &m)
+		var openResp ephemeral.OpenResponse
+		initOpenResponsePrivate(&openResp)
+		openResp.Result = tfsdk.EphemeralResultData{Raw: s.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s.Raw}}, &openResp)
+		if !openResp.Diagnostics.HasError() {
+			t.Fatal("expected error on failed private state write during agent key lookup Open")
 		}
 	})
 }

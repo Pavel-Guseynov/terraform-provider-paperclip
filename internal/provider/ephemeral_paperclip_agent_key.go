@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
@@ -182,13 +181,13 @@ func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephem
 		}
 		data.Token = types.StringValue(token)
 		if resp.Private != nil {
-			keyBytes, _ := json.Marshal(keyID)
-			resp.Private.SetKey(ctx, "key_id", keyBytes)
-			lookupBytes, _ := json.Marshal(true)
-			resp.Private.SetKey(ctx, "is_lookup", lookupBytes)
+			setPrivateStateKey(ctx, resp.Private, "key_id", keyID, &resp.Diagnostics)
+			setPrivateStateKey(ctx, resp.Private, "is_lookup", true, &resp.Diagnostics)
 			if aID, ok := r.client.GetAgentIDForKey(keyID); ok && aID != "" {
-				agentBytes, _ := json.Marshal(aID)
-				resp.Private.SetKey(ctx, "agent_id", agentBytes)
+				setPrivateStateKey(ctx, resp.Private, "agent_id", aID, &resp.Diagnostics)
+			}
+			if resp.Diagnostics.HasError() {
+				return
 			}
 		}
 		resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
@@ -243,10 +242,15 @@ func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephem
 	data.Token = types.StringValue(newKey.Token)
 
 	if resp.Private != nil {
-		keyBytes, _ := json.Marshal(newKey.ID)
-		resp.Private.SetKey(ctx, "key_id", keyBytes)
-		agentBytes, _ := json.Marshal(agentID)
-		resp.Private.SetKey(ctx, "agent_id", agentBytes)
+		setPrivateStateKey(ctx, resp.Private, "key_id", newKey.ID, &resp.Diagnostics)
+		setPrivateStateKey(ctx, resp.Private, "agent_id", agentID, &resp.Diagnostics)
+		if resp.Diagnostics.HasError() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = r.client.RevokeAgentKey(cleanupCtx, agentID, newKey.ID)
+			r.client.ClearMintedToken(newKey.ID)
+			return
+		}
 	}
 
 	resp.Diagnostics.Append(resp.Result.Set(ctx, &data)...)
@@ -259,31 +263,10 @@ func (r *PaperclipAgentKeyEphemeralResource) Close(ctx context.Context, req ephe
 	var keyID string
 	var agentID string
 	var isLookup bool
-	keyIDBytes, _ := req.Private.GetKey(ctx, "key_id")
-	if len(keyIDBytes) > 0 {
-		if err := json.Unmarshal(keyIDBytes, &keyID); err != nil {
-			resp.Diagnostics.AddError("Error decoding private state key_id", err.Error())
-			return
-		}
-	}
-
-	lookupBytes, _ := req.Private.GetKey(ctx, "is_lookup")
-	if len(lookupBytes) > 0 {
-		if err := json.Unmarshal(lookupBytes, &isLookup); err != nil {
-			resp.Diagnostics.AddError("Error decoding private state is_lookup", err.Error())
-			return
-		}
-	}
-
-	agentIDBytes, _ := req.Private.GetKey(ctx, "agent_id")
-	if len(agentIDBytes) > 0 {
-		if err := json.Unmarshal(agentIDBytes, &agentID); err != nil {
-			resp.Diagnostics.AddError("Error decoding private state agent_id", err.Error())
-			return
-		}
-	}
-
-	if keyID == "" {
+	getPrivateStateKey(ctx, req.Private, "key_id", &keyID, &resp.Diagnostics)
+	getPrivateStateKey(ctx, req.Private, "is_lookup", &isLookup, &resp.Diagnostics)
+	getPrivateStateKey(ctx, req.Private, "agent_id", &agentID, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() || keyID == "" {
 		return
 	}
 	if agentID == "" {
