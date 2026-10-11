@@ -385,8 +385,14 @@ func (r *PaperclipBoardKeyEphemeralResource) Open(ctx context.Context, req ephem
 		if resp.Diagnostics.HasError() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_ = r.client.RevokeBoardKey(cleanupCtx, newKey.ID)
-			r.client.ClearMintedToken(newKey.ID)
+			if err := r.client.RevokeBoardKey(cleanupCtx, newKey.ID); err != nil {
+				resp.Diagnostics.AddError(
+					"Failed to revoke unconfirmed board key after private state failure",
+					fmt.Sprintf("Failed to revoke unconfirmed board key %s: %s", newKey.ID, err.Error()),
+				)
+			} else {
+				r.client.ClearMintedToken(newKey.ID)
+			}
 			return
 		}
 	}

@@ -247,8 +247,14 @@ func (r *PaperclipAgentKeyEphemeralResource) Open(ctx context.Context, req ephem
 		if resp.Diagnostics.HasError() {
 			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			_ = r.client.RevokeAgentKey(cleanupCtx, agentID, newKey.ID)
-			r.client.ClearMintedToken(newKey.ID)
+			if err := r.client.RevokeAgentKey(cleanupCtx, agentID, newKey.ID); err != nil {
+				resp.Diagnostics.AddError(
+					"Failed to revoke unconfirmed agent key after private state failure",
+					fmt.Sprintf("Failed to revoke unconfirmed agent key %s: %s", newKey.ID, err.Error()),
+				)
+			} else {
+				r.client.ClearMintedToken(newKey.ID)
+			}
 			return
 		}
 	}

@@ -3136,6 +3136,7 @@ func TestEphemeralOpenPrivateWriteFailure(t *testing.T) {
 
 	var revokedBoardKeys []string
 	var revokedAgentKeys []string
+	var failRevoke bool
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
@@ -3147,6 +3148,11 @@ func TestEphemeralOpenPrivateWriteFailure(t *testing.T) {
 			})
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/board-api-keys/"):
 			keyID := strings.TrimPrefix(r.URL.Path, "/api/board-api-keys/")
+			if failRevoke {
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "simulated revoke board key failure"})
+				return
+			}
 			revokedBoardKeys = append(revokedBoardKeys, keyID)
 			w.WriteHeader(http.StatusNoContent)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/agents/ag-pw/keys":
@@ -3158,6 +3164,11 @@ func TestEphemeralOpenPrivateWriteFailure(t *testing.T) {
 			})
 		case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/agents/ag-pw/keys/"):
 			keyID := strings.TrimPrefix(r.URL.Path, "/api/agents/ag-pw/keys/")
+			if failRevoke {
+				w.WriteHeader(http.StatusInternalServerError)
+				_ = json.NewEncoder(w).Encode(map[string]string{"error": "simulated revoke agent key failure"})
+				return
+			}
 			revokedAgentKeys = append(revokedAgentKeys, keyID)
 			w.WriteHeader(http.StatusNoContent)
 		default:
@@ -3294,6 +3305,95 @@ func TestEphemeralOpenPrivateWriteFailure(t *testing.T) {
 		r.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s.Raw}}, &openResp)
 		if !openResp.Diagnostics.HasError() {
 			t.Fatal("expected error on failed private state write during agent key lookup Open")
+		}
+	})
+
+	t.Run("board_key mint private write failure and revoke failure surfaces both errors and keeps record", func(t *testing.T) {
+		r := NewPaperclipBoardKeyEphemeralResource().(*PaperclipBoardKeyEphemeralResource)
+		var confResp ephemeral.ConfigureResponse
+		r.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp)
+		var schemaResp ephemeral.SchemaResponse
+		r.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
+
+		failRevoke = true
+		defer func() { failRevoke = false }()
+
+		origMarshal := jsonMarshal
+		defer func() { jsonMarshal = origMarshal }()
+		jsonMarshal = func(v any) ([]byte, error) {
+			return []byte("invalid-json{"), nil
+		}
+
+		m := PaperclipBoardKeyEphemeralResourceModel{
+			Name:       types.StringValue("bk-fail-pw"),
+			Generation: types.Int64Value(1),
+		}
+		s := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s.Set(ctx, &m)
+		var openResp ephemeral.OpenResponse
+		initOpenResponsePrivate(&openResp)
+		openResp.Result = tfsdk.EphemeralResultData{Raw: s.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s.Raw}}, &openResp)
+		if !openResp.Diagnostics.HasError() {
+			t.Fatal("expected error on failed private state write during board key Open")
+		}
+		var foundRevokeErr bool
+		for _, d := range openResp.Diagnostics.Errors() {
+			if strings.Contains(d.Summary(), "Failed to revoke unconfirmed board key") && strings.Contains(d.Detail(), "bk-fail-pw") {
+				foundRevokeErr = true
+				break
+			}
+		}
+		if !foundRevokeErr {
+			t.Fatalf("expected revoke error naming key_id in diagnostics, got: %v", openResp.Diagnostics)
+		}
+		if _, ok := cli.GetMintedToken("bk-fail-pw"); !ok {
+			t.Fatal("expected bk-fail-pw token record to be kept when revoke fails")
+		}
+	})
+
+	t.Run("agent_key mint private write failure and revoke failure surfaces both errors and keeps record", func(t *testing.T) {
+		r := NewPaperclipAgentKeyEphemeralResource().(*PaperclipAgentKeyEphemeralResource)
+		var confResp ephemeral.ConfigureResponse
+		r.Configure(ctx, ephemeral.ConfigureRequest{ProviderData: cli}, &confResp)
+		var schemaResp ephemeral.SchemaResponse
+		r.Schema(ctx, ephemeral.SchemaRequest{}, &schemaResp)
+
+		failRevoke = true
+		defer func() { failRevoke = false }()
+
+		origMarshal := jsonMarshal
+		defer func() { jsonMarshal = origMarshal }()
+		jsonMarshal = func(v any) ([]byte, error) {
+			return []byte("invalid-json{"), nil
+		}
+
+		m := PaperclipAgentKeyEphemeralResourceModel{
+			AgentID:    types.StringValue("ag-pw"),
+			Name:       types.StringValue("ak-fail-pw"),
+			Generation: types.Int64Value(1),
+		}
+		s := tfsdk.State{Schema: schemaResp.Schema}
+		_ = s.Set(ctx, &m)
+		var openResp ephemeral.OpenResponse
+		initOpenResponsePrivate(&openResp)
+		openResp.Result = tfsdk.EphemeralResultData{Raw: s.Raw, Schema: schemaResp.Schema}
+		r.Open(ctx, ephemeral.OpenRequest{Config: tfsdk.Config{Schema: schemaResp.Schema, Raw: s.Raw}}, &openResp)
+		if !openResp.Diagnostics.HasError() {
+			t.Fatal("expected error on failed private state write during agent key Open")
+		}
+		var foundRevokeErr bool
+		for _, d := range openResp.Diagnostics.Errors() {
+			if strings.Contains(d.Summary(), "Failed to revoke unconfirmed agent key") && strings.Contains(d.Detail(), "ak-fail-pw") {
+				foundRevokeErr = true
+				break
+			}
+		}
+		if !foundRevokeErr {
+			t.Fatalf("expected revoke error naming key_id in diagnostics, got: %v", openResp.Diagnostics)
+		}
+		if _, ok := cli.GetMintedToken("ak-fail-pw"); !ok {
+			t.Fatal("expected ak-fail-pw token record to be kept when revoke fails")
 		}
 	})
 }
