@@ -30,6 +30,12 @@ func TestClientBoardKeyMethods(t *testing.T) {
 				return
 			}
 			if body["name"] == "minimal" {
+				// No expiry requested: the field must be an explicit null so Paperclip
+				// mints a key that never expires instead of applying its 30-day default.
+				if value, present := body["expiresAt"]; !present || value != nil {
+					http.Error(w, "expiresAt must be an explicit null", http.StatusBadRequest)
+					return
+				}
 				w.Header().Set("Content-Type", "application/json")
 				_ = json.NewEncoder(w).Encode(PaperclipBoardKey{
 					ID:    "bk-min",
@@ -38,7 +44,8 @@ func TestClientBoardKeyMethods(t *testing.T) {
 				})
 				return
 			}
-			if body["name"] != "test-board-key" || body["requestedCompanyId"] != "comp-1" {
+			if body["name"] != "test-board-key" || body["requestedCompanyId"] != "comp-1" ||
+				body["expiresAt"] != exp.Format(time.RFC3339) {
 				http.Error(w, "invalid payload", http.StatusBadRequest)
 				return
 			}

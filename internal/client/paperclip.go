@@ -1034,14 +1034,16 @@ func (c *Client) paperclipSecretRequest(ctx context.Context, method, path string
 }
 
 // CreateBoardKey mints a Paperclip board API key. When authenticated (c.Token != ""),
-// it calls the native POST /api/board-api-keys endpoint with optional expiry and
-// company scope, never attempting to self-approve a CLI challenge. In unauthenticated
-// local_trusted mode, it uses the local CLI auth challenge flow; outside local_trusted,
-// challenge self-approval is rejected.
+// it calls the native POST /api/board-api-keys endpoint with company scope and an
+// expiry: a nil expiresAt is sent as an explicit null, which Paperclip stores as a
+// key that never expires, while an omitted field would get Paperclip's 30-day
+// default. In unauthenticated local_trusted mode, it uses the local CLI auth
+// challenge flow; outside local_trusted, challenge self-approval is rejected.
 func (c *Client) CreateBoardKey(ctx context.Context, name string, expiresAt *time.Time, requestedCompanyID string) (*PaperclipBoardKey, error) {
 	if c.Token != "" {
 		payload := map[string]interface{}{
-			"name": name,
+			"name":      name,
+			"expiresAt": nil,
 		}
 		if expiresAt != nil {
 			payload["expiresAt"] = expiresAt.Format(time.RFC3339)
