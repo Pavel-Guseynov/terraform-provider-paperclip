@@ -755,9 +755,10 @@ func TestPolicyAndSecretAndConnectionEdgeCases(t *testing.T) {
 	// Invalid config JSON
 	planBadConfig := tfsdk.Plan{Schema: connSchemaResp.Schema}
 	_ = planBadConfig.Set(ctx, &PaperclipConnectionResourceModel{
-		CompanyID: types.StringValue("comp-1"),
-		Name:      types.StringValue("c1"),
-		Config:    types.StringValue("invalid json"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("c1"),
+		Config:               types.StringValue("invalid json"),
 	})
 	var createBadConfigResp resource.CreateResponse
 	rConn.Create(ctx, resource.CreateRequest{Plan: planBadConfig}, &createBadConfigResp)
@@ -768,9 +769,10 @@ func TestPolicyAndSecretAndConnectionEdgeCases(t *testing.T) {
 	// Invalid credential_refs JSON
 	planBadRefs := tfsdk.Plan{Schema: connSchemaResp.Schema}
 	_ = planBadRefs.Set(ctx, &PaperclipConnectionResourceModel{
-		CompanyID:      types.StringValue("comp-1"),
-		Name:           types.StringValue("c1"),
-		CredentialRefs: types.StringValue("invalid json"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("c1"),
+		CredentialRefs:       types.StringValue("invalid json"),
 	})
 	var createBadRefsResp resource.CreateResponse
 	rConn.Create(ctx, resource.CreateRequest{Plan: planBadRefs}, &createBadRefsResp)
@@ -781,8 +783,9 @@ func TestPolicyAndSecretAndConnectionEdgeCases(t *testing.T) {
 	// Missing app_id when gallery_key is empty
 	planMissingApp := tfsdk.Plan{Schema: connSchemaResp.Schema}
 	_ = planMissingApp.Set(ctx, &PaperclipConnectionResourceModel{
-		CompanyID: types.StringValue("comp-1"),
-		Name:      types.StringValue("c1"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("c1"),
 	})
 	var createMissingAppResp resource.CreateResponse
 	rConn.Create(ctx, resource.CreateRequest{Plan: planMissingApp}, &createMissingAppResp)

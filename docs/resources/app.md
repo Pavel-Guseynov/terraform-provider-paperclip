@@ -27,13 +27,17 @@ resource "paperclip_app" "gitea" {
 
 - `company_id` (String) The Paperclip company ID.
 - `name` (String) Application name (e.g. acme.mcp.openobserve).
-- `type` (String) Application type, one of: mcp_http, mcp_stdio. Changing this forces replacement, because the type defines which connection and template shapes hang off the application.
+- `type` (String) Application type, one of: mcp_http, mcp_stdio, paperclip_plugin, a2a, chat. The native update API cannot change type; changes are rejected without replacing identity.
 
 ### Optional
 
 - `application_key` (String) Optional stable Paperclip application key.
 - `description` (String) Optional application description.
 - `metadata` (String) Optional JSON metadata object for the application.
+- `owner_agent_id` (String) Same-company owner agent ID. Clearing is unsupported by the native API and rejected.
+- `owner_user_id` (String) Owner user ID. Clearing is unsupported by the native API and rejected.
+- `plugin_id` (String) Owning plugin ID. The native API cannot clear a configured owner; clearing is rejected before mutation.
+- `status` (String) Native status: active, draft or disabled. Defaults to active on native creation; omission retains the current status. Destroy archives the application.
 
 ### Read-Only
 

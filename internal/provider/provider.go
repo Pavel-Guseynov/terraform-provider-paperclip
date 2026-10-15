@@ -439,7 +439,6 @@ func (r *PaperclipBoardKeyEphemeralResource) Close(ctx context.Context, req ephe
 	r.client.ClearMintedToken(keyID)
 }
 
-
 func (p *PaperclipProvider) EphemeralResources(ctx context.Context) []func() ephemeral.EphemeralResource {
 	return []func() ephemeral.EphemeralResource{
 		NewPaperclipBoardKeyEphemeralResource,
@@ -464,6 +463,7 @@ func (p *PaperclipProvider) Resources(ctx context.Context) []func() resource.Res
 		NewPaperclipPolicyResource,
 		NewPaperclipStdioTemplateResource,
 		NewPaperclipConnectionInstallResource,
+		NewPaperclipConnectionGrantsResource,
 		NewPaperclipAppPermissionResource,
 		NewPaperclipSkillAssignmentResource,
 		NewPaperclipSkillPolicyResource,

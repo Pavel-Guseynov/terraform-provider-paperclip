@@ -1040,8 +1040,8 @@ func TestProviderStructure(t *testing.T) {
 	}
 
 	res := p.Resources(ctx)
-	if len(res) != 33 {
-		t.Fatalf("expected exactly 33 resources, got %d", len(res))
+	if len(res) != 34 {
+		t.Fatalf("expected exactly 34 resources, got %d", len(res))
 	}
 	for _, rFn := range res {
 		r := rFn()
@@ -1324,7 +1324,8 @@ func TestPaperclipCustomConnectionRequiresExistingApplication(t *testing.T) {
 	var createReq resource.CreateRequest
 	createReq.Plan = tfsdk.Plan{Schema: connSchema}
 	createReq.Plan.Set(ctx, &PaperclipConnectionResourceModel{
-		CompanyID: types.StringValue("comp-1"), AppID: types.StringNull(), Name: types.StringValue("custom"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"), AppID: types.StringNull(), Name: types.StringValue("custom"),
 		Transport: types.StringValue("mcp_remote"), AuthKind: types.StringValue("none"),
 		Config: types.StringValue(`{"url":"https://example.test/mcp"}`), CredentialRefs: types.StringUnknown(),
 	})
@@ -1367,7 +1368,8 @@ func TestPaperclipGalleryConnectionIsConnectedAndAdoptedBySource(t *testing.T) {
 	var createReq resource.CreateRequest
 	createReq.Plan = tfsdk.Plan{Schema: connSchema}
 	createReq.Plan.Set(ctx, &PaperclipConnectionResourceModel{
-		CompanyID: types.StringValue("comp-1"), AppID: types.StringUnknown(), Name: types.StringUnknown(),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"), AppID: types.StringUnknown(), Name: types.StringUnknown(),
 		Transport: types.StringValue("mcp_remote"), AuthKind: types.StringValue("oauth"),
 		Config: types.StringUnknown(), CredentialRefs: types.StringUnknown(),
 		CredentialPolicy: types.StringValue("shared"), GalleryKey: types.StringValue("hugging-face"),
@@ -1390,7 +1392,8 @@ func TestPaperclipGalleryConnectionIsConnectedAndAdoptedBySource(t *testing.T) {
 	// An adopted gallery connection reads its declared gallery key back.
 	imported := tfsdk.State{Schema: connSchema}
 	imported.Set(ctx, &PaperclipConnectionResourceModel{
-		ID: types.StringValue("conn-gallery"), CompanyID: types.StringValue("comp-1"), AppID: types.StringNull(),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		ID:                   types.StringValue("conn-gallery"), CompanyID: types.StringValue("comp-1"), AppID: types.StringNull(),
 		Name: types.StringNull(), Transport: types.StringNull(), AuthKind: types.StringNull(), Config: types.StringNull(),
 		CredentialRefs: types.StringNull(), CredentialPolicy: types.StringNull(), GalleryKey: types.StringNull(),
 	})
@@ -1807,7 +1810,7 @@ func TestPaperclipResourceStateRefreshesExactRemoteState(t *testing.T) {
 		ID:             "app-1",
 		Name:           "committer",
 		ApplicationKey: "app-key",
-		Description:    "app-desc",
+		Description:    new("app-desc"),
 		Metadata:       map[string]interface{}{"managed": true},
 	})
 	if appStateWithRemote.ApplicationKey.ValueString() != "app-key" || appStateWithRemote.Description.ValueString() != "app-desc" || appStateWithRemote.Metadata.IsNull() {
@@ -1841,7 +1844,7 @@ func TestApplicationCRUDRefreshesRemoteKey(t *testing.T) {
 			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 				t.Fatalf("decode application request: %v", err)
 			}
-			if body.ApplicationKey != "harness.mcp.gitea-committer" {
+			if req.Method == http.MethodPost && body.ApplicationKey != "harness.mcp.gitea-committer" {
 				t.Fatalf("configured application key was not sent to Paperclip: %#v", body)
 			}
 		}
@@ -1966,8 +1969,8 @@ func TestPaperclipAppSchema(t *testing.T) {
 	if len(attr.Validators) == 0 {
 		t.Fatalf("type attribute must carry the allowed-value validator")
 	}
-	if len(attr.PlanModifiers) == 0 {
-		t.Fatalf("type attribute must require replacement on change")
+	if len(attr.PlanModifiers) != 0 {
+		t.Fatalf("unsupported type transitions must fail without replacement")
 	}
 }
 
@@ -2111,10 +2114,11 @@ func TestPaperclipAppLifecycle(t *testing.T) {
 
 	// 3. Update
 	updatedPlan := PaperclipAppResourceModel{
-		ID:        types.StringValue("app-456"),
-		CompanyID: types.StringValue("comp-1"),
-		Name:      types.StringValue("harness.mcp.gitea-committer-renamed"),
-		Type:      types.StringValue("mcp_http"),
+		ID:             types.StringValue("app-456"),
+		CompanyID:      types.StringValue("comp-1"),
+		Name:           types.StringValue("harness.mcp.gitea-committer-renamed"),
+		Type:           types.StringValue("mcp_http"),
+		ApplicationKey: stateModel.ApplicationKey,
 	}
 	var updateReq resource.UpdateRequest
 	updateReq.Plan = tfsdk.Plan{Schema: schemaResp.Schema}
@@ -2127,8 +2131,8 @@ func TestPaperclipAppLifecycle(t *testing.T) {
 	if updateResp.Diagnostics.HasError() {
 		t.Fatalf("Update failed: %v", updateResp.Diagnostics)
 	}
-	if updatedPayload["type"] != "mcp_http" {
-		t.Fatalf("expected update payload to contain type mcp_http, got: %v", updatedPayload["type"])
+	if _, exists := updatedPayload["type"]; exists {
+		t.Fatalf("native update cannot change type; payload included unsupported field: %v", updatedPayload["type"])
 	}
 	validState = updateResp.State
 
@@ -2337,7 +2341,7 @@ func TestPaperclipConnectionLifecycle(t *testing.T) {
 	var updatedPayload map[string]interface{}
 	failGrantRead := true
 	connectionCreates := 0
-	credentialRefs := []map[string]interface{}{{"key": "user", "name": "user", "secretId": "secret-1"}}
+	credentialRefs := []map[string]interface{}{{"key": "user", "name": "user", "secretId": "secret-1", "placement": "env"}}
 	secretRefs, _ := client.ConnectionCredentialSecretRefs(credentialRefs)
 	grant := client.PaperclipConnectionGrant{ID: "grant-1", Kind: "organization", Status: "active", IsDefault: true, CredentialSecretRefs: secretRefs}
 
@@ -2350,6 +2354,12 @@ func TestPaperclipConnectionLifecycle(t *testing.T) {
 				return
 			}
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"grants": []client.PaperclipConnectionGrant{grant}})
+		case r.URL.Path == "/api/companies/comp-1/secrets":
+			_ = json.NewEncoder(w).Encode([]map[string]interface{}{{"id": "secret-1", "companyId": "comp-1"}})
+		case r.URL.Path == "/api/companies/comp-1/tools/applications":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{{"id": "app-123", "companyId": "comp-1", "type": "mcp_stdio"}}})
+		case r.URL.Path == "/api/companies/comp-1/tools/stdio-templates":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"templates": []map[string]interface{}{{"id": "template-1", "templateId": "approved-template", "companyId": "comp-1", "status": "active"}}})
 		case r.URL.Path == "/api/companies/comp-1/tools/connections" && r.Method == http.MethodPost:
 			connectionCreates++
 			_ = json.NewDecoder(r.Body).Decode(&createdPayload)
@@ -2359,7 +2369,7 @@ func TestPaperclipConnectionLifecycle(t *testing.T) {
 			if _, exists := createdPayload["appId"]; exists {
 				t.Errorf("create payload sent obsolete appId: %v", createdPayload["appId"])
 			}
-			if createdPayload["transport"] != "local_stdio" || createdPayload["authKind"] != "basic" {
+			if createdPayload["transport"] != "local_stdio" || createdPayload["authKind"] != "api_key" {
 				t.Errorf("create payload omitted Paperclip transport/authKind: %v", createdPayload)
 			}
 			if _, exists := createdPayload["credentials"]; exists {
@@ -2386,8 +2396,8 @@ func TestPaperclipConnectionLifecycle(t *testing.T) {
 				"applicationId":  "app-123",
 				"name":           "openobserve-connection",
 				"transport":      "local_stdio",
-				"authKind":       "basic",
-				"config":         map[string]interface{}{"command": "oo"},
+				"authKind":       "api_key",
+				"config":         map[string]interface{}{"templateId": "approved-template"},
 				"credentialRefs": credentialRefs,
 			})
 		case r.URL.Path == "/api/tool-connections/conn-456" && r.Method == http.MethodPatch:
@@ -2426,13 +2436,14 @@ func TestPaperclipConnectionLifecycle(t *testing.T) {
 
 	// 1. Create
 	planModel := PaperclipConnectionResourceModel{
-		CompanyID:      types.StringValue("comp-1"),
-		AppID:          types.StringValue("app-123"),
-		Name:           types.StringValue("openobserve-connection"),
-		Transport:      types.StringValue("local_stdio"),
-		AuthKind:       types.StringValue("basic"),
-		Config:         types.StringValue(`{ "command": "oo" }`),
-		CredentialRefs: types.StringValue(`[{ "secretId": "secret-1", "name": "user", "key": "user" }]`),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"),
+		AppID:                types.StringValue("app-123"),
+		Name:                 types.StringValue("openobserve-connection"),
+		Transport:            types.StringValue("local_stdio"),
+		AuthKind:             types.StringValue("api_key"),
+		Config:               types.StringValue(`{"templateId":"approved-template"}`),
+		CredentialRefs:       types.StringValue(`[{ "secretId": "secret-1", "name": "user", "key": "user", "placement":"env" }]`),
 	}
 	var createReq resource.CreateRequest
 	createReq.Plan = tfsdk.Plan{Schema: connSchema}
@@ -2496,14 +2507,15 @@ func TestPaperclipConnectionLifecycle(t *testing.T) {
 
 	// 3. Update
 	updatedPlan := PaperclipConnectionResourceModel{
-		ID:             types.StringValue("conn-456"),
-		CompanyID:      types.StringValue("comp-1"),
-		AppID:          types.StringValue("app-123"),
-		Name:           types.StringValue("openobserve-connection-renamed"),
-		Transport:      types.StringValue("local_stdio"),
-		AuthKind:       types.StringValue("basic"),
-		Config:         types.StringValue(`{"command":"oo"}`),
-		CredentialRefs: types.StringValue(`[{"key":"user","name":"user","secretId":"secret-1"}]`),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		ID:                   types.StringValue("conn-456"),
+		CompanyID:            types.StringValue("comp-1"),
+		AppID:                types.StringValue("app-123"),
+		Name:                 types.StringValue("openobserve-connection-renamed"),
+		Transport:            types.StringValue("local_stdio"),
+		AuthKind:             types.StringValue("api_key"),
+		Config:               types.StringValue(`{"templateId":"approved-template"}`),
+		CredentialRefs:       types.StringValue(`[{"key":"user","name":"user","secretId":"secret-1","placement":"env"}]`),
 	}
 	var updateReq resource.UpdateRequest
 	updateReq.Plan = tfsdk.Plan{Schema: connSchema}
@@ -2528,7 +2540,7 @@ func TestPaperclipConnectionLifecycle(t *testing.T) {
 	importReq.ID = "comp-1/conn-456"
 	var importResp resource.ImportStateResponse
 	importResp.State = tfsdk.State{Schema: connSchema}
-	importResp.State.Set(ctx, &PaperclipConnectionResourceModel{})
+	importResp.State.Set(ctx, &PaperclipConnectionResourceModel{CredentialSecretRefs: types.MapNull(secretRefType())})
 	r.ImportState(ctx, importReq, &importResp)
 	if importResp.Diagnostics.HasError() {
 		t.Fatalf("ImportState failed: %v", importResp.Diagnostics)
@@ -2548,7 +2560,7 @@ func TestPaperclipConnectionLifecycle(t *testing.T) {
 	// 5. ImportState with passthrough id
 	importReq.ID = "conn-456"
 	importResp = resource.ImportStateResponse{State: tfsdk.State{Schema: connSchema}}
-	importResp.State.Set(ctx, &PaperclipConnectionResourceModel{})
+	importResp.State.Set(ctx, &PaperclipConnectionResourceModel{CredentialSecretRefs: types.MapNull(secretRefType())})
 	r.ImportState(ctx, importReq, &importResp)
 	if importResp.Diagnostics.HasError() {
 		t.Fatalf("ImportState passthrough failed: %v", importResp.Diagnostics)
@@ -2569,6 +2581,14 @@ func TestPaperclipConnectionCreateWithoutCredentialsIsKnownAfterApply(t *testing
 	for _, echoEmptyRefs := range []bool{false, true} {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
+			if r.Method == "GET" && r.URL.Path == "/api/companies/comp-1/tools/applications" {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{{"id": "app-123", "companyId": "comp-1", "type": "mcp_stdio"}}})
+				return
+			}
+			if r.Method == "GET" && r.URL.Path == "/api/companies/comp-1/tools/stdio-templates" {
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"templates": []map[string]interface{}{{"id": "template-1", "templateId": "phonemata-template", "companyId": "comp-1", "status": "active"}}})
+				return
+			}
 			if r.URL.Path != "/api/companies/comp-1/tools/connections" || r.Method != http.MethodPost {
 				w.WriteHeader(http.StatusNotFound)
 				return
@@ -2581,13 +2601,14 @@ func TestPaperclipConnectionCreateWithoutCredentialsIsKnownAfterApply(t *testing
 		}))
 		r, connSchema := newConfiguredPaperclipConnectionResource(t, server.URL)
 		planModel := PaperclipConnectionResourceModel{
-			CompanyID:      types.StringValue("comp-1"),
-			AppID:          types.StringValue("app-123"),
-			Name:           types.StringValue("phonemata"),
-			Transport:      types.StringValue("local_stdio"),
-			AuthKind:       types.StringValue("none"),
-			Config:         types.StringValue(`{"command":"phonemata-mcp"}`),
-			CredentialRefs: types.StringUnknown(),
+			CredentialSecretRefs: types.MapNull(secretRefType()),
+			CompanyID:            types.StringValue("comp-1"),
+			AppID:                types.StringValue("app-123"),
+			Name:                 types.StringValue("phonemata"),
+			Transport:            types.StringValue("local_stdio"),
+			AuthKind:             types.StringValue("none"),
+			Config:               types.StringValue(`{"templateId":"phonemata-template"}`),
+			CredentialRefs:       types.StringUnknown(),
 		}
 		var createReq resource.CreateRequest
 		createReq.Plan = tfsdk.Plan{Schema: connSchema}
@@ -2625,6 +2646,9 @@ func TestPaperclipOAuthConnectionRequestsItsDeclaredCredentialPolicy(t *testing.
 				if requested != nil {
 					record["credentialPolicy"] = requested
 				}
+			case r.URL.Path == "/api/companies/comp-1/tools/applications" && r.Method == http.MethodGet:
+				_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{{"id": "app-hf", "companyId": "comp-1", "type": "mcp_http"}}})
+				return
 			case r.URL.Path == "/api/tool-connections/conn-hf" && r.Method == http.MethodGet:
 				// Paperclip gives an OAuth connection created without a policy a
 				// per-user credential.
@@ -2639,14 +2663,15 @@ func TestPaperclipOAuthConnectionRequestsItsDeclaredCredentialPolicy(t *testing.
 		var createReq resource.CreateRequest
 		createReq.Plan = tfsdk.Plan{Schema: connSchema}
 		createReq.Plan.Set(ctx, &PaperclipConnectionResourceModel{
-			CompanyID:        types.StringValue("comp-1"),
-			AppID:            types.StringValue("app-hf"),
-			Name:             types.StringValue("huggingface"),
-			Transport:        types.StringValue("mcp_remote"),
-			AuthKind:         types.StringValue("oauth"),
-			Config:           types.StringValue(`{"url":"https://huggingface.co/mcp?login"}`),
-			CredentialRefs:   types.StringUnknown(),
-			CredentialPolicy: declared,
+			CredentialSecretRefs: types.MapNull(secretRefType()),
+			CompanyID:            types.StringValue("comp-1"),
+			AppID:                types.StringValue("app-hf"),
+			Name:                 types.StringValue("huggingface"),
+			Transport:            types.StringValue("mcp_remote"),
+			AuthKind:             types.StringValue("oauth"),
+			Config:               types.StringValue(`{"url":"https://huggingface.co/mcp?login"}`),
+			CredentialRefs:       types.StringUnknown(),
+			CredentialPolicy:     declared,
 		})
 		var createResp resource.CreateResponse
 		createResp.State = tfsdk.State{Schema: connSchema}
@@ -3010,13 +3035,14 @@ func TestPaperclipConnectionRejectsMalformedJSON(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			model := PaperclipConnectionResourceModel{
-				CompanyID:      types.StringValue("comp-1"),
-				AppID:          types.StringValue("app-1"),
-				Name:           types.StringValue("connection"),
-				Transport:      types.StringValue("mcp_remote"),
-				AuthKind:       types.StringValue("api_key"),
-				Config:         tc.config,
-				CredentialRefs: tc.credentialRefs,
+				CredentialSecretRefs: types.MapNull(secretRefType()),
+				CompanyID:            types.StringValue("comp-1"),
+				AppID:                types.StringValue("app-1"),
+				Name:                 types.StringValue("connection"),
+				Transport:            types.StringValue("mcp_remote"),
+				AuthKind:             types.StringValue("api_key"),
+				Config:               tc.config,
+				CredentialRefs:       tc.credentialRefs,
 			}
 			var req resource.CreateRequest
 			req.Plan = tfsdk.Plan{Schema: connSchema}
@@ -3064,10 +3090,11 @@ func TestPaperclipConnectionPreservesAppIDWhenReadOmitsApplicationID(t *testing.
 	r, connSchema := newConfiguredPaperclipConnectionResource(t, server.URL)
 
 	priorState := PaperclipConnectionResourceModel{
-		ID:        types.StringValue("conn-no-app"),
-		CompanyID: types.StringValue("comp-1"),
-		AppID:     types.StringValue("app-123"),
-		Name:      types.StringValue("openobserve-connection"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		ID:                   types.StringValue("conn-no-app"),
+		CompanyID:            types.StringValue("comp-1"),
+		AppID:                types.StringValue("app-123"),
+		Name:                 types.StringValue("openobserve-connection"),
 	}
 
 	var readReq resource.ReadRequest
@@ -3113,7 +3140,7 @@ func TestPaperclipConnectionImportWithoutAppIDFails(t *testing.T) {
 	var importReq resource.ImportStateRequest
 	importReq.ID = "comp-1/conn-null-app"
 	importResp := resource.ImportStateResponse{State: tfsdk.State{Schema: connSchema}}
-	importResp.State.Set(ctx, &PaperclipConnectionResourceModel{})
+	importResp.State.Set(ctx, &PaperclipConnectionResourceModel{CredentialSecretRefs: types.MapNull(secretRefType())})
 	r.ImportState(ctx, importReq, &importResp)
 	if importResp.Diagnostics.HasError() {
 		t.Fatalf("ImportState failed: %v", importResp.Diagnostics)
@@ -3146,9 +3173,10 @@ func TestPaperclipConnectionErrors(t *testing.T) {
 
 	// Create error
 	planModel := PaperclipConnectionResourceModel{
-		CompanyID: types.StringValue("comp-1"),
-		AppID:     types.StringValue("app-123"),
-		Name:      types.StringValue("conn"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"),
+		AppID:                types.StringValue("app-123"),
+		Name:                 types.StringValue("conn"),
 	}
 	var createReq resource.CreateRequest
 	createReq.Plan = tfsdk.Plan{Schema: connSchema}
@@ -3162,10 +3190,11 @@ func TestPaperclipConnectionErrors(t *testing.T) {
 
 	// Update error
 	stateModel := PaperclipConnectionResourceModel{
-		ID:        types.StringValue("conn-1"),
-		CompanyID: types.StringValue("comp-1"),
-		AppID:     types.StringValue("app-123"),
-		Name:      types.StringValue("conn"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		ID:                   types.StringValue("conn-1"),
+		CompanyID:            types.StringValue("comp-1"),
+		AppID:                types.StringValue("app-123"),
+		Name:                 types.StringValue("conn"),
 	}
 	var updateReq resource.UpdateRequest
 	updateReq.Plan = tfsdk.Plan{Schema: connSchema}
@@ -3216,10 +3245,11 @@ func TestPaperclipConnectionReadNotFoundRemovesResource(t *testing.T) {
 			r, connSchema := newConfiguredPaperclipConnectionResource(t, server.URL)
 
 			stateModel := PaperclipConnectionResourceModel{
-				ID:        types.StringValue("conn-retired"),
-				CompanyID: types.StringValue("comp-1"),
-				AppID:     types.StringValue("app-123"),
-				Name:      types.StringValue("conn"),
+				CredentialSecretRefs: types.MapNull(secretRefType()),
+				ID:                   types.StringValue("conn-retired"),
+				CompanyID:            types.StringValue("comp-1"),
+				AppID:                types.StringValue("app-123"),
+				Name:                 types.StringValue("conn"),
 			}
 			var readReq resource.ReadRequest
 			readReq.State = tfsdk.State{Schema: connSchema}

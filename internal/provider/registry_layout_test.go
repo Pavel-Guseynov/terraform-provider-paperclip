@@ -129,9 +129,9 @@ var resourceExamples = map[string]string{
   company_id = paperclip_company.acme.id
   app_id     = paperclip_app.gitea.id
   name       = "gitea-default"
-  transport  = "stdio"
+  transport  = "local_stdio"
   auth_kind  = "api_key"
-  config     = jsonencode({ command = "gitea-mcp" })
+  config     = jsonencode({ templateId = paperclip_stdio_template.gitea_stdio.template_id })
 }
 `,
 	"paperclip_policy": `resource "paperclip_policy" "require_review" {
@@ -155,6 +155,17 @@ var resourceExamples = map[string]string{
   connection_id = paperclip_connection.gitea_conn.id
   target_type   = "agent"
   agent_ids     = [paperclip_agent.engineer.id]
+}
+`,
+	"paperclip_connection_grants": `resource "paperclip_connection_grants" "gitea_grants" {
+  company_id    = paperclip_company.acme.id
+  connection_id = paperclip_connection.gitea_conn.id
+  credential_secret_refs = {
+    "credentials.api_key" = {
+      secret_id = paperclip_secret.api_token.id
+      version   = "latest"
+    }
+  }
 }
 `,
 	"paperclip_app_permission": `resource "paperclip_app_permission" "gitea_perms" {

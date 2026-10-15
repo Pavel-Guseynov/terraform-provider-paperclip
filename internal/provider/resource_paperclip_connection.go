@@ -45,6 +45,14 @@ type PaperclipConnectionResourceModel struct {
 	CredentialPolicy     types.String `tfsdk:"credential_policy"`
 	GalleryKey           types.String `tfsdk:"gallery_key"`
 	CredentialGrantReady types.Bool   `tfsdk:"credential_grant_ready"`
+	ConnectionPurpose    types.String `tfsdk:"connection_purpose"`
+	ConnectionKind       types.String `tfsdk:"connection_kind"`
+	Ownership            types.String `tfsdk:"ownership"`
+	CredentialSource     types.String `tfsdk:"credential_source"`
+	Status               types.String `tfsdk:"status"`
+	Enabled              types.Bool   `tfsdk:"enabled"`
+	TransportConfig      types.String `tfsdk:"transport_config"`
+	CredentialSecretRefs types.Map    `tfsdk:"credential_secret_refs"`
 }
 
 func (r *PaperclipConnectionResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -53,6 +61,7 @@ func (r *PaperclipConnectionResource) Metadata(ctx context.Context, req resource
 
 func (r *PaperclipConnectionResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		Version:     1,
 		Description: "Manages a Paperclip-native tool connection.",
 		Attributes: map[string]schema.Attribute{
 			"credential_grant_ready": schema.BoolAttribute{Computed: true, Description: "Whether the native default execution grant has the declared protected credential references."},
@@ -76,7 +85,6 @@ func (r *PaperclipConnectionResource) Schema(ctx context.Context, req resource.S
 				Computed:    true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
-					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"name": schema.StringAttribute{
@@ -90,25 +98,26 @@ func (r *PaperclipConnectionResource) Schema(ctx context.Context, req resource.S
 			"gallery_key": schema.StringAttribute{
 				Description: "Paperclip app gallery slug of an included connector, connected through its gallery definition and identified by config.sourceTemplateKey.",
 				Optional:    true,
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
-				},
 			},
 			"transport": schema.StringAttribute{
-				Description: "Connection transport type (e.g. stdio, mcp_remote).",
+				Description: "Native transport: local_stdio, mcp_remote, rest_api or chat_sdk. Immutable after creation.",
 				Optional:    true,
 				Computed:    true,
 				Default:     stringdefault.StaticString("local_stdio"),
+				Validators:  []validator.String{nativeEnumValidator{values: []string{"local_stdio", "mcp_remote", "rest_api", "chat_sdk"}}},
 			},
 			"auth_kind": schema.StringAttribute{
-				Description: "Optional authentication type.",
-				Optional:    true,
+				Description:   "Optional authentication type.",
+				Optional:      true,
+				Computed:      true,
+				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				Validators:    []validator.String{nativeEnumValidator{values: []string{"none", "oauth", "api_key"}}},
 			},
 			"config": schema.StringAttribute{
 				Description: "JSON connection configuration (command, args, env, url).",
 				Optional:    true,
 				Validators: []validator.String{
-					JSONAttributeValidator(),
+					nativeTransportConfigValidator{},
 				},
 				PlanModifiers: []planmodifier.String{
 					SemanticJSONPlanModifier(),
@@ -118,27 +127,37 @@ func (r *PaperclipConnectionResource) Schema(ctx context.Context, req resource.S
 				Description: "Optional JSON array of Paperclip credential references.",
 				Optional:    true,
 				Validators: []validator.String{
-					JSONAttributeValidator(),
+					nativeCredentialProjectionValidator{},
 				},
 				PlanModifiers: []planmodifier.String{
 					SemanticJSONPlanModifier(),
 				},
 			},
 			"credential_policy": schema.StringAttribute{
-				Description: "Paperclip credential policy (shared or per_user), fixed at creation; an OAuth connection defaults to per_user, owned by its creator.",
+				Description: "Native credential policy: shared, per_user, per_user_with_fallback or per_agent. OAuth defaults to per_user; other connections default to shared.",
 				Optional:    true,
 				Computed:    true,
+				Validators:  []validator.String{nativeEnumValidator{values: []string{"shared", "per_user", "per_user_with_fallback", "per_agent"}}},
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.UseStateForUnknown(),
-					stringplanmodifier.RequiresReplace(),
 				},
 			},
 		},
 	}
+	addConnectionSchema(&resp.Schema)
 }
 
 func (r *PaperclipConnectionResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if !req.Plan.Raw.IsNull() {
+		var plan, state PaperclipConnectionResourceModel
+		resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+		if !req.State.Raw.IsNull() {
+			resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+		}
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		resp.Diagnostics.Append(r.validateConnection(ctx, plan, state)...)
 		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("credential_grant_ready"), true)...)
 	}
 }
@@ -202,12 +221,16 @@ func (r *PaperclipConnectionResource) Create(ctx context.Context, req resource.C
 		CredentialRefs:   credentialRefs,
 		CredentialPolicy: plan.CredentialPolicy.ValueString(),
 	}
+	resp.Diagnostics.Append(r.validateConnection(ctx, plan, PaperclipConnectionResourceModel{})...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	secretRefs, err := client.ConnectionCredentialSecretRefs(credentialRefs)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid credential references", err.Error())
 		return
 	}
-	conn.CredentialSecretRefs = []map[string]interface{}{}
+	applyConnectionFields(ctx, plan, &conn)
 
 	var created *client.PaperclipToolConnection
 	if galleryKey := plan.GalleryKey.ValueString(); galleryKey != "" {
@@ -239,6 +262,7 @@ func (r *PaperclipConnectionResource) Create(ctx context.Context, req resource.C
 	plan.Transport = stringOrNull(created.Transport)
 	plan.AuthKind = stringOrNull(created.AuthKind)
 	plan.CredentialPolicy = knownCredentialPolicy(plan.CredentialPolicy, created.CredentialPolicy)
+	refreshConnectionFields(ctx, &plan, created)
 	if created.CredentialRefs != nil {
 		plan.CredentialRefs = refreshSemanticJSON(plan.CredentialRefs, created.CredentialRefs)
 	} else if plan.CredentialRefs.IsUnknown() {
@@ -251,6 +275,10 @@ func (r *PaperclipConnectionResource) Create(ctx context.Context, req resource.C
 		return
 	}
 	if len(credentialRefs) > 0 {
+		if err := r.client.ClaimConnectionAggregate("grants", created.ID, "connection:"+created.ID); err != nil {
+			resp.Diagnostics.AddError("Connection grant ownership conflict", err.Error())
+			return
+		}
 		if err := r.client.EnsureConnectionCredentialGrant(ctx, created.ID, secretRefs); err != nil {
 			resp.Diagnostics.AddError("Error reconciling connection credential grant", err.Error())
 			return
@@ -301,6 +329,7 @@ func (r *PaperclipConnectionResource) Read(ctx context.Context, req resource.Rea
 	state.Transport = stringOrNull(conn.Transport)
 	state.AuthKind = stringOrNull(conn.AuthKind)
 	state.CredentialPolicy = knownCredentialPolicy(state.CredentialPolicy, conn.CredentialPolicy)
+	refreshConnectionFields(ctx, &state, conn)
 	// The gallery source identifies an included connector, so an adopted one
 	// matches its declaration and a custom one plans its replacement.
 	state.GalleryKey = types.StringNull()
@@ -308,6 +337,8 @@ func (r *PaperclipConnectionResource) Read(ctx context.Context, req resource.Rea
 		state.GalleryKey = types.StringValue(source)
 	}
 	state.Config = refreshSemanticJSON(state.Config, conn.Config)
+	previousCredentialRefs := state.CredentialRefs
+	previousGrantReady := state.CredentialGrantReady
 	state.CredentialRefs = refreshSemanticJSON(state.CredentialRefs, conn.CredentialRefs)
 	state.CredentialGrantReady = types.BoolValue(true)
 	if len(conn.CredentialRefs) > 0 {
@@ -322,6 +353,13 @@ func (r *PaperclipConnectionResource) Read(ctx context.Context, req resource.Rea
 			return
 		}
 		state.CredentialGrantReady = types.BoolValue(client.ConnectionGrantMatches(grant, refs))
+	} else if (previousCredentialRefs.ValueString() != "" && previousCredentialRefs.ValueString() != "[]") || (!previousGrantReady.IsNull() && !previousGrantReady.ValueBool()) {
+		grant, err := r.client.GetDefaultConnectionGrant(ctx, conn.ID)
+		if err != nil {
+			resp.Diagnostics.AddError("Error reading removed credential grant", err.Error())
+			return
+		}
+		state.CredentialGrantReady = types.BoolValue(grant == nil || (grant.Status != "active" && len(grant.SupersededIDs) == 0))
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -336,7 +374,6 @@ func (r *PaperclipConnectionResource) Update(ctx context.Context, req resource.U
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
 	var configMap map[string]interface{}
 	var credentialRefs []map[string]interface{}
 	if !plan.Config.IsNull() && !plan.Config.IsUnknown() && plan.Config.ValueString() != "" {
@@ -351,22 +388,27 @@ func (r *PaperclipConnectionResource) Update(ctx context.Context, req resource.U
 			return
 		}
 	}
+	resp.Diagnostics.Append(r.validateConnection(ctx, plan, state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	conn := client.PaperclipToolConnection{
-		CompanyID:      state.CompanyID.ValueString(),
-		AppID:          plan.AppID.ValueString(),
-		Name:           plan.Name.ValueString(),
-		Transport:      plan.Transport.ValueString(),
-		AuthKind:       plan.AuthKind.ValueString(),
-		Config:         configMap,
-		CredentialRefs: credentialRefs,
+		CompanyID:        state.CompanyID.ValueString(),
+		AppID:            plan.AppID.ValueString(),
+		Name:             plan.Name.ValueString(),
+		Transport:        plan.Transport.ValueString(),
+		AuthKind:         plan.AuthKind.ValueString(),
+		Config:           configMap,
+		CredentialRefs:   credentialRefs,
+		CredentialPolicy: plan.CredentialPolicy.ValueString(),
 	}
 	secretRefs, err := client.ConnectionCredentialSecretRefs(credentialRefs)
 	if err != nil {
 		resp.Diagnostics.AddError("Invalid credential references", err.Error())
 		return
 	}
-	conn.CredentialSecretRefs = []map[string]interface{}{}
+	applyConnectionFields(ctx, plan, &conn)
 
 	updated, err := r.client.UpdateToolConnection(ctx, state.ID.ValueString(), conn)
 	if err != nil {
@@ -388,9 +430,15 @@ func (r *PaperclipConnectionResource) Update(ctx context.Context, req resource.U
 		plan.CredentialRefs = refreshSemanticJSON(plan.CredentialRefs, updated.CredentialRefs)
 	}
 	plan.CredentialPolicy = knownCredentialPolicy(plan.CredentialPolicy, updated.CredentialPolicy)
+	refreshConnectionFields(ctx, &plan, updated)
 	if len(credentialRefs) > 0 {
 		if err := r.client.EnsureConnectionCredentialGrant(ctx, state.ID.ValueString(), secretRefs); err != nil {
 			resp.Diagnostics.AddError("Error reconciling connection credential grant", err.Error())
+			return
+		}
+	} else if (state.CredentialRefs.ValueString() != "" && state.CredentialRefs.ValueString() != "[]") || (!state.CredentialGrantReady.IsNull() && !state.CredentialGrantReady.ValueBool()) {
+		if err := r.client.RevokeConnectionCredentialGrants(ctx, state.ID.ValueString()); err != nil {
+			resp.Diagnostics.AddError("Error revoking removed connection credentials", err.Error())
 			return
 		}
 	}

@@ -35,3 +35,4 @@ resource "paperclip_connection_install" "gitea_install" {
 ### Read-Only
 
 - `id` (String)
+- `owner_id` (String) Provider ownership identity for the whole install set. Conflicts within one provider configuration are rejected; separate states require external ownership coordination.

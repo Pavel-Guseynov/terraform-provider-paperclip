@@ -512,9 +512,10 @@ func TestFullCoverageConnectionRemaining(t *testing.T) {
 	// 1. CreateConnection error (line 228)
 	planErr := tfsdk.Plan{Schema: schema}
 	_ = planErr.Set(ctx, &PaperclipConnectionResourceModel{
-		CompanyID: types.StringValue("comp-1"),
-		Name:      types.StringValue("conn-err"),
-		Transport: types.StringValue("stdio"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("conn-err"),
+		Transport:            types.StringValue("stdio"),
 	})
 	var createErrResp resource.CreateResponse
 	createErrResp.State = tfsdk.State{Schema: schema}
@@ -526,11 +527,12 @@ func TestFullCoverageConnectionRemaining(t *testing.T) {
 	// 1b. CreateConnection invalid credential refs (line 215)
 	planBadRefs := tfsdk.Plan{Schema: schema}
 	_ = planBadRefs.Set(ctx, &PaperclipConnectionResourceModel{
-		CompanyID:      types.StringValue("comp-1"),
-		Name:           types.StringValue("conn-bad-refs"),
-		AppID:          types.StringValue("app-1"),
-		Transport:      types.StringValue("stdio"),
-		CredentialRefs: types.StringValue("[{\"bad\": true}]"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("conn-bad-refs"),
+		AppID:                types.StringValue("app-1"),
+		Transport:            types.StringValue("stdio"),
+		CredentialRefs:       types.StringValue("[{\"bad\": true}]"),
 	})
 	var createBadRefsResp resource.CreateResponse
 	createBadRefsResp.State = tfsdk.State{Schema: schema}
@@ -542,11 +544,12 @@ func TestFullCoverageConnectionRemaining(t *testing.T) {
 	// 2a. Create with AppID == "" and plan.AppID.IsUnknown() (line 240)
 	planNoApp := tfsdk.Plan{Schema: schema}
 	_ = planNoApp.Set(ctx, &PaperclipConnectionResourceModel{
-		CompanyID:  types.StringValue("comp-1"),
-		Name:       types.StringValue("conn-no-app"),
-		GalleryKey: types.StringValue("my-gallery"),
-		AppID:      types.StringUnknown(),
-		Transport:  types.StringValue("stdio"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("conn-no-app"),
+		GalleryKey:           types.StringValue("my-gallery"),
+		AppID:                types.StringUnknown(),
+		Transport:            types.StringValue("stdio"),
 	})
 	var createNoAppResp resource.CreateResponse
 	createNoAppResp.State = tfsdk.State{Schema: schema}
@@ -571,11 +574,12 @@ func TestFullCoverageConnectionRemaining(t *testing.T) {
 	// 2c. Create with credential grant error
 	planAuth := tfsdk.Plan{Schema: schema}
 	_ = planAuth.Set(ctx, &PaperclipConnectionResourceModel{
-		CompanyID:      types.StringValue("comp-1"),
-		Name:           types.StringValue("conn-auth"),
-		Transport:      types.StringValue("stdio"),
-		AuthKind:       types.StringValue("api_key"),
-		CredentialRefs: validSecRefs,
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("conn-auth"),
+		Transport:            types.StringValue("stdio"),
+		AuthKind:             types.StringValue("api_key"),
+		CredentialRefs:       validSecRefs,
 	})
 	var createAuthResp resource.CreateResponse
 	createAuthResp.State = tfsdk.State{Schema: schema}
@@ -587,9 +591,10 @@ func TestFullCoverageConnectionRemaining(t *testing.T) {
 	// 3a. Read with connection 500 (line 291)
 	state500 := tfsdk.State{Schema: schema}
 	_ = state500.Set(ctx, &PaperclipConnectionResourceModel{
-		ID:        types.StringValue("conn-500"),
-		CompanyID: types.StringValue("comp-1"),
-		AppID:     types.StringValue("app-1"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		ID:                   types.StringValue("conn-500"),
+		CompanyID:            types.StringValue("comp-1"),
+		AppID:                types.StringValue("app-1"),
 	})
 	var read500Resp resource.ReadResponse
 	read500Resp.State = state500
@@ -601,9 +606,10 @@ func TestFullCoverageConnectionRemaining(t *testing.T) {
 	// 3b. Read with invalid credential refs (line 337)
 	stateBadRefs := tfsdk.State{Schema: schema}
 	_ = stateBadRefs.Set(ctx, &PaperclipConnectionResourceModel{
-		ID:        types.StringValue("conn-bad-refs"),
-		CompanyID: types.StringValue("comp-1"),
-		AppID:     types.StringValue("app-1"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		ID:                   types.StringValue("conn-bad-refs"),
+		CompanyID:            types.StringValue("comp-1"),
+		AppID:                types.StringValue("app-1"),
 	})
 	var readBadRefsResp resource.ReadResponse
 	readBadRefsResp.State = stateBadRefs
@@ -615,9 +621,10 @@ func TestFullCoverageConnectionRemaining(t *testing.T) {
 	// 3c. Read with default grant 500 (line 342)
 	stateGrant500 := tfsdk.State{Schema: schema}
 	_ = stateGrant500.Set(ctx, &PaperclipConnectionResourceModel{
-		ID:        types.StringValue("conn-grant-500"),
-		CompanyID: types.StringValue("comp-1"),
-		AppID:     types.StringValue("app-1"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		ID:                   types.StringValue("conn-grant-500"),
+		CompanyID:            types.StringValue("comp-1"),
+		AppID:                types.StringValue("app-1"),
 	})
 	var readGrant500Resp resource.ReadResponse
 	readGrant500Resp.State = stateGrant500
@@ -629,8 +636,9 @@ func TestFullCoverageConnectionRemaining(t *testing.T) {
 	// 4. UpdateConnection error (line 395)
 	statePatchErr := tfsdk.State{Schema: schema}
 	_ = statePatchErr.Set(ctx, &PaperclipConnectionResourceModel{
-		ID:        types.StringValue("conn-patch-err"),
-		CompanyID: types.StringValue("comp-1"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		ID:                   types.StringValue("conn-patch-err"),
+		CompanyID:            types.StringValue("comp-1"),
 	})
 	var updErrResp resource.UpdateResponse
 	updErrResp.State = statePatchErr
@@ -642,11 +650,12 @@ func TestFullCoverageConnectionRemaining(t *testing.T) {
 	// 4b. UpdateConnection invalid credential refs (line 387)
 	planUpdBadRefs := tfsdk.Plan{Schema: schema}
 	_ = planUpdBadRefs.Set(ctx, &PaperclipConnectionResourceModel{
-		CompanyID:      types.StringValue("comp-1"),
-		Name:           types.StringValue("conn-patch-err"),
-		AppID:          types.StringValue("app-1"),
-		Transport:      types.StringValue("stdio"),
-		CredentialRefs: types.StringValue("[{\"bad\": true}]"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("conn-patch-err"),
+		AppID:                types.StringValue("app-1"),
+		Transport:            types.StringValue("stdio"),
+		CredentialRefs:       types.StringValue("[{\"bad\": true}]"),
 	})
 	var updBadRefsResp resource.UpdateResponse
 	updBadRefsResp.State = statePatchErr
@@ -658,16 +667,18 @@ func TestFullCoverageConnectionRemaining(t *testing.T) {
 	// 5. Update with AuthKind != "" and credential grant error (lines 407, 412)
 	planGrantErr := tfsdk.Plan{Schema: schema}
 	_ = planGrantErr.Set(ctx, &PaperclipConnectionResourceModel{
-		CompanyID:      types.StringValue("comp-1"),
-		Name:           types.StringValue("conn-grant-err"),
-		Transport:      types.StringValue("stdio"),
-		CredentialRefs: validSecRefs,
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("conn-grant-err"),
+		Transport:            types.StringValue("stdio"),
+		CredentialRefs:       validSecRefs,
 	})
 	stateGrantErr := tfsdk.State{Schema: schema}
 	_ = stateGrantErr.Set(ctx, &PaperclipConnectionResourceModel{
-		ID:             types.StringValue("conn-grant-err"),
-		CompanyID:      types.StringValue("comp-1"),
-		CredentialRefs: validSecRefs,
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		ID:                   types.StringValue("conn-grant-err"),
+		CompanyID:            types.StringValue("comp-1"),
+		CredentialRefs:       validSecRefs,
 	})
 	var updGrantErrResp resource.UpdateResponse
 	updGrantErrResp.State = stateGrantErr

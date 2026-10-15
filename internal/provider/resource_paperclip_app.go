@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -42,6 +41,7 @@ var (
 	_ resource.Resource                = &PaperclipAppResource{}
 	_ resource.ResourceWithConfigure   = &PaperclipAppResource{}
 	_ resource.ResourceWithImportState = &PaperclipAppResource{}
+	_ resource.ResourceWithModifyPlan  = &PaperclipAppResource{}
 )
 
 func NewPaperclipAppResource() resource.Resource {
@@ -60,6 +60,10 @@ type PaperclipAppResourceModel struct {
 	ApplicationKey types.String `tfsdk:"application_key"`
 	Description    types.String `tfsdk:"description"`
 	Metadata       types.String `tfsdk:"metadata"`
+	Status         types.String `tfsdk:"status"`
+	PluginID       types.String `tfsdk:"plugin_id"`
+	OwnerAgentID   types.String `tfsdk:"owner_agent_id"`
+	OwnerUserID    types.String `tfsdk:"owner_user_id"`
 }
 
 func normalizePaperclipAppState(state *PaperclipAppResourceModel, app *client.PaperclipToolApp) {
@@ -69,11 +73,23 @@ func normalizePaperclipAppState(state *PaperclipAppResourceModel, app *client.Pa
 	}
 	state.Name = types.StringValue(app.Name)
 	state.ApplicationKey = stringOrNull(app.ApplicationKey)
-	state.Description = stringOrNull(app.Description)
+	state.Description = types.StringPointerValue(app.Description)
+	state.PluginID = types.StringPointerValue(app.PluginID)
+	state.OwnerAgentID = types.StringPointerValue(app.OwnerAgentID)
+	state.OwnerUserID = types.StringPointerValue(app.OwnerUserID)
+	if app.Status != "" {
+		state.Status = types.StringValue(app.Status)
+	}
 	state.Metadata = refreshSemanticJSON(state.Metadata, app.Metadata)
 }
 
 func (r *PaperclipAppResource) createAppState(ctx context.Context, plan PaperclipAppResourceModel) (PaperclipAppResourceModel, error) {
+	if err := rejectDeclaredArchive(plan.Status); err != nil {
+		return plan, err
+	}
+	if err := r.validateApplicationReferences(ctx, plan); err != nil {
+		return plan, err
+	}
 	if plan.Type.IsNull() || plan.Type.IsUnknown() {
 		return plan, errors.New("application type is required")
 	}
@@ -81,15 +97,14 @@ func (r *PaperclipAppResource) createAppState(ctx context.Context, plan Papercli
 	if err := client.ValidateToolAppType(appType); err != nil {
 		return plan, err
 	}
-	var metaMap map[string]interface{}
-	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
-		if err := json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap); err != nil {
-			return plan, fmt.Errorf("invalid metadata JSON: %w", err)
-		}
+	metaMap, err := decodeApplicationMetadata(plan.Metadata)
+	if err != nil {
+		return plan, err
 	}
 	created, err := r.client.CreateToolApp(ctx, plan.CompanyID.ValueString(), client.PaperclipToolApp{
 		CompanyID: plan.CompanyID.ValueString(), Name: plan.Name.ValueString(), Type: appType, ApplicationKey: plan.ApplicationKey.ValueString(),
-		Description: plan.Description.ValueString(), Metadata: metaMap,
+		Description: nativeStringPointer(plan.Description), Metadata: metaMap,
+		Status: plan.Status.ValueString(), PluginID: nativeStringPointer(plan.PluginID), OwnerAgentID: nativeStringPointer(plan.OwnerAgentID), OwnerUserID: nativeStringPointer(plan.OwnerUserID),
 	})
 	if err != nil {
 		return plan, err
@@ -118,6 +133,9 @@ func (r *PaperclipAppResource) readAppState(ctx context.Context, state Paperclip
 }
 
 func (r *PaperclipAppResource) updateAppState(ctx context.Context, plan, state PaperclipAppResourceModel) (PaperclipAppResourceModel, error) {
+	if err := rejectDeclaredArchive(plan.Status); err != nil {
+		return plan, err
+	}
 	if plan.Type.IsNull() || plan.Type.IsUnknown() {
 		return plan, errors.New("application type is required")
 	}
@@ -125,15 +143,20 @@ func (r *PaperclipAppResource) updateAppState(ctx context.Context, plan, state P
 	if err := client.ValidateToolAppType(appType); err != nil {
 		return plan, err
 	}
-	var metaMap map[string]interface{}
-	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
-		if err := json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap); err != nil {
-			return plan, fmt.Errorf("invalid metadata JSON: %w", err)
-		}
+	if err := validateApplicationTransition(plan, state); err != nil {
+		return plan, err
+	}
+	if err := r.validateApplicationReferences(ctx, plan); err != nil {
+		return plan, err
+	}
+	metaMap, err := decodeApplicationMetadata(plan.Metadata)
+	if err != nil {
+		return plan, err
 	}
 	updated, err := r.client.UpdateToolApp(ctx, state.ID.ValueString(), client.PaperclipToolApp{
 		CompanyID: state.CompanyID.ValueString(), Name: plan.Name.ValueString(), Type: appType, ApplicationKey: plan.ApplicationKey.ValueString(),
-		Description: plan.Description.ValueString(), Metadata: metaMap,
+		Description: nativeStringPointer(plan.Description), Metadata: metaMap,
+		Status: plan.Status.ValueString(), PluginID: nativeStringPointer(plan.PluginID), OwnerAgentID: nativeStringPointer(plan.OwnerAgentID), OwnerUserID: nativeStringPointer(plan.OwnerUserID),
 	})
 	if err != nil {
 		return plan, err
@@ -148,8 +171,13 @@ func (r *PaperclipAppResource) Metadata(ctx context.Context, req resource.Metada
 
 func (r *PaperclipAppResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		Version:     1,
 		Description: "Manages a Paperclip-native MCP application registration. Refresh and import select the exact application ID from the declared company's application list. Import using <company_id>/<app_id>. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.",
 		Attributes: map[string]schema.Attribute{
+			"status":         schema.StringAttribute{Description: "Native status: active, draft or disabled. Defaults to active on native creation; omission retains the current status. Destroy archives the application.", Optional: true, Computed: true, PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}, Validators: []validator.String{nativeEnumValidator{values: []string{"active", "draft", "disabled"}, archiveViaDestroy: true}}},
+			"plugin_id":      schema.StringAttribute{Description: "Owning plugin ID. The native API cannot clear a configured owner; clearing is rejected before mutation.", Optional: true},
+			"owner_agent_id": schema.StringAttribute{Description: "Same-company owner agent ID. Clearing is unsupported by the native API and rejected.", Optional: true},
+			"owner_user_id":  schema.StringAttribute{Description: "Owner user ID. Clearing is unsupported by the native API and rejected.", Optional: true},
 			"id": schema.StringAttribute{
 				Description: "Unique identifier for the application.",
 				Computed:    true,
@@ -169,13 +197,10 @@ func (r *PaperclipAppResource) Schema(ctx context.Context, req resource.SchemaRe
 				Required:    true,
 			},
 			"type": schema.StringAttribute{
-				Description: fmt.Sprintf("Application type, one of: %s. Changing this forces replacement, because the type defines which connection and template shapes hang off the application.", strings.Join(client.ToolAppTypes, ", ")),
+				Description: fmt.Sprintf("Application type, one of: %s. The native update API cannot change type; changes are rejected without replacing identity.", strings.Join(client.ToolAppTypes, ", ")),
 				Required:    true,
 				Validators: []validator.String{
 					toolAppTypeValidator{},
-				},
-				PlanModifiers: []planmodifier.String{
-					stringplanmodifier.RequiresReplace(),
 				},
 			},
 			"application_key": schema.StringAttribute{
@@ -194,7 +219,7 @@ func (r *PaperclipAppResource) Schema(ctx context.Context, req resource.SchemaRe
 				Description: "Optional JSON metadata object for the application.",
 				Optional:    true,
 				Validators: []validator.String{
-					JSONAttributeValidator(),
+					applicationMetadataValidator{},
 				},
 				PlanModifiers: []planmodifier.String{
 					SemanticJSONPlanModifier(),
