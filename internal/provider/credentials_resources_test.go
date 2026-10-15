@@ -963,6 +963,28 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 		t.Fatalf("create without scope failed: %v", noScopeResp.Diagnostics)
 	}
 
+	// Read - without scope preserves nil Scope even when server returns default scope (Finding F1)
+	mockState.keys["ak-noscope"] = client.PaperclipAgentKey{
+		ID:      "ak-noscope",
+		AgentID: "ag-1",
+		Name:    "no-scope-key",
+		Token:   "tok-noscope",
+		Scope: &client.AgentKeyScope{
+			Kind: "standard",
+		},
+	}
+	var noScopeReadResp resource.ReadResponse
+	noScopeReadResp.State = noScopeResp.State
+	r.Read(ctx, resource.ReadRequest{State: noScopeResp.State}, &noScopeReadResp)
+	if noScopeReadResp.Diagnostics.HasError() {
+		t.Fatalf("read without scope failed: %v", noScopeReadResp.Diagnostics)
+	}
+	var noScopeReadModel PaperclipAgentKeyResourceModel
+	_ = noScopeReadResp.State.Get(ctx, &noScopeReadModel)
+	if noScopeReadModel.Scope != nil {
+		t.Fatalf("expected Scope to remain nil after Read when omitted in state/config to prevent drift, got: %+v", noScopeReadModel.Scope)
+	}
+
 	// Create - with explicit KeyID
 	r.client.RegisterMintedKey("ak-explicit-keyid", "tok-ak-exp", "explicit-ak-name", false, "ag-1")
 	expAkKeyIDModel := PaperclipAgentKeyResourceModel{
