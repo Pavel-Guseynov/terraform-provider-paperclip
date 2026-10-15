@@ -57,9 +57,10 @@ type mintedKeyRecord struct {
 }
 
 type Client struct {
-	Endpoint   string
-	Token      string
-	HTTPClient *http.Client
+	Endpoint      string
+	Token         string
+	HTTPClient    *http.Client
+	managedOwners map[string]string
 
 	credMu                 sync.RWMutex
 	mintedTokens           map[string]string // keyID -> token
@@ -68,8 +69,8 @@ type Client struct {
 	agentKeyAgents         map[string]string // keyID -> agentID
 	mintedKeys             map[string]mintedKeyRecord
 	mintedKeysByName       map[string]string // lookupKey -> keyID
-	acknowledgedDeliveries   map[string]bool   // keyID -> true
-	deliveredGenerations   map[string]int64 // lookupKey -> generation
+	acknowledgedDeliveries map[string]bool   // keyID -> true
+	deliveredGenerations   map[string]int64  // lookupKey -> generation
 }
 
 type HealthResponse struct {

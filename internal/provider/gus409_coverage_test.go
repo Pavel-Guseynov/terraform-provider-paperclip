@@ -745,13 +745,15 @@ func TestResourceLifecycleWithUnknownAndNullAttributes(t *testing.T) {
 	serverConn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case req.URL.Path == "/api/companies/comp-1/tools/applications":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{{"id": "app-1", "companyId": "comp-1", "type": "mcp_http"}}})
 		case req.URL.Path == "/api/companies/comp-1/tools/connections" && req.Method == http.MethodPost:
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":        "conn-1",
-				"companyId": "comp-1",
-				"name":      "conn-test",
-				"appId":     "app-1",
-				"config":    nil,
+				"id":            "conn-1",
+				"companyId":     "comp-1",
+				"name":          "conn-test",
+				"applicationId": "app-1",
+				"config":        nil,
 			})
 		case req.URL.Path == "/api/tool-connections/conn-1" && req.Method == http.MethodPatch:
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -775,12 +777,13 @@ func TestResourceLifecycleWithUnknownAndNullAttributes(t *testing.T) {
 
 	planConn := tfsdk.Plan{Schema: connSchemaResp.Schema}
 	_ = planConn.Set(ctx, &PaperclipConnectionResourceModel{
-		CompanyID:        types.StringValue("comp-1"),
-		Name:             types.StringValue("conn-test"),
-		Config:           types.StringUnknown(),
-		AppID:            types.StringValue("app-1"),
-		CredentialRefs:   types.StringUnknown(),
-		CredentialPolicy: types.StringNull(),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("conn-test"),
+		Config:               types.StringUnknown(),
+		AppID:                types.StringValue("app-1"),
+		CredentialRefs:       types.StringUnknown(),
+		CredentialPolicy:     types.StringNull(),
 	})
 	createConnResp := resource.CreateResponse{State: tfsdk.State{Schema: connSchemaResp.Schema}}
 	rConn.Create(ctx, resource.CreateRequest{Plan: planConn}, &createConnResp)
@@ -790,18 +793,20 @@ func TestResourceLifecycleWithUnknownAndNullAttributes(t *testing.T) {
 
 	stateConn := tfsdk.State{Schema: connSchemaResp.Schema}
 	_ = stateConn.Set(ctx, &PaperclipConnectionResourceModel{
-		ID:        types.StringValue("conn-1"),
-		CompanyID: types.StringValue("comp-1"),
-		Name:      types.StringValue("conn-test"),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		ID:                   types.StringValue("conn-1"),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("conn-test"),
 	})
 	planConnUpdate := tfsdk.Plan{Schema: connSchemaResp.Schema}
 	_ = planConnUpdate.Set(ctx, &PaperclipConnectionResourceModel{
-		ID:               types.StringValue("conn-1"),
-		CompanyID:        types.StringValue("comp-1"),
-		Name:             types.StringValue("conn-test"),
-		Config:           types.StringNull(),
-		CredentialRefs:   types.StringNull(),
-		CredentialPolicy: types.StringNull(),
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		ID:                   types.StringValue("conn-1"),
+		CompanyID:            types.StringValue("comp-1"),
+		Name:                 types.StringValue("conn-test"),
+		Config:               types.StringNull(),
+		CredentialRefs:       types.StringNull(),
+		CredentialPolicy:     types.StringNull(),
 	})
 	updConnResp := resource.UpdateResponse{State: tfsdk.State{Schema: connSchemaResp.Schema}}
 	rConn.Update(ctx, resource.UpdateRequest{Plan: planConnUpdate, State: stateConn}, &updConnResp)
@@ -843,7 +848,12 @@ func TestResourceLifecycleWithUnknownAndNullAttributes(t *testing.T) {
 	}
 
 	stateInst := tfsdk.State{Schema: instSchemaResp.Schema}
+	var createdInstModel PaperclipConnectionInstallResourceModel
+	if diags := createInstResp.State.Get(ctx, &createdInstModel); diags.HasError() {
+		t.Fatal(diags)
+	}
 	_ = stateInst.Set(ctx, &PaperclipConnectionInstallResourceModel{
+		OwnerID:      createdInstModel.OwnerID,
 		ID:           types.StringValue("conn-1"),
 		ConnectionID: types.StringValue("conn-1"),
 		AgentIDs:     types.ListNull(types.StringType),

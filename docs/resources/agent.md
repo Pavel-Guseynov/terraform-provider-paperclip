@@ -38,7 +38,7 @@ resource "paperclip_agent" "engineer" {
 
 ### Optional
 
-- `adapter_config` (String) Optional JSON adapter configuration string (e.g. skill assignments).
+- `adapter_config` (String) Optional JSON adapter object validated against published native field metadata at plan and before writes. UI omissions do not close the map; only an explicit additional-properties policy does. Instruction and paperclipSkillSync keys belong to separate resources and are rejected here. Requires board access to adapter schema metadata. Clear a nonempty declaration with jsonencode({}) before omitting it; null/omission cannot silently clear this optional/computed attribute. Remove adapter-agnostic keys with the original adapter_type before changing adapter_type.
 - `adapter_type` (String) Execution adapter type (e.g. antigravity_local).
 - `authorization_policy` (String) Optional JSON authorization policy for the agent. Recognised top-level keys: agentVisibility, assignmentPolicy, protectedAgent, managedBy.
 - `can_create_skills` (Boolean) Whether the agent may create skills. Defaults to true.
@@ -51,7 +51,7 @@ resource "paperclip_agent" "engineer" {
 - `reports_to` (String) Optional manager agent ID within the same company.
 - `retirement` (String) Administrative retirement strategy on destroy ('delete' for hard deletion, 'terminate' for key revocation and termination). Defaults to 'delete'.
 - `role` (String) Agent role (e.g. engineer, committer, reviewer).
-- `runtime_config` (String) Optional JSON runtime configuration string.
+- `runtime_config` (String) Optional JSON runtime object. Declared heartbeat settings are type-checked; native defaults and undeclared runtime fields are preserved. The native API cannot clear an existing aiConnection binding: retain it or declare a replacement.
 - `title` (String) Optional human-readable title.
 - `trust_preset` (String) Optional trust policy preset ('standard' or 'low_trust_review').
 

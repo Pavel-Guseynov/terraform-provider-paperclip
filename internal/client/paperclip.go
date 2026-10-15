@@ -614,8 +614,11 @@ type PaperclipToolApp struct {
 	Name           string                 `json:"name"`
 	Type           string                 `json:"type"`
 	ApplicationKey string                 `json:"applicationKey,omitempty"`
-	Description    string                 `json:"description,omitempty"`
+	Description    *string                `json:"description,omitempty"`
 	Status         string                 `json:"status,omitempty"`
+	PluginID       *string                `json:"pluginId,omitempty"`
+	OwnerAgentID   *string                `json:"ownerAgentId,omitempty"`
+	OwnerUserID    *string                `json:"ownerUserId,omitempty"`
 	Metadata       map[string]interface{} `json:"metadata,omitempty"`
 }
 
@@ -636,6 +639,12 @@ type PaperclipToolConnection struct {
 	CredentialSecretRefs []map[string]interface{} `json:"credentialSecretRefs"`
 	CredentialPolicy     string                   `json:"credentialPolicy,omitempty"`
 	Status               string                   `json:"status,omitempty"`
+	ConnectionPurpose    string                   `json:"connectionPurpose,omitempty"`
+	ConnectionKind       string                   `json:"connectionKind,omitempty"`
+	Ownership            string                   `json:"ownership,omitempty"`
+	CredentialSource     string                   `json:"credentialSource,omitempty"`
+	Enabled              *bool                    `json:"enabled,omitempty"`
+	TransportConfig      map[string]interface{}   `json:"transportConfig,omitempty"`
 }
 
 // ToolConnectionArchivedStatus is the state Paperclip's connection deletion
@@ -651,11 +660,13 @@ func (conn PaperclipToolConnection) AwaitingAuthorization() bool {
 
 type paperclipToolConnectionUpdate struct {
 	Name                 string                   `json:"name"`
-	Transport            string                   `json:"transport"`
-	AuthKind             string                   `json:"authKind"`
 	Config               map[string]interface{}   `json:"config"`
 	CredentialRefs       []map[string]interface{} `json:"credentialRefs"`
 	CredentialSecretRefs []map[string]interface{} `json:"credentialSecretRefs"`
+	TransportConfig      map[string]interface{}   `json:"transportConfig"`
+	CredentialPolicy     string                   `json:"credentialPolicy,omitempty"`
+	Status               string                   `json:"status,omitempty"`
+	Enabled              *bool                    `json:"enabled,omitempty"`
 }
 
 // Execution grants refer to the same protected secrets as the connection header
@@ -2828,7 +2839,7 @@ func (c *Client) RevokeAgentKey(ctx context.Context, agentID, keyID string) erro
 // ToolAppTypes is the authoritative allowed-value set for the Paperclip
 // application type. Every validation site (client and provider schema) must
 // consult it through ValidateToolAppType rather than restating the literals.
-var ToolAppTypes = []string{"mcp_http", "mcp_stdio"}
+var ToolAppTypes = []string{"mcp_http", "mcp_stdio", "paperclip_plugin", "a2a", "chat"}
 
 func ValidateToolAppType(appType string) error {
 	if strings.TrimSpace(appType) == "" {
@@ -2881,11 +2892,21 @@ func (c *Client) UpdateToolApp(ctx context.Context, appID string, app PaperclipT
 	}
 	var resp PaperclipToolApp
 	payload := map[string]interface{}{
-		"name":           app.Name,
-		"type":           app.Type,
-		"description":    app.Description,
-		"applicationKey": app.ApplicationKey,
-		"metadata":       app.Metadata,
+		"name":        app.Name,
+		"description": app.Description,
+		"metadata":    app.Metadata,
+	}
+	if app.Status != "" {
+		payload["status"] = app.Status
+	}
+	if app.PluginID != nil {
+		payload["pluginId"] = app.PluginID
+	}
+	if app.OwnerAgentID != nil {
+		payload["ownerAgentId"] = app.OwnerAgentID
+	}
+	if app.OwnerUserID != nil {
+		payload["ownerUserId"] = app.OwnerUserID
 	}
 	if app.Metadata == nil {
 		payload["metadata"] = map[string]interface{}{}
@@ -2997,11 +3018,19 @@ func (c *Client) UpdateToolConnection(ctx context.Context, connID string, conn P
 	}
 	payload := paperclipToolConnectionUpdate{
 		Name:                 conn.Name,
-		Transport:            conn.Transport,
-		AuthKind:             conn.AuthKind,
 		Config:               config,
 		CredentialRefs:       credRefs,
-		CredentialSecretRefs: []map[string]interface{}{},
+		CredentialSecretRefs: conn.CredentialSecretRefs,
+		TransportConfig:      conn.TransportConfig,
+		CredentialPolicy:     conn.CredentialPolicy,
+		Status:               conn.Status,
+		Enabled:              conn.Enabled,
+	}
+	if payload.CredentialSecretRefs == nil {
+		payload.CredentialSecretRefs = []map[string]interface{}{}
+	}
+	if payload.TransportConfig == nil {
+		payload.TransportConfig = map[string]interface{}{}
 	}
 	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/tool-connections/%s", url.PathEscape(connID)), payload, &resp); err != nil {
 		return nil, err

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"strings"
@@ -20,6 +21,7 @@ var (
 	_ resource.Resource                = &PaperclipConnectionInstallResource{}
 	_ resource.ResourceWithConfigure   = &PaperclipConnectionInstallResource{}
 	_ resource.ResourceWithImportState = &PaperclipConnectionInstallResource{}
+	_ resource.ResourceWithModifyPlan  = &PaperclipConnectionInstallResource{}
 )
 
 func NewPaperclipConnectionInstallResource() resource.Resource {
@@ -36,6 +38,7 @@ type PaperclipConnectionInstallResourceModel struct {
 	AgentIDs     types.List   `tfsdk:"agent_ids"`
 	TargetType   types.String `tfsdk:"target_type"`
 	CompanyID    types.String `tfsdk:"company_id"`
+	OwnerID      types.String `tfsdk:"owner_id"`
 }
 
 func (r *PaperclipConnectionInstallResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -44,8 +47,10 @@ func (r *PaperclipConnectionInstallResource) Metadata(ctx context.Context, req r
 
 func (r *PaperclipConnectionInstallResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
+		Version:     1,
 		Description: "Manages tool connection installs across agents or companies in Paperclip.",
 		Attributes: map[string]schema.Attribute{
+			"owner_id": schema.StringAttribute{Computed: true, Description: "Provider ownership identity for the whole install set. Conflicts within one provider configuration are rejected; separate states require external ownership coordination.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
 			"id": schema.StringAttribute{
 				Computed: true,
 				PlanModifiers: []planmodifier.String{
@@ -90,6 +95,10 @@ func (r *PaperclipConnectionInstallResource) Create(ctx context.Context, req res
 	var plan PaperclipConnectionInstallResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if err := claimAggregate(r.client, "installs", plan.ConnectionID.ValueString(), &plan.OwnerID); err != nil {
+		resp.Diagnostics.AddError("Connection install ownership conflict", err.Error())
 		return
 	}
 
@@ -202,6 +211,18 @@ func (r *PaperclipConnectionInstallResource) Update(ctx context.Context, req res
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	var state PaperclipConnectionInstallResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if plan.OwnerID.IsNull() || plan.OwnerID.IsUnknown() {
+		plan.OwnerID = state.OwnerID
+	}
+	if err := claimAggregate(r.client, "installs", plan.ConnectionID.ValueString(), &plan.OwnerID); err != nil {
+		resp.Diagnostics.AddError("Connection install ownership conflict", err.Error())
+		return
+	}
 
 	var agentIDs []string
 	if !plan.AgentIDs.IsNull() && !plan.AgentIDs.IsUnknown() {
@@ -282,4 +303,28 @@ func (r *PaperclipConnectionInstallResource) ImportState(ctx context.Context, re
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), id)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("connection_id"), id)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("owner_id"), rand.Text())...)
+}
+
+func claimAggregate(c *client.Client, kind, connectionID string, owner *types.String) error {
+	if owner.IsNull() || owner.IsUnknown() || owner.ValueString() == "" {
+		*owner = types.StringValue(rand.Text())
+	}
+	return c.ClaimConnectionAggregate(kind, connectionID, owner.ValueString())
+}
+
+func (r *PaperclipConnectionInstallResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || r.client == nil {
+		return
+	}
+	var plan PaperclipConnectionInstallResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() || plan.ConnectionID.IsUnknown() {
+		return
+	}
+	if err := claimAggregate(r.client, "installs", plan.ConnectionID.ValueString(), &plan.OwnerID); err != nil {
+		resp.Diagnostics.AddError("Connection install ownership conflict", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("owner_id"), plan.OwnerID)...)
 }

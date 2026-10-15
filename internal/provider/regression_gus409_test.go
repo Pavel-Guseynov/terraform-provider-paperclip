@@ -536,7 +536,7 @@ func TestBackwardCompatibilityExistingStatePlansWithoutReplacementAcrossResource
 		},
 		{
 			typeName: "paperclip_connection",
-			rawJSON:  `{"id":"conn-1","company_id":"comp-1","app_id":"app-1","name":"prod-github","gallery_key":null,"transport":"local_stdio","auth_kind":"basic","config":"{\"command\":\"oo\"}","credential_refs":null,"credential_policy":"shared","credential_grant_ready":true}`,
+			rawJSON:  `{"id":"conn-1","company_id":"comp-1","app_id":"app-1","name":"prod-github","gallery_key":null,"transport":"local_stdio","auth_kind":"api_key","config":"{\"templateId\":\"approved-template\"}","credential_refs":null,"credential_policy":"shared","credential_grant_ready":true}`,
 		},
 		{
 			typeName: "paperclip_policy",
@@ -603,4 +603,3 @@ func TestBackwardCompatibilityExistingStatePlansWithoutReplacementAcrossResource
 		})
 	}
 }
-

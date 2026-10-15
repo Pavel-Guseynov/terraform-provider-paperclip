@@ -155,7 +155,7 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 				Computed:    true,
 			},
 			"runtime_config": schema.StringAttribute{
-				Description: "Optional JSON runtime configuration string.",
+				Description: "Optional JSON runtime object. Declared heartbeat settings are type-checked; native defaults and undeclared runtime fields are preserved. The native API cannot clear an existing aiConnection binding: retain it or declare a replacement.",
 				Optional:    true,
 				Validators: []validator.String{
 					JSONAttributeValidator(),
@@ -165,7 +165,7 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 				},
 			},
 			"adapter_config": schema.StringAttribute{
-				Description: "Optional JSON adapter configuration string (e.g. skill assignments).",
+				Description: "Optional JSON adapter object validated against published native field metadata at plan and before writes. UI omissions do not close the map; only an explicit additional-properties policy does. Instruction and paperclipSkillSync keys belong to separate resources and are rejected here. Requires board access to adapter schema metadata. Clear a nonempty declaration with jsonencode({}) before omitting it; null/omission cannot silently clear this optional/computed attribute. Remove adapter-agnostic keys with the original adapter_type before changing adapter_type.",
 				Optional:    true,
 				Computed:    true,
 				Validators: []validator.String{
@@ -462,6 +462,7 @@ func (r *PaperclipAgentResource) ValidateConfig(ctx context.Context, req resourc
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(validateAgentConfigValues(config)...)
 
 	if config.Env != nil {
 		resp.Diagnostics.Append(ValidateEnvBindingsMapPlan(path.Root("env"), config.Env, "agent")...)
@@ -487,6 +488,20 @@ func (r *PaperclipAgentResource) ModifyPlan(ctx context.Context, req resource.Mo
 		resp.Diagnostics.Append(diags...)
 		return
 	}
+	resp.Diagnostics.Append(validateAgentConfigValues(plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(r.validateAgentNativeConfig(ctx, plan)...)
+	if !plan.CompanyID.IsUnknown() && !plan.CompanyID.IsNull() {
+		resp.Diagnostics.Append(ValidateEnvBindingsApply(ctx, r.client, plan.CompanyID.ValueString(), plan.Env)...)
+		if adapter, _ := agentConfigObject(plan.AdapterConfig); adapter != nil {
+			if env, exists := adapter["env"]; exists {
+				raw, _ := json.Marshal(env)
+				resp.Diagnostics.Append(ValidateEnvBindingsJSONApply(ctx, r.client, plan.CompanyID.ValueString(), string(raw))...)
+			}
+		}
+	}
 
 	if req.State.Raw.IsNull() {
 		if plan.CanCreateSkills.IsUnknown() || plan.CanCreateSkills.IsNull() {
@@ -504,6 +519,28 @@ func (r *PaperclipAgentResource) ModifyPlan(ctx context.Context, req resource.Mo
 	if !req.State.Raw.IsNull() {
 		var state PaperclipAgentResourceModel
 		if !req.State.Get(ctx, &state).HasError() {
+			// Attribute JSON modifiers can remove the only configured difference
+			// after the framework has marked computed status unknown. Preserve the
+			// refreshed status only when the entire remaining plan is unchanged.
+			unchanged := plan
+			unchanged.Status = state.Status
+			if plan.Status.IsUnknown() && reflect.DeepEqual(unchanged, state) {
+				resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("status"), state.Status)...)
+			}
+			if err := validateAgentRuntimeTransition(state.RuntimeConfig, plan.RuntimeConfig); err != nil {
+				resp.Diagnostics.AddAttributeError(path.Root("runtime_config"), "Unsupported runtime transition", err.Error())
+			}
+			if err := validateAgentAdapterTransition(state, plan); err != nil {
+				resp.Diagnostics.AddAttributeError(path.Root("adapter_config"), "Unsupported adapter transition", err.Error())
+			}
+			if !req.Config.Raw.IsNull() {
+				var configured types.String
+				if d := req.Config.GetAttribute(ctx, path.Root("adapter_config"), &configured); !d.HasError() && configured.IsNull() {
+					if previous, _ := agentConfigObject(state.AdapterConfig); len(previous) > 0 {
+						resp.Diagnostics.AddAttributeError(path.Root("adapter_config"), "Explicit adapter clearing required", "adapter_config is optional/computed and null retains the existing configuration; set adapter_config = jsonencode({}) to prune provider-owned keys explicitly before omitting it")
+					}
+				}
+			}
 			if err := validateTrustPresetNotCleared(state.TrustPreset, plan.TrustPreset); err != nil {
 				resp.Diagnostics.AddAttributeError(
 					path.Root("trust_preset"),
@@ -618,6 +655,17 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(validateAgentConfigValues(plan)...)
+	nativePlan := plan
+	if nativePlan.AdapterType.IsUnknown() || nativePlan.AdapterType.IsNull() {
+		nativePlan.AdapterType = types.StringValue("antigravity_local")
+	}
+	if !resp.Diagnostics.HasError() {
+		resp.Diagnostics.Append(r.validateAgentNativeConfig(ctx, nativePlan)...)
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	var authPolicyMap map[string]interface{}
 	if !plan.AuthorizationPolicy.IsNull() && !plan.AuthorizationPolicy.IsUnknown() && plan.AuthorizationPolicy.ValueString() != "" {
@@ -638,19 +686,9 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 		}
 	}
 
-	var runtimeMap, adapterMap, metaMap map[string]interface{}
-	if !plan.RuntimeConfig.IsNull() && !plan.RuntimeConfig.IsUnknown() && plan.RuntimeConfig.ValueString() != "" {
-		if err := json.Unmarshal([]byte(plan.RuntimeConfig.ValueString()), &runtimeMap); err != nil {
-			resp.Diagnostics.AddAttributeError(path.Root("runtime_config"), "Invalid JSON", err.Error())
-			return
-		}
-	}
-	if !plan.AdapterConfig.IsNull() && !plan.AdapterConfig.IsUnknown() && plan.AdapterConfig.ValueString() != "" {
-		if err := json.Unmarshal([]byte(plan.AdapterConfig.ValueString()), &adapterMap); err != nil {
-			resp.Diagnostics.AddAttributeError(path.Root("adapter_config"), "Invalid JSON", err.Error())
-			return
-		}
-	}
+	runtimeMap, _ := agentConfigObject(plan.RuntimeConfig)
+	adapterMap, _ := agentConfigObject(plan.AdapterConfig)
+	var metaMap map[string]interface{}
 	if plan.Env != nil {
 		resp.Diagnostics.Append(ValidateEnvBindingsApply(ctx, r.client, plan.CompanyID.ValueString(), plan.Env)...)
 		if resp.Diagnostics.HasError() {
@@ -792,8 +830,8 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 		plan.AdapterType = types.StringNull()
 	}
 	plan.Status = stringOrNull(created.Status)
-	plan.RuntimeConfig = refreshManagedJSONState(plan.RuntimeConfig, created.RuntimeConfig)
-	plan.AdapterConfig = refreshAgentAdapterConfig(plan.AdapterConfig, created.AdapterConfig)
+	plan.RuntimeConfig = refreshAgentRuntimeConfig(plan.RuntimeConfig, created.RuntimeConfig)
+	plan.AdapterConfig = refreshAgentAdapterState(plan.AdapterConfig, created.AdapterConfig, plan.Env)
 	plan.Metadata = refreshManagedJSONState(plan.Metadata, created.Metadata)
 	plan.CanAssignTasks, plan.CanCreateAgents, plan.CanCreateSkills = permissionState(created.Permissions)
 	if created.Permissions != nil {
@@ -825,6 +863,7 @@ func (r *PaperclipAgentResource) Read(ctx context.Context, req resource.ReadRequ
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	importing := state.Name.IsNull()
 
 	agent, err := r.client.GetAgent(ctx, state.ID.ValueString())
 	if err != nil {
@@ -863,8 +902,14 @@ func (r *PaperclipAgentResource) Read(ctx context.Context, req resource.ReadRequ
 	}
 	state.Status = stringOrNull(agent.Status)
 
-	state.RuntimeConfig = refreshManagedJSONState(state.RuntimeConfig, agent.RuntimeConfig)
-	state.AdapterConfig = refreshAgentAdapterConfig(state.AdapterConfig, agent.AdapterConfig)
+	if importing {
+		state.RuntimeConfig = types.StringUnknown()
+		if remoteEnv, exists := agent.AdapterConfig["env"]; exists {
+			state.AdapterConfig = jsonStringOrNull(map[string]interface{}{"env": remoteEnv})
+		}
+	}
+	state.RuntimeConfig = refreshAgentRuntimeConfig(state.RuntimeConfig, agent.RuntimeConfig)
+	state.AdapterConfig = refreshAgentAdapterState(state.AdapterConfig, agent.AdapterConfig, state.Env)
 	state.Metadata = refreshManagedJSONState(state.Metadata, agent.Metadata)
 	state.CanAssignTasks, state.CanCreateAgents, state.CanCreateSkills = permissionState(agent.Permissions)
 	if agent.Permissions != nil {
@@ -1092,14 +1137,26 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 	if resp.Diagnostics.HasError() {
 		return
 	}
-
-	var runtimeMap, adapterMap, metaMap map[string]interface{}
-	if !plan.RuntimeConfig.IsNull() && !plan.RuntimeConfig.IsUnknown() && plan.RuntimeConfig.ValueString() != "" {
-		if err := json.Unmarshal([]byte(plan.RuntimeConfig.ValueString()), &runtimeMap); err != nil {
-			resp.Diagnostics.AddAttributeError(path.Root("runtime_config"), "Invalid JSON", err.Error())
-			return
-		}
+	resp.Diagnostics.Append(validateAgentConfigValues(plan)...)
+	if err := validateAgentRuntimeTransition(state.RuntimeConfig, plan.RuntimeConfig); err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("runtime_config"), "Unsupported runtime transition", err.Error())
 	}
+	if err := validateAgentAdapterTransition(state, plan); err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("adapter_config"), "Unsupported adapter transition", err.Error())
+	}
+	nativePlan := plan
+	if nativePlan.AdapterType.IsUnknown() || nativePlan.AdapterType.IsNull() {
+		nativePlan.AdapterType = state.AdapterType
+	}
+	if !resp.Diagnostics.HasError() {
+		resp.Diagnostics.Append(r.validateAgentNativeConfig(ctx, nativePlan)...)
+	}
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	runtimeMap, _ := agentConfigObject(plan.RuntimeConfig)
+	var adapterMap, metaMap map[string]interface{}
 	var replaceAdapterConfig bool
 	var currentAgent *client.PaperclipAgent
 	getCurrentAgent := func() (*client.PaperclipAgent, error) {
@@ -1114,10 +1171,7 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		return currentAgent, nil
 	}
 	if !plan.AdapterConfig.IsNull() && !plan.AdapterConfig.IsUnknown() && plan.AdapterConfig.ValueString() != "" {
-		if err := json.Unmarshal([]byte(plan.AdapterConfig.ValueString()), &adapterMap); err != nil {
-			resp.Diagnostics.AddAttributeError(path.Root("adapter_config"), "Invalid JSON", err.Error())
-			return
-		}
+		adapterMap, _ = agentConfigObject(plan.AdapterConfig)
 		if adapterMap != nil {
 			current, err := getCurrentAgent()
 			if err != nil {
@@ -1152,7 +1206,7 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 			}
 		}
 	}
-	if plan.Env != nil {
+	if plan.Env != nil || state.Env != nil {
 		if adapterMap == nil {
 			adapterMap = make(map[string]interface{})
 		}
@@ -1194,6 +1248,26 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		}
 		replaceAdapterConfig = true
 	}
+	// Delete previously owned bindings after preservation so a removed secret
+	// reference is not accidentally restored as an unowned server binding.
+	if existingEnv, ok := adapterMap["env"].(map[string]interface{}); ok {
+		for key := range state.Env {
+			if _, exists := plan.Env[key]; !exists {
+				delete(existingEnv, key)
+			}
+		}
+		priorAdapter, _ := agentConfigObject(state.AdapterConfig)
+		desiredAdapter, _ := agentConfigObject(plan.AdapterConfig)
+		priorEnv, _ := priorAdapter["env"].(map[string]interface{})
+		desiredEnv, _ := desiredAdapter["env"].(map[string]interface{})
+		for key := range priorEnv {
+			if _, exists := desiredEnv[key]; !exists {
+				if _, topLevel := plan.Env[key]; !topLevel {
+					delete(existingEnv, key)
+				}
+			}
+		}
+	}
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
 		if err := json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap); err != nil {
 			resp.Diagnostics.AddAttributeError(path.Root("metadata"), "Invalid JSON", err.Error())
@@ -1218,6 +1292,35 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 	if err := r.validateReportsToCycle(ctx, state.ID.ValueString(), state.CompanyID.ValueString(), reportsTo); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("reports_to"), "Invalid reports_to", err.Error())
 		return
+	}
+	// The native runtime PATCH replaces the object. Preserve runtime fields
+	// outside the prior/current declaration, including an unowned AI binding.
+	current, err := getCurrentAgent()
+	if err != nil {
+		resp.Diagnostics.AddError("Error reading Paperclip agent before update", err.Error())
+		return
+	}
+	if runtimeMap == nil {
+		runtimeMap = make(map[string]interface{})
+	}
+	priorRuntime, _ := agentConfigObject(state.RuntimeConfig)
+	for key, value := range current.RuntimeConfig {
+		if _, owned := priorRuntime[key]; !owned {
+			if _, declared := runtimeMap[key]; !declared {
+				runtimeMap[key] = value
+			}
+		}
+	}
+	if desiredHeartbeat, ok := runtimeMap["heartbeat"].(map[string]interface{}); ok {
+		priorHeartbeat, _ := priorRuntime["heartbeat"].(map[string]interface{})
+		remoteHeartbeat, _ := current.RuntimeConfig["heartbeat"].(map[string]interface{})
+		for key, value := range remoteHeartbeat {
+			if _, owned := priorHeartbeat[key]; !owned {
+				if _, declared := desiredHeartbeat[key]; !declared {
+					desiredHeartbeat[key] = value
+				}
+			}
+		}
 	}
 
 	role := plan.Role.ValueString()
@@ -1275,7 +1378,7 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		canCreateSkills = state.CanCreateSkills.ValueBool()
 	} else if updated.Permissions != nil {
 		canCreateSkills = updated.Permissions.CanCreateSkills
-	} else if current, err := r.client.GetAgent(ctx, state.ID.ValueString()); err == nil && current.Permissions != nil {
+	} else if current.Permissions != nil {
 		canCreateSkills = current.Permissions.CanCreateSkills
 	}
 	trustPreset := ""
@@ -1324,8 +1427,8 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		plan.AdapterType = stringOrNull(updated.AdapterType)
 	}
 	plan.Status = stringOrNull(updated.Status)
-	plan.RuntimeConfig = refreshManagedJSONState(plan.RuntimeConfig, updated.RuntimeConfig)
-	plan.AdapterConfig = refreshAgentAdapterConfig(plan.AdapterConfig, updated.AdapterConfig)
+	plan.RuntimeConfig = refreshAgentRuntimeConfig(plan.RuntimeConfig, updated.RuntimeConfig)
+	plan.AdapterConfig = refreshAgentAdapterState(plan.AdapterConfig, updated.AdapterConfig, plan.Env)
 	plan.Metadata = refreshManagedJSONState(plan.Metadata, updated.Metadata)
 	plan.CanAssignTasks, plan.CanCreateAgents, plan.CanCreateSkills = permissionState(updated.Permissions)
 	if updated.Permissions != nil {

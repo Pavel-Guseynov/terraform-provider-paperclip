@@ -136,3 +136,56 @@ func TestLocalEnvironmentPathReconciliation(t *testing.T) {
 		})
 	}
 }
+
+func TestExecutionEnvironmentClientUsesNativeRoutesAndVerifiesReadback(t *testing.T) {
+	for _, mode := range []string{"create", "update", "write-error", "invalid-identity", "changed-identity", "read-error", "incomplete", "delete-error"} {
+		t.Run(mode, func(t *testing.T) {
+			var requests []string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				requests = append(requests, req.Method+" "+req.URL.RequestURI())
+				w.Header().Set("Content-Type", "application/json")
+				if mode == "write-error" || (mode == "read-error" && req.Method == "GET") || (mode == "delete-error" && req.Method == "DELETE") {
+					w.WriteHeader(403)
+					_, _ = w.Write([]byte(`{"error":"Instance admin required"}`))
+					return
+				}
+				id := "env-id"
+				if mode == "invalid-identity" {
+					id = ""
+				}
+				if mode == "changed-identity" {
+					id = "different"
+				}
+				if mode == "incomplete" {
+					_, _ = w.Write([]byte(`{"id":"env-id"}`))
+					return
+				}
+				_ = json.NewEncoder(w).Encode(PaperclipEnvironment{ID: id, Name: "remote", Driver: "ssh", Status: "active", Config: map[string]interface{}{}, EnvVars: map[string]interface{}{}})
+			}))
+			defer server.Close()
+			c, _ := NewClient(server.URL, "fixture-token")
+			id := "env-id"
+			if mode == "create" || mode == "invalid-identity" {
+				id = ""
+			}
+			_, err := c.SaveExecutionEnvironment(context.Background(), "company", id, map[string]interface{}{"name": "remote"})
+			wantErr := mode != "create" && mode != "update" && mode != "delete-error"
+			if (err != nil) != wantErr {
+				t.Fatalf("unexpected save result: %v", err)
+			}
+			if mode == "create" && requests[0] != "POST /api/companies/company/environments" {
+				t.Fatal(requests)
+			}
+			if mode == "update" && !reflect.DeepEqual(requests, []string{"PATCH /api/environments/env-id?companyId=company", "GET /api/environments/env-id"}) {
+				t.Fatal(requests)
+			}
+			if mode == "read-error" && !strings.Contains(err.Error(), "Instance admin required") {
+				t.Fatal("authorization reason missing", err)
+			}
+			err = c.DeleteExecutionEnvironment(context.Background(), "env-id")
+			if (err != nil) != (mode == "write-error" || mode == "delete-error") {
+				t.Fatalf("unexpected delete result: %v", err)
+			}
+		})
+	}
+}

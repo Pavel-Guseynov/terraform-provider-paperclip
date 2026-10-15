@@ -16,9 +16,9 @@ resource "paperclip_connection" "gitea_conn" {
   company_id = paperclip_company.acme.id
   app_id     = paperclip_app.gitea.id
   name       = "gitea-default"
-  transport  = "stdio"
+  transport  = "local_stdio"
   auth_kind  = "api_key"
-  config     = jsonencode({ command = "gitea-mcp" })
+  config     = jsonencode({ templateId = paperclip_stdio_template.gitea_stdio.template_id })
 }
 ```
 
@@ -34,13 +34,35 @@ resource "paperclip_connection" "gitea_conn" {
 - `app_id` (String) Existing parent tool application ID; required unless gallery_key names an included connector, whose application Paperclip creates.
 - `auth_kind` (String) Optional authentication type.
 - `config` (String) JSON connection configuration (command, args, env, url).
-- `credential_policy` (String) Paperclip credential policy (shared or per_user), fixed at creation; an OAuth connection defaults to per_user, owned by its creator.
+- `connection_kind` (String) Native connection kind; managed is the only native kind.
+- `connection_purpose` (String) Native purpose. Custom connection creation defaults to tool and does not persist channel purpose; request native setup and import for channel connections.
+- `credential_policy` (String) Native credential policy: shared, per_user, per_user_with_fallback or per_agent. OAuth defaults to per_user; other connections default to shared.
 - `credential_refs` (String) Optional JSON array of Paperclip credential references.
+- `credential_secret_refs` (Map of Objects, see [below for nested schema](#nestedatt--credential-secret-refs)) Protected company secret references keyed by native configPath. Versions use latest or a positive integer string. Contains reference identities only, never credential values.
+- `credential_source` (String) Native credential source. Custom creation uses paperclip_vault. Other sources require native setup and import; source transitions are rejected.
+- `enabled` (Boolean) Whether the native connection is enabled. Native creation defaults to false; omission retains its current value. Local stdio activation follows the target server's deployment and trusted-runtime policy.
 - `gallery_key` (String) Paperclip app gallery slug of an included connector, connected through its gallery definition and identified by config.sourceTemplateKey.
 - `name` (String) Connection name; Paperclip names an included gallery connector.
-- `transport` (String) Connection transport type (e.g. stdio, mcp_remote).
+- `ownership` (String) Native ownership, immutable after creation. Custom creation defaults to customer; omission retains an imported value.
+- `status` (String) Native administrative status, defaulting to draft at creation. Omission retains its current value. Destroy archives the connection.
+- `transport` (String) Native transport: local_stdio, mcp_remote, rest_api or chat_sdk. Immutable after creation.
+- `transport_config` (String) Native transport configuration JSON object. Omission retains the native value; use {} to clear it. Sensitive keys are rejected recursively.
 
 ### Read-Only
 
 - `credential_grant_ready` (Boolean) Whether the native default execution grant has the declared protected credential references.
 - `id` (String) Unique identifier for the connection.
+
+<a id="nestedatt--credential-secret-refs"></a>
+### Nested Schema for `credential_secret_refs`
+
+### Optional
+
+- `expires_at` (String) Native protected-reference expires_at.
+- `key_scope` (String) Native protected-reference key_scope.
+- `label` (String) Native protected-reference label.
+- `projection_allowlist_key` (String) Allowlist key required when projection_class is 'class_3_static_lease'.
+- `projection_class` (String) Projection classification for secret_ref bindings: unclassified (native default) or class_3_static_lease.
+- `required` (Boolean) Whether execution requires this reference.
+- `secret_id` (String) Target Paperclip company secret ID for secret_ref bindings.
+- `version` (String) Version selector for secret references: latest (native default) or a canonical positive integer string, sent as a native JSON integer.

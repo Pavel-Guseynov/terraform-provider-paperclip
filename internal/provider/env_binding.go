@@ -287,7 +287,7 @@ func ValidateEnvBindingsApply(ctx context.Context, c *client.Client, companyID s
 			continue
 		}
 
-		_, err := c.GetSecret(ctx, companyID, secretID)
+		secret, err := c.GetSecret(ctx, companyID, secretID)
 		if err != nil {
 			if errors.Is(err, client.ErrNotFound) {
 				diags.AddError(
@@ -300,6 +300,8 @@ func ValidateEnvBindingsApply(ctx context.Context, c *client.Client, companyID s
 					fmt.Sprintf("Failed to verify secret reference %q (for key %q): %s", secretID, k, err.Error()),
 				)
 			}
+		} else if secret.CompanyID != companyID {
+			diags.AddError("Invalid Secret Reference", "The secret inventory returned a reference from a different company; no mutation was sent.")
 		}
 	}
 
