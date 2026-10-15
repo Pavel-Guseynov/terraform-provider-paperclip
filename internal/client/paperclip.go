@@ -1060,7 +1060,7 @@ func (c *Client) CreateBoardKey(ctx context.Context, name string, expiresAt *tim
 
 	var challenge paperclipCLIAuthChallenge
 	if err := c.paperclipRequestWithToken(ctx, http.MethodPost, "/api/cli-auth/challenges", map[string]interface{}{
-		"command":         "harness paperclip-sync",
+		"command":         "terraform-provider-paperclip",
 		"clientName":      name,
 		"requestedAccess": "board",
 	}, &challenge, ""); err != nil {

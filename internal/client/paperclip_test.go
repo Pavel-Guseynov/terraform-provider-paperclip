@@ -478,7 +478,7 @@ func TestCreateBoardKey(t *testing.T) {
 				}
 				var body map[string]interface{}
 				_ = json.NewDecoder(r.Body).Decode(&body)
-				if body["clientName"] != "Harness OpenTofu" || body["requestedAccess"] != "board" {
+				if body["command"] != "terraform-provider-paperclip" || body["clientName"] != "OpenTofu client" || body["requestedAccess"] != "board" {
 					t.Fatalf("unexpected challenge body: %#v", body)
 				}
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -505,11 +505,11 @@ func TestCreateBoardKey(t *testing.T) {
 		defer server.Close()
 
 		cli, _ := NewClient(server.URL, "")
-		key, err := cli.CreateBoardKey(context.Background(), "Harness OpenTofu", nil, "")
+		key, err := cli.CreateBoardKey(context.Background(), "OpenTofu client", nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if key.ID != "key-1" || key.Name != "Harness OpenTofu" || key.Token != "pcp_board_secret" {
+		if key.ID != "key-1" || key.Name != "OpenTofu client" || key.Token != "pcp_board_secret" {
 			t.Fatalf("unexpected board key: %#v", key)
 		}
 	})
@@ -550,7 +550,7 @@ func TestCreateBoardKey(t *testing.T) {
 			}))
 			defer server.Close()
 			cli, _ := NewClient(server.URL, "")
-			if _, err := cli.CreateBoardKey(context.Background(), "Harness OpenTofu", nil, ""); err == nil {
+			if _, err := cli.CreateBoardKey(context.Background(), "OpenTofu client", nil, ""); err == nil {
 				t.Fatal("expected board key creation failure")
 			}
 		})
