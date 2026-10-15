@@ -519,6 +519,14 @@ func (r *PaperclipAgentResource) ModifyPlan(ctx context.Context, req resource.Mo
 	if !req.State.Raw.IsNull() {
 		var state PaperclipAgentResourceModel
 		if !req.State.Get(ctx, &state).HasError() {
+			// Attribute JSON modifiers can remove the only configured difference
+			// after the framework has marked computed status unknown. Preserve the
+			// refreshed status only when the entire remaining plan is unchanged.
+			unchanged := plan
+			unchanged.Status = state.Status
+			if plan.Status.IsUnknown() && reflect.DeepEqual(unchanged, state) {
+				resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("status"), state.Status)...)
+			}
 			if err := validateAgentRuntimeTransition(state.RuntimeConfig, plan.RuntimeConfig); err != nil {
 				resp.Diagnostics.AddAttributeError(path.Root("runtime_config"), "Unsupported runtime transition", err.Error())
 			}

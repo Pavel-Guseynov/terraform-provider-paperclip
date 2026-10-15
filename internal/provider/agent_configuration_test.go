@@ -11,6 +11,7 @@ import (
 
 	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -128,7 +129,7 @@ func TestAgentPublishedSchemaSemantics(t *testing.T) {
 
 func TestAgentRuntimeOwnedDrift(t *testing.T) {
 	declared := types.StringValue(`{"heartbeat":{"enabled":true,"intervalSec":30},"custom":{}}`)
-	remote := map[string]interface{}{"heartbeat": map[string]interface{}{"enabled": true, "intervalSec": float64(30), "maxConcurrentRuns": float64(20)}, "custom": map[string]interface{}{}, "aiConnection": map[string]interface{}{"mode": "automatic"}}
+	remote := map[string]interface{}{"heartbeat": map[string]interface{}{"enabled": true, "intervalSec": float64(30), "maxConcurrentRuns": float64(20)}, "custom": map[string]interface{}{}, "aiConnection": map[string]interface{}{"provider": "openai", "method": "subscription", "mode": "responsible_user"}}
 	if got := refreshAgentRuntimeConfig(declared, remote); !got.Equal(declared) {
 		t.Fatalf("unowned defaults changed state: %s", got)
 	}
@@ -165,8 +166,8 @@ func TestAgentRuntimeOwnedDrift(t *testing.T) {
 
 func TestAgentUnsupportedTransitionsDoNotWrite(t *testing.T) {
 	for _, tc := range []struct{ name, priorRuntime, nextRuntime, priorAdapter, nextAdapter, priorType, nextType, want string }{
-		{"AI binding removal", `{"aiConnection":{"mode":"automatic"}}`, `{}`, `{}`, `{}`, "codex_local", "codex_local", "runtime_config.aiConnection cannot be cleared"},
-		{"AI binding null", `{"aiConnection":{"mode":"automatic"}}`, `{"aiConnection":null}`, `{}`, `{}`, "codex_local", "codex_local", "runtime_config.aiConnection cannot be cleared"},
+		{"AI binding removal", `{"aiConnection":{"provider":"openai","method":"subscription","mode":"responsible_user"}}`, `{}`, `{}`, `{}`, "codex_local", "codex_local", "runtime_config.aiConnection cannot be cleared"},
+		{"AI binding null", `{"aiConnection":{"provider":"openai","method":"subscription","mode":"responsible_user"}}`, `{"aiConnection":null}`, `{}`, `{}`, "codex_local", "codex_local", "runtime_config.aiConnection cannot be cleared"},
 		{"swap prunes cwd", `{}`, `{}`, `{"cwd":"/work"}`, `{}`, "codex_local", "other", "adapter_type cannot change while removing adapter-agnostic key cwd"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -215,7 +216,7 @@ func TestAgentUnsupportedTransitionsDoNotWrite(t *testing.T) {
 
 func TestAgentConfigurationLifecyclePreservesOtherOwners(t *testing.T) {
 	ctx := context.Background()
-	live := client.PaperclipAgent{ID: "same-agent", CompanyID: "company", Name: "agent", AdapterType: "codex_local", Status: "idle", Permissions: &client.PaperclipAgentPermissions{CanCreateSkills: true}, RuntimeConfig: map[string]interface{}{"heartbeat": map[string]interface{}{"enabled": true, "intervalSec": float64(30), "maxConcurrentRuns": float64(20)}, "aiConnection": map[string]interface{}{"mode": "automatic"}}, AdapterConfig: map[string]interface{}{"engine": "cli", "instructionsRootPath": "/instructions", "paperclipSkillSync": map[string]interface{}{"mode": "exclusive"}, "env": map[string]interface{}{"OWNED": map[string]interface{}{"type": "secret_ref", "secretId": "secret"}, "INJECTED": map[string]interface{}{"type": "secret_ref", "secretId": "injected"}}}}
+	live := client.PaperclipAgent{ID: "same-agent", CompanyID: "company", Name: "agent", AdapterType: "codex_local", Status: "idle", Permissions: &client.PaperclipAgentPermissions{CanCreateSkills: true}, RuntimeConfig: map[string]interface{}{"heartbeat": map[string]interface{}{"enabled": true, "intervalSec": float64(30), "maxConcurrentRuns": float64(20)}, "aiConnection": map[string]interface{}{"provider": "openai", "method": "subscription", "mode": "responsible_user"}}, AdapterConfig: map[string]interface{}{"engine": "cli", "instructionsRootPath": "/instructions", "paperclipSkillSync": map[string]interface{}{"mode": "exclusive"}, "env": map[string]interface{}{"OWNED": map[string]interface{}{"type": "secret_ref", "secretId": "secret"}, "INJECTED": map[string]interface{}{"type": "secret_ref", "secretId": "injected"}}}}
 	writes := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -388,6 +389,29 @@ func TestAgentDuplicateEnvironmentOwnership(t *testing.T) {
 func TestAgentUnknownRuntimeTransitionDefers(t *testing.T) {
 	if err := validateAgentRuntimeTransition(types.StringValue(`{"aiConnection":{}}`), types.StringUnknown()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAgentNoOpPlanPreservesRefreshedStatus(t *testing.T) {
+	ctx := context.Background()
+	r := NewPaperclipAgentResource().(*PaperclipAgentResource)
+	var sr resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sr)
+	model := PaperclipAgentResourceModel{ID: types.StringValue("same-agent"), Name: types.StringValue("agent"), AdapterConfig: types.StringValue(`{"engine":"cli"}`), RuntimeConfig: types.StringValue(`{"heartbeat":{"intervalSec":45}}`), Status: types.StringValue("idle")}
+	state := tfsdk.State{Schema: sr.Schema}
+	state.Set(ctx, &model)
+	model.Status = types.StringUnknown()
+	plan := tfsdk.Plan{Schema: sr.Schema}
+	plan.Set(ctx, &model)
+	resp := resource.ModifyPlanResponse{Plan: plan}
+	r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: plan, State: state}, &resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatal(resp.Diagnostics)
+	}
+	var status types.String
+	resp.Plan.GetAttribute(ctx, path.Root("status"), &status)
+	if status.ValueString() != "idle" {
+		t.Fatalf("no-op status must remain the refreshed value, got %s", status)
 	}
 }
 
