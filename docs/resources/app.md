@@ -2,12 +2,12 @@
 page_title: "paperclip_app Resource - terraform-provider-paperclip"
 subcategory: ""
 description: |-
-  Manages a Paperclip-native MCP application registration. Refresh and import select the exact application ID from the declared company's application list. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.
+  Manages a Paperclip-native MCP application registration. Refresh and import select the exact application ID from the declared company's application list. Import using <company_id>/<app_id>. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.
 ---
 
 # paperclip_app (Resource)
 
-Manages a Paperclip-native MCP application registration. Refresh and import select the exact application ID from the declared company's application list. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.
+Manages a Paperclip-native MCP application registration. Refresh and import select the exact application ID from the declared company's application list. Import using <company_id>/<app_id>. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.
 
 ## Example Usage
 

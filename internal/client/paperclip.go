@@ -2815,7 +2815,7 @@ func (c *Client) CreateToolApp(ctx context.Context, companyID string, app Paperc
 
 func (c *Client) GetToolApp(ctx context.Context, companyID, appID string) (*PaperclipToolApp, error) {
 	if companyID == "" || appID == "" {
-		return nil, ErrNotFound
+		return nil, fmt.Errorf("company ID and application ID are required to read a tool application")
 	}
 	apps, err := c.ListToolApps(ctx, companyID)
 	if err != nil {

@@ -148,7 +148,7 @@ func (r *PaperclipAppResource) Metadata(ctx context.Context, req resource.Metada
 
 func (r *PaperclipAppResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Paperclip-native MCP application registration. Refresh and import select the exact application ID from the declared company's application list. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.",
+		Description: "Manages a Paperclip-native MCP application registration. Refresh and import select the exact application ID from the declared company's application list. Import using <company_id>/<app_id>. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Description: "Unique identifier for the application.",
@@ -290,20 +290,14 @@ func (r *PaperclipAppResource) Delete(ctx context.Context, req resource.DeleteRe
 }
 
 func (r *PaperclipAppResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	id := req.ID
-	if strings.Contains(id, "/") {
-		parts := strings.SplitN(id, "/", 2)
-		if parts[0] != "" && parts[1] != "" {
-			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
-			resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
-			return
-		}
-	} else if id != "" {
-		resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	parts := strings.Split(req.ID, "/")
+	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("company_id"), parts[0])...)
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), parts[1])...)
 		return
 	}
 	resp.Diagnostics.AddError(
 		"Invalid Application Import ID",
-		fmt.Sprintf("Expected <company_id>/<app_id> or <app_id>, got %q", id),
+		fmt.Sprintf("Expected <company_id>/<app_id>, got %q", req.ID),
 	)
 }

@@ -185,11 +185,11 @@ func TestFullCoverageClientRemaining(t *testing.T) {
 	if _, err := cli.GetSecret(ctx, "c1", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatal("expected ErrNotFound for empty secret ID in GetSecret")
 	}
-	if _, err := cli.GetToolApp(ctx, "c1", ""); !errors.Is(err, ErrNotFound) {
-		t.Fatal("expected ErrNotFound for empty app ID")
+	if _, err := cli.GetToolApp(ctx, "c1", ""); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatal("missing application identity must fail without claiming remote absence")
 	}
-	if _, err := cli.GetToolApp(ctx, "", "app-1"); !errors.Is(err, ErrNotFound) {
-		t.Fatal("expected ErrNotFound for empty application company ID")
+	if _, err := cli.GetToolApp(ctx, "", "app-1"); err == nil || errors.Is(err, ErrNotFound) {
+		t.Fatal("missing company identity must fail without claiming remote absence")
 	}
 	if _, err := cli.GetToolConnection(ctx, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatal("expected ErrNotFound for empty conn ID")
