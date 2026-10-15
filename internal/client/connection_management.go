@@ -18,7 +18,7 @@ func (c *Client) ClaimConnectionAggregate(kind, connectionID, ownerID string) er
 		c.managedOwners = map[string]string{}
 	}
 	if prior := c.managedOwners[key]; prior != "" && prior != ownerID {
-		return fmt.Errorf("conflicting owners for connection %s %s; declare exactly one aggregate resource per connection in this provider configuration", connectionID, kind)
+		return fmt.Errorf("conflicting owners for %s %s; declare exactly one resource owner per native object in this provider configuration", kind, connectionID)
 	}
 	c.managedOwners[key] = ownerID
 	return nil

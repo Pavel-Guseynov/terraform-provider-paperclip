@@ -540,7 +540,7 @@ func TestBackwardCompatibilityExistingStatePlansWithoutReplacementAcrossResource
 		},
 		{
 			typeName: "paperclip_policy",
-			rawJSON:  `{"id":"pol-1","company_id":"comp-1","name":"require-approval","policy_type":"allow","rules":"{\"allow\":true}","metadata":null}`,
+			rawJSON:  `{"id":"pol-1","company_id":"comp-1","name":"require-approval","policy_type":"allow","conditions":"{\"risk\":{\"isWrite\":true}}","selectors":"{}","priority":100,"enabled":true,"owner_id":null,"description":null,"config":null}`,
 		},
 		{
 			typeName: "paperclip_stdio_template",

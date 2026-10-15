@@ -51,6 +51,68 @@ provider_installation {
 
 ## Integration contract
 
+`paperclip_tool_profile` is the sole aggregate writer of one profile's complete
+`entries` JSON array (maximum 250). Entries use native camelCase fields:
+`selectorType` (`application`, `connection`, `catalog_entry`, `tool_name` or
+`risk_level`), its corresponding selector, optional `effect` (`include` by
+default or `exclude`) and `conditions`. Updates replace the whole set; entry
+IDs and order do not define ownership. Omission means an empty set. There is
+no per-entry resource. Status defaults to active, default action to deny,
+and metadata to {}. An existing description or metadata cannot be cleared
+to null through the native API: retain it, use an empty description or {}
+metadata. Unsupported transitions fail before mutation without replacing
+the profile. Import as `company_id/profile_id`.
+
+Deleting a company default requires `force_destroy = true` (default false)
+or an explicit `reassign_to_profile_id`. Reassignment moves native bindings
+to a different active profile in the same company, outside finish ownership.
+Profile deletion cascades its bindings; express dependencies through profile
+references and coordinate retirement with any bindings owned elsewhere.
+
+`paperclip_tool_profile_binding` owns one company, agent, project, routine,
+issue or gateway binding. Import as `company_id/profile_id/binding_id`;
+the native company profile inventory supplies both entries and bindings.
+Priority defaults to 100 (range 0–10000), metadata to {}. Bind is insert-only: changes to
+identity, priority or metadata fail before mutation. Explicitly retire the
+binding before declaring another one. Duplicates surface as conflicts rather
+than adoption. Company bindings target their own company; all other targets
+must belong to it. Known references are checked read-only during planning;
+references unknown until apply are checked again before mutation.
+
+`paperclip_policy` schema version 1 owns `allow`, `block`,
+`require_approval` and `rate_limit` policies. It exposes nullable
+`description`, `priority` (0–10000, default 100, lowest first), `enabled`
+(default true), loose native `selectors`, strict `conditions`, and
+`config` JSON objects. Conditions accept the native `arguments`/`args`,
+`actor`, `context`, `risk`, `credentialScope`, `trustBoundary` and
+`timeWindow` groups; malformed or unsupported conditions fail at plan.
+Use trimmed native strings in conditions so server normalization cannot
+change configured JSON after apply.
+Rate limits require positive numeric `limit` and `windowSeconds`, directly
+in config or under `rateLimit`, with optional native `keyBy`. Nonempty
+config is supported only for rate limits. Omitted description, conditions
+and config clear to null; omitted selectors clear to {}. Priority updates
+patch only the owned ID; the provider never calls global reorder. Import as
+`company_id/policy_id`. Upgrade from version 0 retains that native ID,
+drops unsupported `rules` and `metadata` state, and refreshes the native
+fields. Remove those unsupported attributes from configuration and declare
+native selectors/conditions explicitly; the old fields never expressed
+native policy behavior.
+
+Profiles in the `app:` namespace or with native
+`source=app_gallery_finish` metadata, their bindings, and finish-owned
+policies cannot be imported, reassigned or mutated by these resources.
+Action-request-only `trust_rule` policies remain outside declarative creation
+and ownership. Each profile/policy has one provider ownership identity;
+duplicate owners in one configured provider process fail. The native API
+has no persistent declarative owner or conditional write: independent
+provider configurations and state files must coordinate exclusive ownership
+externally. Only native catalog refresh and new-tool review control the
+catalog; these resources never write producer tool schemas or annotations,
+including `readOnlyHint`. Board access and a profile inventory containing
+entries and bindings are required; unavailable reads fail without dropping
+state or claiming convergence. Consumer deployment remains separate work.
+
 - **Authority:** This repository contains the authoritative Go source and OpenTofu Registry documentation. The parent Paperclip packaging repository owns the declarative Nix build and verification gate (`100.0%` statement coverage).
 - **Inputs:** Go source (`main.go`, `internal/client`, `internal/provider`, `cmd/terraform-provider-testconsumer`), locked Go module manifests (`go.mod`, `go.sum`), OpenTofu Registry manifest (`terraform-registry-manifest.json`), registry documentation (`docs/`), and HCL examples (`examples/`).
 - **Outputs:**

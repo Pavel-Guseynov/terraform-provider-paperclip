@@ -822,10 +822,6 @@ func TestClientRemainingCoverage(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{}) // line 1569
 		case r.Method == http.MethodPut && r.URL.Path == "/api/tool-connections/conn-empty/installs":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{}) // line 1573, 1592
-		case r.Method == http.MethodPatch && r.URL.Path == "/api/tool-policies/pol-1":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "pol-1"}) // line 1646
-		case r.Method == http.MethodDelete && r.URL.Path == "/api/tool-policies/pol-1":
-			w.WriteHeader(http.StatusOK) // line 1657
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/c1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "c1"})
 		default:
@@ -996,14 +992,13 @@ func TestClientRemainingCoverage(t *testing.T) {
 		t.Fatalf("expected nil, nil, got %v, %v", insts, err)
 	}
 
-	// UpdateToolPolicy companyID == "" (line 1646)
-	if _, err := cliMock.UpdateToolPolicy(ctx, "", "pol-1", PaperclipToolPolicy{}); err != nil {
-		t.Fatalf("UpdateToolPolicy failed: %v", err)
+	// The native policy route requires complete identity before mutation.
+	if _, err := cliMock.UpdateToolPolicy(ctx, "", "pol-1", PaperclipToolPolicy{}); err == nil {
+		t.Fatal("policy update accepted an incomplete identity")
 	}
 
-	// DeleteToolPolicy companyID == "" (line 1657)
-	if err := cliMock.DeleteToolPolicy(ctx, "", "pol-1"); err != nil {
-		t.Fatalf("DeleteToolPolicy failed: %v", err)
+	if err := cliMock.DeleteToolPolicy(ctx, "", "pol-1"); err == nil {
+		t.Fatal("policy deletion accepted an incomplete identity")
 	}
 
 	// NewClient invalid endpoint

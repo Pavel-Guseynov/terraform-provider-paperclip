@@ -151,7 +151,30 @@ var resourceExamples = map[string]string{
   company_id  = paperclip_company.acme.id
   name        = "require-write-approval"
   policy_type = "require_approval"
-  rules       = jsonencode({ enabled = true })
+  priority    = 50
+  enabled     = true
+  selectors   = jsonencode({ projectId = paperclip_project.core.id })
+  conditions  = jsonencode({ risk = { isWrite = true } })
+}
+`,
+	"paperclip_tool_profile": `resource "paperclip_tool_profile" "qa" {
+  company_id     = paperclip_company.acme.id
+  profile_key    = "qa-read"
+  name           = "QA scoped access"
+  status         = "active"
+  default_action = "deny"
+  metadata       = jsonencode({ owner = "platform" })
+  entries = jsonencode([
+    { selectorType = "tool_name", toolName = "read_issue", effect = "include" }
+  ])
+}
+`,
+	"paperclip_tool_profile_binding": `resource "paperclip_tool_profile_binding" "qa" {
+  company_id  = paperclip_company.acme.id
+  profile_id  = paperclip_tool_profile.qa.id
+  target_type = "agent"
+  target_id   = paperclip_agent.engineer.id
+  priority    = 100
 }
 `,
 	"paperclip_stdio_template": `resource "paperclip_stdio_template" "gitea_stdio" {
