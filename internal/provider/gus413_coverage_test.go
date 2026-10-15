@@ -856,7 +856,7 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 				CanCreateAgents: false,
 				CanCreateSkills: true,
 			}
-			if agUpdNilPermsGetCount > 1 {
+			if agUpdNilPermsGetCount > 2 {
 				perms = nil
 			}
 			_ = json.NewEncoder(w).Encode(client.PaperclipAgent{

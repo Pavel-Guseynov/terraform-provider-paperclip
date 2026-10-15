@@ -1717,6 +1717,10 @@ func TestAgentResourceEnvCreateUpdateReadLifecycle(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodGet && r.URL.Path == "/api/adapters/antigravity_local/config-schema" {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"fields": []interface{}{}})
+			return
+		}
 		if r.URL.Path == "/api/companies/comp-1" {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id":   "comp-1",

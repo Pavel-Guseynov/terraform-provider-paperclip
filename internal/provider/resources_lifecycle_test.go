@@ -890,6 +890,8 @@ func TestPaperclipAgentResourceLifecycle(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case req.Method == http.MethodGet && req.URL.Path == "/api/adapters/antigravity_local/config-schema":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"fields": []interface{}{}})
 		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "comp-1"})
 		case req.Method == http.MethodPost && req.URL.Path == "/api/companies/comp-1/agents":

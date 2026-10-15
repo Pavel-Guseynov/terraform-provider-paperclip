@@ -947,7 +947,7 @@ func TestPluginConfigValidationHelpers(t *testing.T) {
 	}
 
 	// Secret in array with secretId
-	d = ValidatePluginConfigJSONApply(ctx, secCli, "comp-1", `{"arr": [{"type": "secret_ref", "secretId": "sec-1"}]}`)
+	d = ValidatePluginConfigJSONApply(ctx, secCli, "comp-1", `{"nested":{"arr": [{"type": "secret_ref", "secretId": "sec-1"}]}}`)
 	if d.HasError() {
 		t.Fatalf("valid secretId in array should succeed, got: %v", d)
 	}

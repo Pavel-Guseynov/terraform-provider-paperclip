@@ -38,6 +38,8 @@ func TestRegressionGUS407UndeclaredAdapterConfigDriftAndPruning(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/adapters/antigravity_local/config-schema":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"fields": []interface{}{}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/agents/agent-1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id":            "agent-1",
