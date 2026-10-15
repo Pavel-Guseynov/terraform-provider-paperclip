@@ -181,7 +181,6 @@ func (r *PaperclipAgentKeyResource) Schema(ctx context.Context, req resource.Sch
 			"scope": schema.SingleNestedAttribute{
 				Description: "Native agent key scope: standard, task_bridge, or skill_test.",
 				Optional:    true,
-				Computed:    true,
 				Attributes: map[string]schema.Attribute{
 					"kind": schema.StringAttribute{
 						Description: "Scope kind: standard, task_bridge, or skill_test.",
@@ -311,7 +310,7 @@ func (r *PaperclipAgentKeyResource) Read(ctx context.Context, req resource.ReadR
 	state.ID = types.StringValue(key.ID)
 	state.KeyID = types.StringValue(key.ID)
 	state.Name = types.StringValue(key.Name)
-	if key.Scope != nil {
+	if state.Scope != nil && key.Scope != nil {
 		modelScope, d := clientScopeToModel(ctx, key.Scope, state.Scope)
 		resp.Diagnostics.Append(d...)
 		state.Scope = modelScope

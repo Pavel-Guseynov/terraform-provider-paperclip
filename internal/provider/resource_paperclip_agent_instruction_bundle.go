@@ -285,10 +285,9 @@ func (r *PaperclipAgentInstructionBundleResource) ModifyPlan(ctx context.Context
 
 	// 2. Validate declared files
 	if !plan.Files.IsNull() && !plan.Files.IsUnknown() {
-		var filesMap map[string]string
-		_ = plan.Files.ElementsAs(ctx, &filesMap, false)
+		filesElements := plan.Files.Elements()
 
-		if _, hasEntry := filesMap[normEntry]; !hasEntry {
+		if _, hasEntry := filesElements[normEntry]; !hasEntry {
 			resp.Diagnostics.AddAttributeError(
 				tfpath.Root("files"),
 				"Missing Entry File in Files Map",
@@ -296,7 +295,7 @@ func (r *PaperclipAgentInstructionBundleResource) ModifyPlan(ctx context.Context
 			)
 		}
 
-		for filePath := range filesMap {
+		for filePath := range filesElements {
 			cleanP := path.Clean(strings.ReplaceAll(filePath, "\\", "/"))
 			if cleanP == "." || cleanP == ".." || strings.HasPrefix(cleanP, "../") || strings.HasPrefix(cleanP, "/") {
 				resp.Diagnostics.AddAttributeError(
