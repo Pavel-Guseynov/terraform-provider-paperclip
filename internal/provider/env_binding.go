@@ -178,11 +178,11 @@ func ValidateEnvBindingPlan(p path.Path, binding EnvBindingModel, targetType, co
 						diags.AddAttributeError(p.AtName("projection_allowlist_key"), "Unauthorized Projection Class 3 Allowlist Key", fmt.Sprintf("class_3_static_lease projection is not allowlisted for key %q; must be 'slack.bot_token' or 'discord.bot_token'.", alk))
 					}
 				}
-			} else {
-				if !binding.ProjectionAllowlistKey.IsNull() && !binding.ProjectionAllowlistKey.IsUnknown() && strings.TrimSpace(binding.ProjectionAllowlistKey.ValueString()) != "" {
-					diags.AddAttributeError(p.AtName("projection_allowlist_key"), "Invalid Projection Allowlist Key", "projection_allowlist_key can only be specified when projection_class is 'class_3_static_lease'.")
-				}
 			}
+		}
+		if !binding.ProjectionClass.IsUnknown() && binding.ProjectionClass.ValueString() != "class_3_static_lease" &&
+			!binding.ProjectionAllowlistKey.IsNull() && !binding.ProjectionAllowlistKey.IsUnknown() && strings.TrimSpace(binding.ProjectionAllowlistKey.ValueString()) != "" {
+			diags.AddAttributeError(p.AtName("projection_allowlist_key"), "Invalid Projection Allowlist Key", "projection_allowlist_key can only be specified when projection_class is 'class_3_static_lease'.")
 		}
 
 	case "user_secret_ref":
@@ -245,35 +245,7 @@ func ValidateEnvBindingsJSONPlan(p path.Path, rawJSON string, targetType string)
 				diags.AddAttributeError(mapKeyPath, "Invalid Plain Binding Value", "Invalid environment binding value: redacted sentinel \"[REDACTED]\" is prohibited during plan. Plain bindings must contain real configuration values, not redacted masking strings.")
 			}
 		case map[string]interface{}:
-			bType, _ := val["type"].(string)
-			switch bType {
-			case "plain":
-				if v, ok := val["value"].(string); !ok || v == "" {
-					diags.AddAttributeError(mapKeyPath.AtName("value"), "Missing Plain Binding Value", "Plain environment bindings require a non-empty value.")
-				} else if IsRedactedSentinel(v) {
-					diags.AddAttributeError(mapKeyPath.AtName("value"), "Invalid Plain Binding Value", "Invalid environment binding value: redacted sentinel \"[REDACTED]\" is prohibited during plan. Plain bindings must contain real configuration values, not redacted masking strings.")
-				}
-			case "secret_ref":
-				secID, _ := val["secretId"].(string)
-				if secID == "" {
-					diags.AddAttributeError(mapKeyPath.AtName("secretId"), "Missing Secret ID", "secret_ref bindings require secretId.")
-				}
-				if proj, ok := val["projectionClass"].(string); ok && proj == "class_3_static_lease" {
-					alk, _ := val["projectionAllowlistKey"].(string)
-					if alk == "" || !IsAllowlistedClass3Key(alk, targetType, configPath) {
-						diags.AddAttributeError(mapKeyPath.AtName("projectionAllowlistKey"), "Unauthorized Projection Class 3 Allowlist Key", fmt.Sprintf("class_3_static_lease projection is not allowlisted for key %q; must be 'slack.bot_token' or 'discord.bot_token'.", alk))
-					}
-				}
-			case "user_secret_ref":
-				kVal, _ := val["key"].(string)
-				if kVal == "" || len(kVal) > 120 || !secretKeyRegex.MatchString(kVal) {
-					diags.AddAttributeError(mapKeyPath.AtName("key"), "Invalid User Secret Key", fmt.Sprintf("Key %q must match ^[a-zA-Z0-9_.-]+$ and have length between 1 and 120.", kVal))
-				}
-			case "":
-				diags.AddAttributeError(mapKeyPath.AtName("type"), "Missing Environment Binding Type", "Binding type is required.")
-			default:
-				diags.AddAttributeError(mapKeyPath.AtName("type"), "Unsupported Environment Binding Type", fmt.Sprintf("Unsupported binding type %q.", bType))
-			}
+			diags.Append(ValidateEnvBindingPlan(mapKeyPath, envBindingFromJSON(val), targetType, configPath)...)
 		}
 	}
 
@@ -325,35 +297,13 @@ func ValidateEnvBindingsJSONApply(ctx context.Context, c *client.Client, company
 		return diags
 	}
 
+	bindings := make(map[string]EnvBindingModel)
 	for k, rawVal := range rawMap {
-		obj, ok := rawVal.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		if obj["type"] != "secret_ref" {
-			continue
-		}
-		secretID, _ := obj["secretId"].(string)
-		secretID = strings.TrimSpace(secretID)
-		if secretID == "" {
-			continue
-		}
-
-		_, err := c.GetSecret(ctx, companyID, secretID)
-		if err != nil {
-			if errors.Is(err, client.ErrNotFound) {
-				diags.AddError(
-					"Invalid Secret Reference",
-					fmt.Sprintf("Secret reference %q (for key %q) does not exist in target company %q (cross-company secret bindings are prohibited).", secretID, k, companyID),
-				)
-			} else {
-				diags.AddError(
-					"Secret Reference Verification Failed",
-					fmt.Sprintf("Failed to verify secret reference %q (for key %q): %s", secretID, k, err.Error()),
-				)
-			}
+		if obj, ok := rawVal.(map[string]interface{}); ok {
+			bindings[k] = envBindingFromJSON(obj)
 		}
 	}
+	diags.Append(ValidateEnvBindingsApply(ctx, c, companyID, bindings)...)
 
 	return diags
 }
@@ -400,4 +350,46 @@ func EnvBindingsMapToAPI(bindings map[string]EnvBindingModel) map[string]interfa
 		}
 	}
 	return result
+}
+
+// normalizeEnvBindingJSON is the shared wire-key authority for structured bindings.
+func normalizeEnvBindingJSON(obj map[string]interface{}) map[string]interface{} {
+	result := make(map[string]interface{}, len(obj))
+	for k, v := range obj {
+		result[k] = v
+	}
+	for snake, camel := range map[string]string{
+		"secret_id":                "secretId",
+		"projection_class":         "projectionClass",
+		"projection_allowlist_key": "projectionAllowlistKey",
+		"allow_missing_override":   "allowMissingOverride",
+	} {
+		if value, ok := result[snake]; ok {
+			if _, exists := result[camel]; !exists {
+				result[camel] = value
+			}
+			delete(result, snake)
+		}
+	}
+	return result
+}
+
+// envBindingFromJSON routes JSON references through the same model and rules as typed HCL bindings.
+func envBindingFromJSON(obj map[string]interface{}) EnvBindingModel {
+	obj = normalizeEnvBindingJSON(obj)
+	stringField := func(key string) types.String {
+		if value, ok := obj[key].(string); ok {
+			return types.StringValue(value)
+		}
+		return types.StringNull()
+	}
+	return EnvBindingModel{
+		Type:                   stringField("type"),
+		Value:                  stringField("value"),
+		SecretID:               stringField("secretId"),
+		Key:                    stringField("key"),
+		Version:                stringField("version"),
+		ProjectionClass:        stringField("projectionClass"),
+		ProjectionAllowlistKey: stringField("projectionAllowlistKey"),
+	}
 }

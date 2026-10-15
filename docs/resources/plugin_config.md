@@ -2,12 +2,12 @@
 page_title: "paperclip_plugin_config Resource - terraform-provider-paperclip"
 subcategory: ""
 description: |-
-  Manages company-scoped configuration for a Paperclip plugin.
+  Manages company-scoped configuration for a Paperclip plugin. Destroy relinquishes management without clearing remote configuration; the API has no config deletion route.
 ---
 
 # paperclip_plugin_config (Resource)
 
-Manages company-scoped configuration for a Paperclip plugin.
+Manages company-scoped configuration for a Paperclip plugin. Destroy relinquishes management without clearing remote configuration; the API has no config deletion route.
 
 ## Example Usage
 

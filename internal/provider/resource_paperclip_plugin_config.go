@@ -23,6 +23,7 @@ var (
 	_ resource.ResourceWithConfigure      = &PaperclipPluginConfigResource{}
 	_ resource.ResourceWithImportState    = &PaperclipPluginConfigResource{}
 	_ resource.ResourceWithValidateConfig = &PaperclipPluginConfigResource{}
+	_ resource.ResourceWithModifyPlan     = &PaperclipPluginConfigResource{}
 )
 
 func NewPaperclipPluginConfigResource() resource.Resource {
@@ -47,7 +48,7 @@ func (r *PaperclipPluginConfigResource) Metadata(ctx context.Context, req resour
 
 func (r *PaperclipPluginConfigResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages company-scoped configuration for a Paperclip plugin.",
+		Description: "Manages company-scoped configuration for a Paperclip plugin. Destroy relinquishes management without clearing remote configuration; the API has no config deletion route.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Description: "Composite identifier in company_id/plugin_id format.",
@@ -77,7 +78,7 @@ func (r *PaperclipPluginConfigResource) Schema(ctx context.Context, req resource
 					JSONAttributeValidator(),
 				},
 				PlanModifiers: []planmodifier.String{
-					SemanticJSONPlanModifier(),
+					semanticJSONPlanModifier{normalize: normalizePluginConfigValue},
 				},
 			},
 			"last_error": schema.StringAttribute{
@@ -149,10 +150,27 @@ func (r *PaperclipPluginConfigResource) Create(ctx context.Context, req resource
 	plan.ID = types.StringValue(fmt.Sprintf("%s/%s", created.CompanyID, created.PluginID))
 	plan.CompanyID = types.StringValue(created.CompanyID)
 	plan.PluginID = types.StringValue(created.PluginID)
-	plan.Config = refreshSemanticJSON(plan.Config, created.ConfigJSON)
+	plan.Config = refreshSemanticJSONNormalized(plan.Config, created.ConfigJSON, normalizePluginConfigValue)
 	plan.LastError = stringPointerOrNull(created.LastError)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+func (r *PaperclipPluginConfigResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || req.State.Raw.IsNull() {
+		return
+	}
+	var plan, state PaperclipPluginConfigResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	// Attribute modifiers have already reconciled equivalent JSON. With no write
+	// planned, preserve the refreshed error, including null after import.
+	if plan.CompanyID.Equal(state.CompanyID) && plan.PluginID.Equal(state.PluginID) && plan.Config.Equal(state.Config) {
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("last_error"), state.LastError)...)
+	}
 }
 
 func (r *PaperclipPluginConfigResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -175,7 +193,7 @@ func (r *PaperclipPluginConfigResource) Read(ctx context.Context, req resource.R
 	state.ID = types.StringValue(fmt.Sprintf("%s/%s", config.CompanyID, config.PluginID))
 	state.CompanyID = types.StringValue(config.CompanyID)
 	state.PluginID = types.StringValue(config.PluginID)
-	state.Config = refreshSemanticJSON(state.Config, config.ConfigJSON)
+	state.Config = refreshSemanticJSONNormalized(state.Config, config.ConfigJSON, normalizePluginConfigValue)
 	state.LastError = stringPointerOrNull(config.LastError)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
@@ -218,7 +236,7 @@ func (r *PaperclipPluginConfigResource) Update(ctx context.Context, req resource
 	plan.ID = types.StringValue(fmt.Sprintf("%s/%s", updated.CompanyID, updated.PluginID))
 	plan.CompanyID = types.StringValue(updated.CompanyID)
 	plan.PluginID = types.StringValue(updated.PluginID)
-	plan.Config = refreshSemanticJSON(plan.Config, updated.ConfigJSON)
+	plan.Config = refreshSemanticJSONNormalized(plan.Config, updated.ConfigJSON, normalizePluginConfigValue)
 	plan.LastError = stringPointerOrNull(updated.LastError)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -261,8 +279,8 @@ func ValidatePluginConfigJSONPlan(p path.Path, rawJSON string) diag.Diagnostics 
 		return diags
 	}
 
-	var walk func(val interface{}, curPath path.Path, dotPath string)
-	walk = func(val interface{}, curPath path.Path, dotPath string) {
+	var walk func(val interface{}, curPath path.Path)
+	walk = func(val interface{}, curPath path.Path) {
 		switch v := val.(type) {
 		case string:
 			if IsRedactedSentinel(v) {
@@ -271,71 +289,22 @@ func ValidatePluginConfigJSONPlan(p path.Path, rawJSON string) diag.Diagnostics 
 		case map[string]interface{}:
 			bType, _ := v["type"].(string)
 			switch bType {
-			case "plain":
-				if pv, ok := v["value"].(string); !ok || pv == "" {
-					diags.AddAttributeError(curPath.AtName("value"), "Missing Plain Binding Value", "Plain environment bindings require a non-empty value.")
-				} else if IsRedactedSentinel(pv) {
-					diags.AddAttributeError(curPath.AtName("value"), "Invalid Plain Binding Value", "Invalid environment binding value: redacted sentinel \"[REDACTED]\" is prohibited during plan. Plain bindings must contain real configuration values, not redacted masking strings.")
-				}
-				if sID, ok := v["secretId"].(string); ok && sID != "" {
-					diags.AddAttributeError(curPath.AtName("secretId"), "Invalid Attribute for Plain Binding", "Plain bindings cannot declare secretId.")
-				}
-				if sID, ok := v["secret_id"].(string); ok && sID != "" {
-					diags.AddAttributeError(curPath.AtName("secret_id"), "Invalid Attribute for Plain Binding", "Plain bindings cannot declare secret_id.")
-				}
-			case "secret_ref":
-				sID, _ := v["secretId"].(string)
-				if sID == "" {
-					sID, _ = v["secret_id"].(string)
-				}
-				if strings.TrimSpace(sID) == "" {
-					diags.AddAttributeError(curPath.AtName("secretId"), "Missing Secret ID", "secret_ref bindings require secretId.")
-				}
-				if pv, ok := v["value"].(string); ok && pv != "" {
-					diags.AddAttributeError(curPath.AtName("value"), "Invalid Attribute for Secret Reference", "secret_ref bindings cannot declare a plaintext value.")
-				}
-				if k, ok := v["key"].(string); ok && k != "" {
-					diags.AddAttributeError(curPath.AtName("key"), "Invalid Attribute for Secret Reference", "secret_ref bindings cannot declare key.")
-				}
-				if proj, ok := v["projectionClass"].(string); ok && proj != "" {
-					if proj != "unclassified" && proj != "class_3_static_lease" {
-						diags.AddAttributeError(curPath.AtName("projectionClass"), "Invalid Projection Class", "projectionClass must be either 'unclassified' or 'class_3_static_lease'.")
-					} else if proj == "class_3_static_lease" {
-						alk, _ := v["projectionAllowlistKey"].(string)
-						if strings.TrimSpace(alk) == "" {
-							diags.AddAttributeError(curPath.AtName("projectionAllowlistKey"), "Missing Projection Allowlist Key", "class_3_static_lease projection requires projectionAllowlistKey ('slack.bot_token' or 'discord.bot_token').")
-						} else if !IsAllowlistedClass3Key(alk, "", "") {
-							diags.AddAttributeError(curPath.AtName("projectionAllowlistKey"), "Unauthorized Projection Class 3 Allowlist Key", fmt.Sprintf("class_3_static_lease projection is not allowlisted for key %q; must be 'slack.bot_token' or 'discord.bot_token'.", alk))
-						}
-					}
-				}
-			case "user_secret_ref":
-				kVal, _ := v["key"].(string)
-				if strings.TrimSpace(kVal) == "" || len(kVal) > 120 || !secretKeyRegex.MatchString(kVal) {
-					diags.AddAttributeError(curPath.AtName("key"), "Invalid User Secret Key", fmt.Sprintf("Key %q must match ^[a-zA-Z0-9_.-]+$ and have length between 1 and 120.", kVal))
-				}
-				if pv, ok := v["value"].(string); ok && pv != "" {
-					diags.AddAttributeError(curPath.AtName("value"), "Invalid Attribute for User Secret Reference", "user_secret_ref bindings cannot declare a plaintext value.")
-				}
+			case "plain", "secret_ref", "user_secret_ref":
+				diags.Append(ValidateEnvBindingPlan(curPath, envBindingFromJSON(v), "", "")...)
 			default:
 				for k, child := range v {
-					childDot := k
-					if dotPath != "" {
-						childDot = dotPath + "." + k
-					}
-					walk(child, curPath.AtMapKey(k), childDot)
+					walk(child, curPath.AtMapKey(k))
 				}
 			}
 		case []interface{}:
 			for i, elem := range v {
-				elemDot := fmt.Sprintf("%s[%d]", dotPath, i)
-				walk(elem, curPath.AtListIndex(i), elemDot)
+				walk(elem, curPath.AtListIndex(i))
 			}
 		}
 	}
 
 	for k, v := range rawMap {
-		walk(v, p.AtMapKey(k), k)
+		walk(v, p.AtMapKey(k))
 	}
 
 	return diags
@@ -357,27 +326,9 @@ func ValidatePluginConfigJSONApply(ctx context.Context, c *client.Client, compan
 		switch v := val.(type) {
 		case map[string]interface{}:
 			if v["type"] == "secret_ref" {
-				sID, _ := v["secretId"].(string)
-				if sID == "" {
-					sID, _ = v["secret_id"].(string)
-				}
-				sID = strings.TrimSpace(sID)
-				if sID != "" {
-					_, err := c.GetSecret(ctx, companyID, sID)
-					if err != nil {
-						if errors.Is(err, client.ErrNotFound) {
-							diags.AddError(
-								"Invalid Secret Reference",
-								fmt.Sprintf("Secret reference %q (for key %q) does not exist in target company %q (cross-company secret bindings are prohibited).", sID, curKey, companyID),
-							)
-						} else {
-							diags.AddError(
-								"Secret Reference Verification Failed",
-								fmt.Sprintf("Failed to verify secret reference %q (for key %q): %s", sID, curKey, err.Error()),
-							)
-						}
-					}
-				}
+				diags.Append(ValidateEnvBindingsApply(ctx, c, companyID, map[string]EnvBindingModel{
+					curKey: envBindingFromJSON(v),
+				})...)
 				return
 			}
 			for k, child := range v {
@@ -403,45 +354,27 @@ func NormalizePluginConfigForAPI(rawJSON string) map[string]interface{} {
 		return make(map[string]interface{})
 	}
 
-	var walk func(val interface{}) interface{}
-	walk = func(val interface{}) interface{} {
-		switch v := val.(type) {
-		case map[string]interface{}:
-			res := make(map[string]interface{}, len(v))
-			for k, child := range v {
-				res[k] = walk(child)
-			}
-			if res["type"] == "secret_ref" {
-				if sID, ok := res["secret_id"].(string); ok && sID != "" {
-					if _, hasCamel := res["secretId"]; !hasCamel {
-						res["secretId"] = sID
-					}
-					delete(res, "secret_id")
-				}
-				if proj, ok := res["projection_class"].(string); ok && proj != "" {
-					if _, hasCamel := res["projectionClass"]; !hasCamel {
-						res["projectionClass"] = proj
-					}
-					delete(res, "projection_class")
-				}
-				if alk, ok := res["projection_allowlist_key"].(string); ok && alk != "" {
-					if _, hasCamel := res["projectionAllowlistKey"]; !hasCamel {
-						res["projectionAllowlistKey"] = alk
-					}
-					delete(res, "projection_allowlist_key")
-				}
-			}
-			return res
-		case []interface{}:
-			res := make([]interface{}, len(v))
-			for i, elem := range v {
-				res[i] = walk(elem)
-			}
-			return res
-		default:
-			return val
-		}
-	}
+	return normalizePluginConfigValue(rawMap).(map[string]interface{})
+}
 
-	return walk(rawMap).(map[string]interface{})
+func normalizePluginConfigValue(val interface{}) interface{} {
+	switch v := val.(type) {
+	case map[string]interface{}:
+		res := make(map[string]interface{}, len(v))
+		for k, child := range v {
+			res[k] = normalizePluginConfigValue(child)
+		}
+		if res["type"] == "secret_ref" || res["type"] == "user_secret_ref" || res["type"] == "plain" {
+			return normalizeEnvBindingJSON(res)
+		}
+		return res
+	case []interface{}:
+		res := make([]interface{}, len(v))
+		for i, elem := range v {
+			res[i] = normalizePluginConfigValue(elem)
+		}
+		return res
+	default:
+		return val
+	}
 }

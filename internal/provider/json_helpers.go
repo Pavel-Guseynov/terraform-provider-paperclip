@@ -14,6 +14,10 @@ import (
 
 // semanticJSONEqual parses two JSON strings and compares them deeply.
 func semanticJSONEqual(a, b string) bool {
+	return semanticJSONEqualNormalized(a, b, nil)
+}
+
+func semanticJSONEqualNormalized(a, b string, normalize func(interface{}) interface{}) bool {
 	if a == b {
 		return true
 	}
@@ -26,6 +30,9 @@ func semanticJSONEqual(a, b string) bool {
 	}
 	if err := json.Unmarshal([]byte(b), &objB); err != nil {
 		return false
+	}
+	if normalize != nil {
+		objA, objB = normalize(objA), normalize(objB)
 	}
 	return reflect.DeepEqual(objA, objB)
 }
@@ -56,6 +63,10 @@ func isEmptyCollection(v interface{}) bool {
 // it preserves null. If the remote JSON is semantically equal to the prior state,
 // it preserves the prior state string to avoid spurious diffs.
 func refreshSemanticJSON(current types.String, remote interface{}) types.String {
+	return refreshSemanticJSONNormalized(current, remote, nil)
+}
+
+func refreshSemanticJSONNormalized(current types.String, remote interface{}, normalize func(interface{}) interface{}) types.String {
 	if isNilInterface(remote) {
 		return types.StringNull()
 	}
@@ -66,7 +77,7 @@ func refreshSemanticJSON(current types.String, remote interface{}) types.String 
 	if err != nil || string(data) == "null" {
 		return types.StringNull()
 	}
-	if !current.IsNull() && !current.IsUnknown() && semanticJSONEqual(current.ValueString(), string(data)) {
+	if !current.IsNull() && !current.IsUnknown() && semanticJSONEqualNormalized(current.ValueString(), string(data), normalize) {
 		return current
 	}
 	return types.StringValue(string(data))
@@ -109,7 +120,9 @@ func JSONAttributeValidator() validator.String {
 	return jsonAttributeValidator{}
 }
 
-type semanticJSONPlanModifier struct{}
+type semanticJSONPlanModifier struct {
+	normalize func(interface{}) interface{}
+}
 
 func (semanticJSONPlanModifier) Description(context.Context) string {
 	return "suppresses plan diffs when the planned and state JSON values are semantically equal"
@@ -119,11 +132,11 @@ func (v semanticJSONPlanModifier) MarkdownDescription(ctx context.Context) strin
 	return v.Description(ctx)
 }
 
-func (semanticJSONPlanModifier) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+func (m semanticJSONPlanModifier) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
 	if req.StateValue.IsNull() || req.StateValue.IsUnknown() || req.PlanValue.IsNull() || req.PlanValue.IsUnknown() {
 		return
 	}
-	if semanticJSONEqual(req.PlanValue.ValueString(), req.StateValue.ValueString()) {
+	if semanticJSONEqualNormalized(req.PlanValue.ValueString(), req.StateValue.ValueString(), m.normalize) {
 		resp.PlanValue = req.StateValue
 	}
 }

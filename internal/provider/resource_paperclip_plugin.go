@@ -214,9 +214,7 @@ func (r *PaperclipPluginResource) Read(ctx context.Context, req resource.ReadReq
 	state.PluginKey = types.StringValue(plugin.PluginKey)
 	state.PackageName = types.StringValue(plugin.PackageName)
 	state.Version = types.StringValue(plugin.Version)
-	if state.IsLocalPath.IsNull() || state.IsLocalPath.IsUnknown() {
-		state.IsLocalPath = types.BoolValue(plugin.PackagePath != nil && *plugin.PackagePath != "")
-	}
+	state.IsLocalPath = types.BoolValue(plugin.PackagePath != nil && *plugin.PackagePath != "")
 	state.Enabled = types.BoolValue(plugin.Status != "disabled")
 	state.Status = types.StringValue(plugin.Status)
 	state.UpgradePending = types.BoolValue(plugin.Status == "upgrade_pending")

@@ -30,6 +30,7 @@ func TestPaperclipPluginResourceLifecycle(t *testing.T) {
 		installedVersion = "1.0.0"
 		installedStatus  = "ready"
 		lastPurge        bool
+		installedPath    *string
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -58,14 +59,18 @@ func TestPaperclipPluginResourceLifecycle(t *testing.T) {
 				installedVersion = "1.0.0"
 			}
 			installedStatus = "ready"
-			pkgPath := "/path/to/local"
+			installedPath = nil
+			if body.IsLocalPath {
+				pkgPath := body.PackageName
+				installedPath = &pkgPath
+			}
 			_ = json.NewEncoder(w).Encode(client.PaperclipPlugin{
 				ID:          "plug-1",
 				PluginKey:   "test-plugin",
 				PackageName: body.PackageName,
 				Version:     installedVersion,
 				Status:      installedStatus,
-				PackagePath: &pkgPath,
+				PackagePath: installedPath,
 				APIVersion:  1,
 			})
 
@@ -78,6 +83,7 @@ func TestPaperclipPluginResourceLifecycle(t *testing.T) {
 				ID:          "plug-1",
 				PluginKey:   "test-plugin",
 				PackageName: "@paperclipai/plugin-test",
+				PackagePath: installedPath,
 				Version:     installedVersion,
 				Status:      installedStatus,
 				APIVersion:  1,
@@ -448,18 +454,27 @@ func TestPaperclipPluginResourceLifecycle(t *testing.T) {
 	if importState.ID.ValueString() != "plug-1" {
 		t.Fatalf("expected imported ID plug-1, got: %s", importState.ID.ValueString())
 	}
+	importRead := resource.ReadResponse{State: importResp.State}
+	r.Read(ctx, resource.ReadRequest{State: importResp.State}, &importRead)
+	if importRead.Diagnostics.HasError() {
+		t.Fatal(importRead.Diagnostics)
+	}
+	_ = importRead.State.Get(ctx, &importState)
+	if !importState.IsLocalPath.ValueBool() || importState.PackageName.ValueString() != "@paperclipai/plugin-test" || importState.Version.ValueString() != "2.0.0" {
+		t.Fatalf("import Read did not restore the installed local plugin: %v", importState)
+	}
 }
 
 func TestPaperclipPluginConfigResourceLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	var (
-		serverFail       bool
-		invalidSchema    bool
-		nonAdminFail     bool
-		fetchFail        bool
-		secretFail       bool
-		savedConfig      map[string]interface{}
+		serverFail    bool
+		invalidSchema bool
+		nonAdminFail  bool
+		fetchFail     bool
+		secretFail    bool
+		savedConfig   map[string]interface{}
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -679,6 +694,9 @@ func TestPaperclipPluginConfigResourceLifecycle(t *testing.T) {
 	if stateSuccess.ID.ValueString() != "comp-1/plug-1" {
 		t.Fatalf("unexpected ID: %s", stateSuccess.ID.ValueString())
 	}
+	if !stateSuccess.Config.Equal(validPlan.Config) {
+		t.Fatalf("Create changed the planned config: got %s, planned %s", stateSuccess.Config, validPlan.Config)
+	}
 	// Verify savedConfig in server normalized secret_id to secretId
 	if apiKeyMap, ok := savedConfig["apiKey"].(map[string]interface{}); !ok || apiKeyMap["secretId"] != "sec-1" {
 		t.Fatalf("expected normalized secretId in server payload, got: %v", savedConfig)
@@ -790,6 +808,15 @@ func TestPaperclipPluginConfigResourceLifecycle(t *testing.T) {
 	_ = importResp.State.Get(ctx, &importedState)
 	if importedState.CompanyID.ValueString() != "comp-1" || importedState.PluginID.ValueString() != "plug-1" {
 		t.Fatalf("unexpected imported state: %v", importedState)
+	}
+	importRead := resource.ReadResponse{State: importResp.State}
+	r.Read(ctx, resource.ReadRequest{State: importResp.State}, &importRead)
+	if importRead.Diagnostics.HasError() {
+		t.Fatal(importRead.Diagnostics)
+	}
+	_ = importRead.State.Get(ctx, &importedState)
+	if !semanticJSONEqualNormalized(importedState.Config.ValueString(), updatePlanModel.Config.ValueString(), normalizePluginConfigValue) {
+		t.Fatalf("import Read changed the configuration: %s", importedState.Config)
 	}
 
 	badImportResp := resource.ImportStateResponse{State: tfsdk.State{Schema: schema}}
