@@ -181,7 +181,6 @@ func (r *PaperclipAgentKeyResource) Schema(ctx context.Context, req resource.Sch
 			"scope": schema.SingleNestedAttribute{
 				Description: "Native agent key scope: standard, task_bridge, or skill_test.",
 				Optional:    true,
-				Computed:    true,
 				Attributes: map[string]schema.Attribute{
 					"kind": schema.StringAttribute{
 						Description: "Scope kind: standard, task_bridge, or skill_test.",

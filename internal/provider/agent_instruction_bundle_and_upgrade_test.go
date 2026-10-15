@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -404,6 +405,40 @@ func TestPaperclipAgentInstructionBundleResourceLifecycle(t *testing.T) {
 		}, &mpResp)
 		if !mpResp.Diagnostics.HasError() {
 			t.Fatal("expected error on path traversal and virtual file in files map")
+		}
+
+		// Declared files map with unknown content at plan time (GUS-849 regression)
+		mpResp = resource.ModifyPlanResponse{}
+		planUnknownFile := tfsdk.Plan{Schema: schemaResp.Schema}
+		unknownFilesMap, _ := types.MapValue(types.StringType, map[string]attr.Value{
+			"AGENTS.md": types.StringUnknown(),
+		})
+		mUnknownFile := bundleModel("ag-1", "managed", "", "AGENTS.md", nil)
+		mUnknownFile.Files = unknownFilesMap
+		_ = planUnknownFile.Set(ctx, &mUnknownFile)
+		r.ModifyPlan(ctx, resource.ModifyPlanRequest{
+			Plan: planUnknownFile,
+		}, &mpResp)
+		if mpResp.Diagnostics.HasError() {
+			t.Fatalf("unexpected error when files map contains unknown values at plan time: %v", mpResp.Diagnostics)
+		}
+
+		// Declared file with traversal or virtual file even if value is unknown
+		mpResp = resource.ModifyPlanResponse{}
+		planBadPUnknown := tfsdk.Plan{Schema: schemaResp.Schema}
+		badFilesUnknown, _ := types.MapValue(types.StringType, map[string]attr.Value{
+			"AGENTS.md":                types.StringUnknown(),
+			"../bad.md":                types.StringUnknown(),
+			"promptTemplate.legacy.md": types.StringUnknown(),
+		})
+		mBadPUnknown := bundleModel("ag-1", "managed", "", "AGENTS.md", nil)
+		mBadPUnknown.Files = badFilesUnknown
+		_ = planBadPUnknown.Set(ctx, &mBadPUnknown)
+		r.ModifyPlan(ctx, resource.ModifyPlanRequest{
+			Plan: planBadPUnknown,
+		}, &mpResp)
+		if !mpResp.Diagnostics.HasError() {
+			t.Fatal("expected error on path traversal and virtual file even with unknown values")
 		}
 
 		// External mode without root_path in ModifyPlan

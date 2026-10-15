@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	tfschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
@@ -709,6 +710,13 @@ func TestPaperclipAgentKeyResourceFullLifecycle(t *testing.T) {
 	r.Schema(ctx, resource.SchemaRequest{}, &schemaResp)
 	if len(schemaResp.Schema.Attributes) == 0 {
 		t.Fatal("empty schema attributes")
+	}
+	scopeAttr, ok := schemaResp.Schema.Attributes["scope"].(tfschema.SingleNestedAttribute)
+	if !ok {
+		t.Fatal("expected scope attribute to be tfschema.SingleNestedAttribute")
+	}
+	if !scopeAttr.Optional || scopeAttr.Computed {
+		t.Fatalf("expected scope attribute Optional: true and Computed: false (GUS-849), got Optional: %v, Computed: %v", scopeAttr.Optional, scopeAttr.Computed)
 	}
 
 	// Configure
@@ -1965,6 +1973,23 @@ func TestCredentialsResourcesModifyPlan(t *testing.T) {
 		}, &respAgentFallback)
 		if respAgentFallback.Diagnostics.HasError() {
 			t.Fatal(respAgentFallback.Diagnostics)
+		}
+
+		// GUS-849 regression: Verify that if scope is unknown at plan time, decoding into *AgentKeyScopeModel fails as expected
+		rawWithUnknownScope := tftypes.NewValue(schema.Type().TerraformType(ctx), map[string]tftypes.Value{
+			"id":             tftypes.NewValue(tftypes.String, nil),
+			"agent_id":       tftypes.NewValue(tftypes.String, "ag-1"),
+			"name":           tftypes.NewValue(tftypes.String, "ak"),
+			"generation":     tftypes.NewValue(tftypes.Number, 1),
+			"scope":          tftypes.NewValue(schema.Attributes["scope"].GetType().TerraformType(ctx), tftypes.UnknownValue),
+			"key_id":         tftypes.NewValue(tftypes.String, nil),
+			"delivery_state": tftypes.NewValue(tftypes.String, nil),
+		})
+		planWithUnknownScope := tfsdk.Plan{Schema: schema, Raw: rawWithUnknownScope}
+		var modelWithUnknownScope PaperclipAgentKeyResourceModel
+		diagsUnknownScope := planWithUnknownScope.Get(ctx, &modelWithUnknownScope)
+		if !diagsUnknownScope.HasError() {
+			t.Fatal("expected error decoding unknown scope into *AgentKeyScopeModel")
 		}
 	})
 }
