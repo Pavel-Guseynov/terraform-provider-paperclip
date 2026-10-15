@@ -11,10 +11,47 @@ import (
 // Environment bindings are used transiently to preserve unmanaged keys. They
 // are never copied into Terraform state or diagnostics.
 type PaperclipEnvironment struct {
-	ID        string                 `json:"id"`
-	CompanyID string                 `json:"companyId,omitempty"`
-	Driver    string                 `json:"driver"`
-	EnvVars   map[string]interface{} `json:"envVars"`
+	ID          string                 `json:"id"`
+	Name        string                 `json:"name"`
+	Description *string                `json:"description"`
+	Status      string                 `json:"status"`
+	Config      map[string]interface{} `json:"config"`
+	Metadata    map[string]interface{} `json:"metadata"`
+	CompanyID   string                 `json:"companyId,omitempty"`
+	Driver      string                 `json:"driver"`
+	EnvVars     map[string]interface{} `json:"envVars"`
+}
+
+// Environment identity is instance-scoped. companyID supplies secret context
+// only; it is never sent as an environment field.
+func (c *Client) GetExecutionEnvironment(ctx context.Context, id string) (*PaperclipEnvironment, error) {
+	var env PaperclipEnvironment
+	if err := c.paperclipRequest(ctx, http.MethodGet, "/api/environments/"+url.PathEscape(id), nil, &env); err != nil {
+		return nil, err
+	}
+	if env.ID != id || env.Config == nil || env.EnvVars == nil || env.Name == "" || env.Status == "" {
+		return nil, fmt.Errorf("environment readback is incomplete or does not match the requested identity")
+	}
+	return &env, nil
+}
+
+func (c *Client) SaveExecutionEnvironment(ctx context.Context, companyID, id string, body map[string]interface{}) (*PaperclipEnvironment, error) {
+	method, endpoint := http.MethodPost, "/api/companies/"+url.PathEscape(companyID)+"/environments"
+	if id != "" {
+		method, endpoint = http.MethodPatch, "/api/environments/"+url.PathEscape(id)+"?companyId="+url.QueryEscape(companyID)
+	}
+	var env PaperclipEnvironment
+	if err := c.paperclipRequest(ctx, method, endpoint, body, &env); err != nil {
+		return nil, err
+	}
+	if env.ID == "" || (id != "" && env.ID != id) {
+		return nil, fmt.Errorf("environment write returned an invalid identity")
+	}
+	return c.GetExecutionEnvironment(ctx, env.ID)
+}
+
+func (c *Client) DeleteExecutionEnvironment(ctx context.Context, id string) error {
+	return c.paperclipRequest(ctx, http.MethodDelete, "/api/environments/"+url.PathEscape(id), nil, nil)
 }
 
 func (e *PaperclipEnvironment) InheritsServicePath() bool {
