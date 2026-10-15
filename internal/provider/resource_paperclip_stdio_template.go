@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"

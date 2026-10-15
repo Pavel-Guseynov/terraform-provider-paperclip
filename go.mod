@@ -1,4 +1,4 @@
-module git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip
+module github.com/Pavel-Guseynov/terraform-provider-paperclip
 
 go 1.26.5
 

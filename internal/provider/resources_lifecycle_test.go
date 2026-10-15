@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	dsschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"

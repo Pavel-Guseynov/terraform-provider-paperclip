@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -512,7 +512,7 @@ func TestBackwardCompatibilityExistingStatePlansWithoutReplacementAcrossResource
 		},
 		{
 			typeName: "paperclip_workspace",
-			rawJSON:  `{"id":"ws-1","project_id":"proj-1","name":"Default","branch":"develop","is_primary":true,"repo_url":"https://git.guseynov.org/guseynov/paperclip.git","source_type":"git_repo"}`,
+			rawJSON:  `{"id":"ws-1","project_id":"proj-1","name":"Default","branch":"develop","is_primary":true,"repo_url":"https://git.example.com/acme/core-platform.git","source_type":"git_repo"}`,
 		},
 		{
 			typeName: "paperclip_local_environment",

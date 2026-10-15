@@ -31,8 +31,8 @@ resource "paperclip_agent" "engineer" {
 
 ### Required
 
-- `can_assign_tasks` (Boolean) Whether the agent holds the task-assignment permission. The protected project assignment policy gates assignment through the tasks:assign grant that can_assign_tasks mints, but it does not deny an agent key from creating an unassigned issue; a filing made inside a heartbeat run is detected after the fact by the paperclip-fleet-health finding issue_filed_from_heartbeat_run. Harness declares the value for every managed agent, reconciles it after each write, and reads it back from the board.
-- `can_create_agents` (Boolean) Whether the agent may create other agents. Paperclip can grant it when it creates an agent, and it also derives task assignment from it (access.taskAssignSource agent_creator), so an undeclared value drifts unseen. Harness declares the value for every managed agent, reconciles it after each write, and reads it back from the board.
+- `can_assign_tasks` (Boolean) Whether the agent holds the tasks:assign permission required by protected project assignment policies. This permission controls assignment, not the creation of unassigned issues. The provider reconciles it after writes and reads it back from Paperclip.
+- `can_create_agents` (Boolean) Whether the agent may create other agents. Paperclip can also derive task-assignment permission from agent-creation permission. The provider explicitly manages this value and reads it back to detect drift.
 - `company_id` (String) The Paperclip company ID.
 - `name` (String) Agent identifier name.
 

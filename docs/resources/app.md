@@ -26,7 +26,7 @@ resource "paperclip_app" "gitea" {
 ### Required
 
 - `company_id` (String) The Paperclip company ID.
-- `name` (String) Application name (e.g. harness.mcp.openobserve).
+- `name` (String) Application name (e.g. acme.mcp.openobserve).
 - `type` (String) Application type, one of: mcp_http, mcp_stdio. Changing this forces replacement, because the type defines which connection and template shapes hang off the application.
 
 ### Optional

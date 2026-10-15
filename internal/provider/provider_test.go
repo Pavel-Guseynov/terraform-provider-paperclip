@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	ephemeralschema "github.com/hashicorp/terraform-plugin-framework/ephemeral/schema"
@@ -1447,10 +1447,9 @@ func TestAgentSchemaIdentityAttributes(t *testing.T) {
 		t.Fatalf("can_assign_tasks must be declared for every managed agent: %+v", assignAttr)
 	}
 	for _, term := range []string{
-		"task-assignment permission",
-		"gates assignment through the tasks:assign grant",
-		"does not deny an agent key from creating an unassigned issue",
-		"issue_filed_from_heartbeat_run",
+		"tasks:assign",
+		"protected project assignment policies",
+		"not the creation of unassigned issues",
 	} {
 		if !strings.Contains(assignAttr.Description, term) {
 			t.Errorf("can_assign_tasks description must contain %q, got: %s", term, assignAttr.Description)

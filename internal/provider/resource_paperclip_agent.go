@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"strings"
 
-	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -187,11 +187,11 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 				},
 			},
 			"can_assign_tasks": schema.BoolAttribute{
-				Description: "Whether the agent holds the task-assignment permission. The protected project assignment policy gates assignment through the tasks:assign grant that can_assign_tasks mints, but it does not deny an agent key from creating an unassigned issue; a filing made inside a heartbeat run is detected after the fact by the paperclip-fleet-health finding issue_filed_from_heartbeat_run. Harness declares the value for every managed agent, reconciles it after each write, and reads it back from the board.",
+				Description: "Whether the agent holds the tasks:assign permission required by protected project assignment policies. This permission controls assignment, not the creation of unassigned issues. The provider reconciles it after writes and reads it back from Paperclip.",
 				Required:    true,
 			},
 			"can_create_agents": schema.BoolAttribute{
-				Description: "Whether the agent may create other agents. Paperclip can grant it when it creates an agent, and it also derives task assignment from it (access.taskAssignSource agent_creator), so an undeclared value drifts unseen. Harness declares the value for every managed agent, reconciles it after each write, and reads it back from the board.",
+				Description: "Whether the agent may create other agents. Paperclip can also derive task-assignment permission from agent-creation permission. The provider explicitly manages this value and reads it back to detect drift.",
 				Required:    true,
 			},
 			"can_create_skills": schema.BoolAttribute{
