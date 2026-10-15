@@ -37,7 +37,10 @@ func toolSecretRefsAttribute() schema.MapNestedAttribute {
 	shared := EnvBindingAttributeType()
 	attrs := map[string]schema.Attribute{}
 	for _, key := range []string{"secret_id", "version", "projection_class", "projection_allowlist_key"} {
-		attrs[key] = shared[key]
+		attribute := shared[key].(schema.StringAttribute)
+		// Tool references retain omitted metadata; env bindings read native defaults.
+		attribute.Computed = false
+		attrs[key] = attribute
 	}
 	attrs["required"] = schema.BoolAttribute{Optional: true, Description: "Whether execution requires this reference."}
 	for _, key := range []string{"label", "key_scope", "expires_at"} {
