@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
@@ -511,23 +512,22 @@ func TestAllResourcesBadPlanStateAndConfigure(t *testing.T) {
 func TestProjectExecutionWorkspacePolicyAndUpgradeState(t *testing.T) {
 	ctx := context.Background()
 
-	// projectExecutionWorkspacePolicy
-	p1, err := projectExecutionWorkspacePolicy(types.StringNull())
+	p1, err := nativeJSONObject(types.StringNull())
 	if err != nil || p1 != nil {
 		t.Fatal(err)
 	}
-	p2, err := projectExecutionWorkspacePolicy(types.StringValue(""))
+	p2, err := nativeJSONObject(types.StringUnknown())
 	if err != nil || p2 != nil {
 		t.Fatal(err)
 	}
-	p3, err := projectExecutionWorkspacePolicy(types.StringValue(`{"mode":"test"}`))
+	p3, err := nativeJSONObject(types.StringValue(`{"mode":"test"}`))
 	if err != nil || p3 == nil || p3["mode"] != "test" {
 		t.Fatal(err)
 	}
-	if _, err := projectExecutionWorkspacePolicy(types.StringValue("invalid json")); err == nil {
+	if _, err := nativeJSONObject(types.StringValue("invalid json")); err == nil {
 		t.Fatal("expected error on invalid json")
 	}
-	if _, err := projectExecutionWorkspacePolicy(types.StringValue("null")); err == nil {
+	if _, err := nativeJSONObject(types.StringValue("null")); err == nil {
 		t.Fatal("expected error on null json")
 	}
 
@@ -539,35 +539,17 @@ func TestProjectExecutionWorkspacePolicyAndUpgradeState(t *testing.T) {
 		t.Fatal("expected upgrader 0")
 	}
 
-	badPrior := tfsdk.State{Schema: *upgrader.PriorSchema, Raw: tftypes.NewValue(tftypes.String, "invalid")}
 	var upRespBad resource.UpgradeStateResponse
-	upgrader.StateUpgrader(ctx, resource.UpgradeStateRequest{State: &badPrior}, &upRespBad)
+	upgrader.StateUpgrader(ctx, resource.UpgradeStateRequest{RawState: &tfprotov6.RawState{JSON: []byte(`invalid`)}}, &upRespBad)
 	if !upRespBad.Diagnostics.HasError() {
 		t.Fatal("expected error on bad prior state")
 	}
 
-	goodPrior := tfsdk.State{Schema: *upgrader.PriorSchema}
-	priorModel := struct {
-		ID                       types.String `tfsdk:"id"`
-		CompanyID                types.String `tfsdk:"company_id"`
-		Name                     types.String `tfsdk:"name"`
-		Description              types.String `tfsdk:"description"`
-		LeadAgentID              types.String `tfsdk:"lead_agent_id"`
-		ExecutionWorkspacePolicy types.String `tfsdk:"execution_workspace_policy"`
-	}{
-		ID:                       types.StringValue("p-1"),
-		CompanyID:                types.StringValue("c-1"),
-		Name:                     types.StringValue("Name"),
-		Description:              types.StringValue("Desc"),
-		LeadAgentID:              types.StringValue("lead-1"),
-		ExecutionWorkspacePolicy: types.StringValue(`{"mode":"fast"}`),
-	}
-	_ = goodPrior.Set(ctx, &priorModel)
 	var sResp resource.SchemaResponse
 	r.Schema(ctx, resource.SchemaRequest{}, &sResp)
 	var upRespGood resource.UpgradeStateResponse
 	upRespGood.State = tfsdk.State{Schema: sResp.Schema}
-	upgrader.StateUpgrader(ctx, resource.UpgradeStateRequest{State: &goodPrior}, &upRespGood)
+	upgrader.StateUpgrader(ctx, resource.UpgradeStateRequest{RawState: &tfprotov6.RawState{JSON: []byte(`{"id":"p-1","company_id":"c-1","name":"Name","description":"Desc","lead_agent_id":"lead-1","execution_workspace_policy":"{\"enabled\":true}"}`)}}, &upRespGood)
 	if upRespGood.Diagnostics.HasError() {
 		t.Fatalf("unexpected upgrade error: %v", upRespGood.Diagnostics)
 	}

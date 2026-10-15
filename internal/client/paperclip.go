@@ -361,23 +361,39 @@ type PaperclipProject struct {
 	ID                       string                 `json:"id,omitempty"`
 	CompanyID                string                 `json:"companyId,omitempty"`
 	Name                     string                 `json:"name"`
-	Description              string                 `json:"description,omitempty"`
+	Description              *string                `json:"description"`
 	LeadAgentID              string                 `json:"leadAgentId,omitempty"`
 	ExecutionWorkspacePolicy map[string]interface{} `json:"executionWorkspacePolicy,omitempty"`
+	Status                   string                 `json:"status"`
+	GoalIDs                  []string               `json:"goalIds"`
+	TargetDate               *string                `json:"targetDate"`
+	Color                    *string                `json:"color"`
+	Icon                     *string                `json:"icon"`
+	Env                      map[string]interface{} `json:"env"`
+	ArchivedAt               *string                `json:"archivedAt"`
 }
 
 // PaperclipWorkspace carries the workspace fields Paperclip's project
-// workspace API accepts and echoes; the declared branch travels as both refs.
+// workspace API accepts and echoes. Refs are independent native fields.
 type PaperclipWorkspace struct {
-	ID         string `json:"id,omitempty"`
-	ProjectID  string `json:"projectId,omitempty"`
-	CompanyID  string `json:"companyId,omitempty"`
-	Name       string `json:"name"`
-	RepoURL    string `json:"repoUrl"`
-	RepoRef    string `json:"repoRef,omitempty"`
-	DefaultRef string `json:"defaultRef,omitempty"`
-	IsPrimary  bool   `json:"isPrimary"`
-	SourceType string `json:"sourceType,omitempty"`
+	ID                 string                 `json:"id,omitempty"`
+	ProjectID          string                 `json:"projectId,omitempty"`
+	CompanyID          string                 `json:"companyId,omitempty"`
+	Name               string                 `json:"name"`
+	RepoURL            string                 `json:"repoUrl"`
+	RepoRef            string                 `json:"repoRef,omitempty"`
+	DefaultRef         string                 `json:"defaultRef,omitempty"`
+	IsPrimary          bool                   `json:"isPrimary"`
+	SourceType         string                 `json:"sourceType,omitempty"`
+	Cwd                string                 `json:"cwd"`
+	Visibility         string                 `json:"visibility"`
+	SetupCommand       string                 `json:"setupCommand"`
+	CleanupCommand     string                 `json:"cleanupCommand"`
+	RemoteProvider     string                 `json:"remoteProvider"`
+	RemoteWorkspaceRef string                 `json:"remoteWorkspaceRef"`
+	SharedWorkspaceKey string                 `json:"sharedWorkspaceKey"`
+	Metadata           map[string]interface{} `json:"metadata"`
+	RuntimeConfig      map[string]interface{} `json:"runtimeConfig"`
 }
 
 type PaperclipSkillFileEntry struct {
@@ -1632,14 +1648,25 @@ func (c *Client) ListCompanies(ctx context.Context) ([]PaperclipCompany, error) 
 }
 
 // Project CRUD
-func (c *Client) CreateProject(ctx context.Context, companyID, name, description string, executionWorkspacePolicy map[string]interface{}) (*PaperclipProject, error) {
-	payload := map[string]interface{}{"name": name}
-	if description != "" {
-		payload["description"] = description
+func projectPayload(p PaperclipProject) map[string]interface{} {
+	goals := p.GoalIDs
+	if goals == nil {
+		goals = []string{}
 	}
-	if executionWorkspacePolicy != nil {
-		payload["executionWorkspacePolicy"] = executionWorkspacePolicy
+	env := p.Env
+	if env == nil {
+		env = map[string]interface{}{}
 	}
+	return map[string]interface{}{
+		"name": p.Name, "description": p.Description,
+		"status": p.Status, "goalIds": goals, "targetDate": p.TargetDate,
+		"color": p.Color, "icon": p.Icon, "env": env, "archivedAt": p.ArchivedAt,
+		"executionWorkspacePolicy": p.ExecutionWorkspacePolicy,
+	}
+}
+
+func (c *Client) CreateProject(ctx context.Context, companyID string, project PaperclipProject) (*PaperclipProject, error) {
+	payload := projectPayload(project)
 	var resp PaperclipProject
 	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/projects", url.PathEscape(companyID)), payload, &resp); err != nil {
 		return nil, err
@@ -1661,12 +1688,8 @@ func (c *Client) GetProject(ctx context.Context, projectID string) (*PaperclipPr
 	return &resp, nil
 }
 
-func (c *Client) UpdateProject(ctx context.Context, projectID, name, description string, executionWorkspacePolicy map[string]interface{}) (*PaperclipProject, error) {
-	payload := map[string]interface{}{
-		"name":                     name,
-		"description":              description,
-		"executionWorkspacePolicy": executionWorkspacePolicy,
-	}
+func (c *Client) UpdateProject(ctx context.Context, projectID string, project PaperclipProject) (*PaperclipProject, error) {
+	payload := projectPayload(project)
 	var resp PaperclipProject
 	if err := c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/projects/%s", url.PathEscape(projectID)), payload, &resp); err != nil {
 		return nil, err
@@ -1676,6 +1699,10 @@ func (c *Client) UpdateProject(ctx context.Context, projectID, name, description
 
 func (c *Client) DeleteProject(ctx context.Context, projectID string) error {
 	return c.paperclipRequest(ctx, http.MethodDelete, fmt.Sprintf("/api/projects/%s", url.PathEscape(projectID)), nil, nil)
+}
+
+func (c *Client) ArchiveProject(ctx context.Context, projectID, archivedAt string) error {
+	return c.paperclipRequest(ctx, http.MethodPatch, fmt.Sprintf("/api/projects/%s", url.PathEscape(projectID)), map[string]interface{}{"archivedAt": archivedAt}, nil)
 }
 
 // SetProjectLead owns only the native lead field; an empty agent clears it.
@@ -1718,9 +1745,28 @@ func (c *Client) ListProjects(ctx context.Context, companyID string) ([]Papercli
 }
 
 // Workspace CRUD
+func nullableNativeString(value string) interface{} {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func workspacePayload(ws PaperclipWorkspace) map[string]interface{} {
+	return map[string]interface{}{
+		"name": ws.Name, "sourceType": ws.SourceType, "cwd": nullableNativeString(ws.Cwd),
+		"repoUrl": nullableNativeString(ws.RepoURL), "repoRef": nullableNativeString(ws.RepoRef),
+		"defaultRef": nullableNativeString(ws.DefaultRef), "isPrimary": ws.IsPrimary,
+		"visibility": ws.Visibility, "setupCommand": nullableNativeString(ws.SetupCommand),
+		"cleanupCommand": nullableNativeString(ws.CleanupCommand), "remoteProvider": nullableNativeString(ws.RemoteProvider),
+		"remoteWorkspaceRef": nullableNativeString(ws.RemoteWorkspaceRef), "sharedWorkspaceKey": nullableNativeString(ws.SharedWorkspaceKey),
+		"metadata": ws.Metadata, "runtimeConfig": ws.RuntimeConfig,
+	}
+}
+
 func (c *Client) CreateWorkspace(ctx context.Context, projectID string, ws PaperclipWorkspace) (*PaperclipWorkspace, error) {
 	var resp PaperclipWorkspace
-	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/projects/%s/workspaces", url.PathEscape(projectID)), ws, &resp); err != nil {
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/projects/%s/workspaces", url.PathEscape(projectID)), workspacePayload(ws), &resp); err != nil {
 		return nil, err
 	}
 	if resp.ProjectID == "" {
@@ -1754,7 +1800,7 @@ func (c *Client) UpdateWorkspace(ctx context.Context, projectID, workspaceID str
 		url.PathEscape(projectID),
 		url.PathEscape(workspaceID),
 	)
-	if err := c.paperclipRequest(ctx, http.MethodPatch, path, ws, &resp); err != nil {
+	if err := c.paperclipRequest(ctx, http.MethodPatch, path, workspacePayload(ws), &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
@@ -3563,4 +3609,3 @@ func (c *Client) UpsertPluginConfig(ctx context.Context, pluginID, companyID str
 	}
 	return &res, nil
 }
-

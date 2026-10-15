@@ -15,6 +15,8 @@ type PaperclipEnvironment struct {
 	CompanyID string                 `json:"companyId,omitempty"`
 	Driver    string                 `json:"driver"`
 	EnvVars   map[string]interface{} `json:"envVars"`
+	Status    string                 `json:"status"`
+	Config    map[string]interface{} `json:"config"`
 }
 
 func (e *PaperclipEnvironment) InheritsServicePath() bool {
@@ -35,12 +37,23 @@ func (c *Client) FindLocalEnvironment(ctx context.Context, companyID string) (*P
 }
 
 func (c *Client) GetLocalEnvironment(ctx context.Context, id string) (*PaperclipEnvironment, error) {
+	env, err := c.GetEnvironment(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if env.Driver != "local" {
+		return nil, fmt.Errorf("environment identity does not identify the requested local execution environment")
+	}
+	return env, nil
+}
+
+func (c *Client) GetEnvironment(ctx context.Context, id string) (*PaperclipEnvironment, error) {
 	var env PaperclipEnvironment
 	if err := c.paperclipRequest(ctx, http.MethodGet, "/api/environments/"+url.PathEscape(id), nil, &env); err != nil {
 		return nil, err
 	}
-	if env.ID != id || env.Driver != "local" {
-		return nil, fmt.Errorf("environment identity does not identify the requested local execution environment")
+	if env.ID != id {
+		return nil, fmt.Errorf("environment identity does not identify the requested execution environment")
 	}
 	return &env, nil
 }

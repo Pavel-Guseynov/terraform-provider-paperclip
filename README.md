@@ -49,6 +49,64 @@ provider_installation {
 }
 ```
 
+### Projects and workspaces
+
+Projects manage `status` (default `backlog`), `goal_ids`, `target_date`, `color`,
+`icon`, shared typed `env` bindings, `archived_at`, and the strict nested
+`execution_workspace_policy` block. `paperclip_project_lead` alone owns the lead.
+Null or empty `env` clears through the native empty object. Projects hard-delete
+by default; `archive_on_destroy = true` archives instead. State versions 0 and 1
+upgrade to version 2 without replacing identity. Replace the previous
+`execution_workspace_policy = jsonencode(...)` configuration with typed block
+syntax without `=`, including nested strategy and authorization blocks, using
+snake_case keys; native free-form record fields remain JSON
+objects. Unrepresentable old policy keys cause an explicit migration diagnostic.
+Native block decoding rejects unknown arguments instead of silently discarding
+them during object type conversion.
+
+`target_date` must be `YYYY-MM-DD` or null. Set `archived_at` after creation:
+the existing create route does not convert timestamp strings to database dates,
+so the provider rejects archival during creation before mutation. UTC RFC3339
+archive timestamps use native millisecond precision and compare by instant,
+preserving equivalent `.000Z` readback. Environment/workspace policy references
+are verified through native read-only APIs; invalid, archived, unsupported and
+probe-only environment selections and absent project workspaces are rejected.
+Shared env bindings preserve empty plain strings, expose native reference
+defaults, and send pinned version strings as native JSON integers.
+
+Workspaces manage all four native `source_type` values (`local_path`, `git_repo`,
+`remote_managed`, `non_git_path`) and all native configuration fields. Defaults
+are `source_type = "git_repo"`, `is_primary = true`, and
+`visibility = "default"`. Provide `cwd` or `repo_url`; `remote_managed` instead
+requires `remote_workspace_ref` or `repo_url`. Version 0 state upgrades to
+version 1 by mapping the old `branch` to both `repo_ref` and `default_ref`,
+preserving identity. Update configuration to the independent ref attributes.
+Imports use `company_id/project_id` (or project ID) and
+`project_id/workspace_id`; workspace refresh always selects the exact ID from
+the native project-scoped list.
+
+The provider exposes the API's effective `default_ref`: native null storage
+inherits `repo_ref`. Configuring a null `default_ref` with a non-null `repo_ref`
+cannot express an independent clear and fails before mutation. Set the effective
+inherited value explicitly, set a distinct ref, or clear both refs. The provider
+also rejects demoting the only workspace, leading/trailing or empty workspace
+strings, the native repo-only cwd sentinel, and empty/all-null runtime settings
+that the API normalizes away. Runtime JSON accepts only `workspaceRuntime`,
+`desiredState`, and `serviceStates`; desired/service states are `running`,
+`stopped`, or `manual`. Null clears runtime configuration; null members and
+absent members compare equivalently. Use `runtime_config` for the metadata
+`runtimeConfig` key, which is excluded from the separately managed `metadata`
+object to give it one owner. These errors retain existing identity and do not
+issue an unsupported mutation. Known invalid goal/secret references fail at
+plan; apply-time references are validated read-only before writes.
+
+The existing API stores policy `environment_id` without using it to select run
+environments. It stores `setup_command` without executing it and executes
+`cleanup_command`. Typed authorization policy excludes trust keys because the
+native assignment evaluator rejects them. Provider checks reproduce these
+native limitations; server changes, source-pin advancement, live deployment,
+and consumer/backend selection are outside provider delivery.
+
 ## Integration contract
 
 - **Authority:** This repository contains the authoritative Go source and OpenTofu Registry documentation. The parent Paperclip packaging repository owns the declarative Nix build and verification gate (`100.0%` statement coverage).

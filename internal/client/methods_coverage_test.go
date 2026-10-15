@@ -209,9 +209,9 @@ func TestAllClientMethodsFailures(t *testing.T) {
 	_ = cli.DeleteCompany(ctx, "comp-1")
 	_ = cli.ArchiveCompany(ctx, "comp-1")
 	_, _ = cli.ListCompanies(ctx)
-	_, _ = cli.CreateProject(ctx, "comp-1", "proj", "desc", nil)
+	_, _ = cli.CreateProject(ctx, "comp-1", PaperclipProject{Name: "proj", Description: testStringPointer("desc")})
 	_, _ = cli.GetProject(ctx, "proj-1")
-	_, _ = cli.UpdateProject(ctx, "proj-1", "proj", "desc", nil)
+	_, _ = cli.UpdateProject(ctx, "proj-1", PaperclipProject{Name: "proj", Description: testStringPointer("desc")})
 	_ = cli.DeleteProject(ctx, "proj-1")
 	_, _ = cli.SetProjectLead(ctx, "proj-1", "agent-1")
 	_, _ = cli.ListProjects(ctx, "comp-1")
@@ -418,7 +418,7 @@ func TestClientSpecificBranches(t *testing.T) {
 
 	// CreateProject with executionWorkspacePolicy
 	policyMap := map[string]interface{}{"mode": "isolated"}
-	_, err = cliFallback.CreateProject(ctx, "comp-1", "proj", "desc", policyMap)
+	_, err = cliFallback.CreateProject(ctx, "comp-1", PaperclipProject{Name: "proj", Description: testStringPointer("desc"), ExecutionWorkspacePolicy: policyMap})
 	if err != nil {
 		t.Fatalf("CreateProject with policy failed: %v", err)
 	}

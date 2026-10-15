@@ -6,22 +6,29 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 )
 
 var (
-	_ resource.Resource                 = &PaperclipProjectResource{}
-	_ resource.ResourceWithConfigure    = &PaperclipProjectResource{}
-	_ resource.ResourceWithImportState  = &PaperclipProjectResource{}
-	_ resource.ResourceWithUpgradeState = &PaperclipProjectResource{}
+	_ resource.Resource                   = &PaperclipProjectResource{}
+	_ resource.ResourceWithConfigure      = &PaperclipProjectResource{}
+	_ resource.ResourceWithImportState    = &PaperclipProjectResource{}
+	_ resource.ResourceWithUpgradeState   = &PaperclipProjectResource{}
+	_ resource.ResourceWithValidateConfig = &PaperclipProjectResource{}
+	_ resource.ResourceWithModifyPlan     = &PaperclipProjectResource{}
 )
 
 func NewPaperclipProjectResource() resource.Resource {
@@ -33,11 +40,19 @@ type PaperclipProjectResource struct {
 }
 
 type PaperclipProjectResourceModel struct {
-	ID                       types.String `tfsdk:"id"`
-	CompanyID                types.String `tfsdk:"company_id"`
-	Name                     types.String `tfsdk:"name"`
-	Description              types.String `tfsdk:"description"`
-	ExecutionWorkspacePolicy types.String `tfsdk:"execution_workspace_policy"`
+	ID                       types.String               `tfsdk:"id"`
+	CompanyID                types.String               `tfsdk:"company_id"`
+	Name                     types.String               `tfsdk:"name"`
+	Description              types.String               `tfsdk:"description"`
+	ExecutionWorkspacePolicy types.Object               `tfsdk:"execution_workspace_policy"`
+	Status                   types.String               `tfsdk:"status"`
+	GoalIDs                  types.Set                  `tfsdk:"goal_ids"`
+	TargetDate               types.String               `tfsdk:"target_date"`
+	Color                    types.String               `tfsdk:"color"`
+	Icon                     types.String               `tfsdk:"icon"`
+	Env                      map[string]EnvBindingModel `tfsdk:"env"`
+	ArchivedAt               types.String               `tfsdk:"archived_at"`
+	ArchiveOnDestroy         types.Bool                 `tfsdk:"archive_on_destroy"`
 }
 
 func (r *PaperclipProjectResource) Metadata(ctx context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -46,8 +61,9 @@ func (r *PaperclipProjectResource) Metadata(ctx context.Context, req resource.Me
 
 func (r *PaperclipProjectResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Version:     1,
-		Description: "Manages a Paperclip project under a company.",
+		Version:     2,
+		Description: "Manages native project configuration. The lead belongs to paperclip_project_lead. Environment bindings clear with an empty map. environment_id in execution_workspace_policy is stored but does not select run environments. Authorization trust keys are rejected because the native assignment evaluator cannot interpret them. archive_on_destroy selects archival instead of hard deletion.",
+		Blocks:      map[string]schema.Block{"execution_workspace_policy": policyBlock(projectPolicyFields)},
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Description: "Unique identifier for the project.",
@@ -71,16 +87,14 @@ func (r *PaperclipProjectResource) Schema(ctx context.Context, req resource.Sche
 				Description: "Optional project description.",
 				Optional:    true,
 			},
-			"execution_workspace_policy": schema.StringAttribute{
-				Description: "Project-owned Paperclip execution workspace policy as a JSON object.",
-				Optional:    true,
-				Validators: []validator.String{
-					JSONAttributeValidator(),
-				},
-				PlanModifiers: []planmodifier.String{
-					SemanticJSONPlanModifier(),
-				},
-			},
+			"status":             schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString("backlog"), Description: "Native project status.", Validators: []validator.String{stringOneOfValidator{allowed: []string{"backlog", "planned", "in_progress", "completed", "cancelled"}}}},
+			"goal_ids":           schema.SetAttribute{Optional: true, ElementType: types.StringType, Description: "Associated native goal IDs in the same company; null or an empty set clears associations."},
+			"target_date":        schema.StringAttribute{Optional: true, Description: "Native target date string; null clears it."},
+			"color":              schema.StringAttribute{Optional: true, Description: "Native project color; null clears it."},
+			"icon":               schema.StringAttribute{Optional: true, Description: "Native project icon name; null clears it.", Validators: []validator.String{stringOneOfValidator{allowed: []string{"folder", "rocket", "code", "terminal", "database", "globe", "package", "boxes", "box", "layers", "briefcase", "compass", "target", "flame", "zap", "star", "bug", "wrench", "hammer", "lightbulb", "sparkles", "shield", "lock", "search", "cog", "brain", "cpu", "git-branch", "file-code", "puzzle", "gem", "atom", "heart", "mail", "message-square", "crown", "radar", "telescope", "hexagon"}}}},
+			"env":                EnvBindingMapAttribute("Native project environment bindings; null or {} clears all bindings via the API empty object."),
+			"archived_at":        schema.StringAttribute{Optional: true, Description: "UTC RFC3339 archive timestamp at native millisecond precision. Configure after creating the project; null unarchives it.", PlanModifiers: []planmodifier.String{projectArchiveTimePlanModifier{}}},
+			"archive_on_destroy": schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false), Description: "Archive on destroy instead of native hard deletion. Defaults to false, preserving existing resource retirement behavior."},
 		},
 	}
 }
@@ -88,55 +102,204 @@ func (r *PaperclipProjectResource) Schema(ctx context.Context, req resource.Sche
 // Version zero also owned lead_agent_id. Upgrade only the stored project shape;
 // the separate lead resource adopts the unchanged assignment from Paperclip.
 func (r *PaperclipProjectResource) UpgradeState(ctx context.Context) map[int64]resource.StateUpgrader {
-	return map[int64]resource.StateUpgrader{
-		0: {
-			PriorSchema: &schema.Schema{
-				Attributes: map[string]schema.Attribute{
-					"id":                         schema.StringAttribute{Computed: true},
-					"company_id":                 schema.StringAttribute{Required: true},
-					"name":                       schema.StringAttribute{Required: true},
-					"description":                schema.StringAttribute{Optional: true, Computed: true},
-					"lead_agent_id":              schema.StringAttribute{Optional: true, Computed: true},
-					"execution_workspace_policy": schema.StringAttribute{Optional: true, Computed: true},
-				},
-			},
-			StateUpgrader: func(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
-				var prior struct {
-					ID                       types.String `tfsdk:"id"`
-					CompanyID                types.String `tfsdk:"company_id"`
-					Name                     types.String `tfsdk:"name"`
-					Description              types.String `tfsdk:"description"`
-					LeadAgentID              types.String `tfsdk:"lead_agent_id"`
-					ExecutionWorkspacePolicy types.String `tfsdk:"execution_workspace_policy"`
-				}
-				resp.Diagnostics.Append(req.State.Get(ctx, &prior)...)
-				if resp.Diagnostics.HasError() {
-					return
-				}
-				resp.Diagnostics.Append(resp.State.Set(ctx, &PaperclipProjectResourceModel{
-					ID:                       prior.ID,
-					CompanyID:                prior.CompanyID,
-					Name:                     prior.Name,
-					Description:              prior.Description,
-					ExecutionWorkspacePolicy: prior.ExecutionWorkspacePolicy,
-				})...)
-			},
-		},
+	upgrader := resource.StateUpgrader{StateUpgrader: func(ctx context.Context, req resource.UpgradeStateRequest, resp *resource.UpgradeStateResponse) {
+		var prior map[string]json.RawMessage
+		if err := json.Unmarshal(req.RawState.JSON, &prior); err != nil {
+			resp.Diagnostics.AddError("Invalid project state", err.Error())
+			return
+		}
+		delete(prior, "lead_agent_id")
+		var policyString *string
+		if err := json.Unmarshal(prior["execution_workspace_policy"], &policyString); err != nil {
+			resp.Diagnostics.AddError("Invalid project policy state", err.Error())
+			return
+		}
+		var remote map[string]interface{}
+		if policyString != nil {
+			var err error
+			remote, err = nativeJSONObject(types.StringValue(*policyString))
+			if err != nil {
+				resp.Diagnostics.AddError("Invalid project policy state", err.Error())
+				return
+			}
+		}
+		policy, ds := policyFromAPI(projectPolicyFields, remote)
+		resp.Diagnostics.Append(ds...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		prior["execution_workspace_policy"] = json.RawMessage("null")
+		raw, _ := json.Marshal(prior)
+		value, err := (&tfprotov6.RawState{JSON: raw}).Unmarshal(resp.State.Schema.Type().TerraformType(ctx))
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid project state", err.Error())
+			return
+		}
+		resp.State.Raw = value
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("execution_workspace_policy"), policy)...)
+	}}
+	return map[int64]resource.StateUpgrader{0: upgrader, 1: upgrader}
+}
+
+func projectStringPointer(v types.String) *string {
+	if v.IsNull() {
+		return nil
+	}
+	s := v.ValueString()
+	return &s
+}
+func projectStringValue(v *string) types.String {
+	if v == nil {
+		return types.StringNull()
+	}
+	return types.StringValue(*v)
+}
+
+func projectRequest(ctx context.Context, model PaperclipProjectResourceModel) client.PaperclipProject {
+	var goals []string
+	_ = model.GoalIDs.ElementsAs(ctx, &goals, false)
+	return client.PaperclipProject{Name: model.Name.ValueString(), Description: projectStringPointer(model.Description), Status: model.Status.ValueString(), GoalIDs: goals, TargetDate: projectStringPointer(model.TargetDate), Color: projectStringPointer(model.Color), Icon: projectStringPointer(model.Icon), ArchivedAt: projectStringPointer(model.ArchivedAt), Env: EnvBindingsMapToAPI(model.Env), ExecutionWorkspacePolicy: policyToAPI(model.ExecutionWorkspacePolicy, projectPolicyFields)}
+}
+
+func refreshProject(ctx context.Context, model *PaperclipProjectResourceModel, p *client.PaperclipProject) diag.Diagnostics {
+	if model.ArchiveOnDestroy.IsNull() || model.ArchiveOnDestroy.IsUnknown() {
+		model.ArchiveOnDestroy = types.BoolValue(false)
+	}
+	model.ID = types.StringValue(p.ID)
+	if p.CompanyID != "" {
+		model.CompanyID = types.StringValue(p.CompanyID)
+	}
+	model.Name = types.StringValue(p.Name)
+	model.Description = projectStringValue(p.Description)
+	model.Status = types.StringValue(p.Status)
+	model.TargetDate, model.Color, model.Icon = projectStringValue(p.TargetDate), projectStringValue(p.Color), projectStringValue(p.Icon)
+	archivedAt := projectStringValue(p.ArchivedAt)
+	if !sameProjectArchiveTime(model.ArchivedAt, archivedAt) {
+		model.ArchivedAt = archivedAt
+	}
+	if len(p.GoalIDs) == 0 && model.GoalIDs.IsNull() {
+		model.GoalIDs = types.SetNull(types.StringType)
+	} else {
+		model.GoalIDs, _ = types.SetValueFrom(ctx, types.StringType, p.GoalIDs)
+	}
+	model.Env = refreshProjectEnv(model.Env, p.Env)
+	policy, ds := policyFromAPI(projectPolicyFields, p.ExecutionWorkspacePolicy)
+	model.ExecutionWorkspacePolicy = preservePolicyJSON(model.ExecutionWorkspacePolicy, policy, projectPolicyFields)
+	return ds
+}
+
+func validateProjectConfig(model PaperclipProjectResourceModel) diag.Diagnostics {
+	ds := ValidateEnvBindingsMapPlan(path.Root("env"), model.Env, "project")
+	if !model.Name.IsNull() && !model.Name.IsUnknown() && (strings.TrimSpace(model.Name.ValueString()) == "" || strings.TrimSpace(model.Name.ValueString()) != model.Name.ValueString()) {
+		ds.AddError("Invalid project name", "name must be non-empty and trimmed so the native project name can round-trip exactly")
+	}
+	if !model.ArchivedAt.IsNull() && !model.ArchivedAt.IsUnknown() {
+		if stamp, err := time.Parse(time.RFC3339Nano, model.ArchivedAt.ValueString()); err != nil || !strings.HasSuffix(model.ArchivedAt.ValueString(), "Z") || stamp.Nanosecond()%1000000 != 0 {
+			ds.AddError("Invalid project archive timestamp", "archived_at must be a UTC RFC3339 timestamp ending in Z at millisecond precision, or null to unarchive")
+		}
+	}
+	if !model.TargetDate.IsNull() && !model.TargetDate.IsUnknown() {
+		if _, err := time.Parse("2006-01-02", model.TargetDate.ValueString()); err != nil {
+			ds.AddError("Invalid project target date", "target_date must be a calendar date in YYYY-MM-DD format, or null to clear it")
+		}
+	}
+	ds.Append(validatePolicyObject(model.ExecutionWorkspacePolicy, projectPolicyFields)...)
+	return ds
+}
+
+func sameProjectArchiveTime(a, b types.String) bool {
+	if a.IsNull() || b.IsNull() || a.IsUnknown() || b.IsUnknown() {
+		return false
+	}
+	left, errLeft := time.Parse(time.RFC3339Nano, a.ValueString())
+	right, errRight := time.Parse(time.RFC3339Nano, b.ValueString())
+	return errLeft == nil && errRight == nil && left.Equal(right)
+}
+
+type projectArchiveTimePlanModifier struct{}
+
+func (projectArchiveTimePlanModifier) Description(context.Context) string {
+	return "compares native archive timestamps by instant"
+}
+func (m projectArchiveTimePlanModifier) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+func (projectArchiveTimePlanModifier) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	if sameProjectArchiveTime(req.PlanValue, req.StateValue) {
+		resp.PlanValue = req.StateValue
 	}
 }
 
-func projectExecutionWorkspacePolicy(value types.String) (map[string]interface{}, error) {
-	if value.IsNull() || value.IsUnknown() || value.ValueString() == "" {
-		return nil, nil
+func validateProjectCreateArchive(value types.String) error {
+	if !value.IsNull() && !value.IsUnknown() {
+		return fmt.Errorf("archived_at cannot be configured during creation: the current Paperclip create API does not convert archive timestamps. Create the project first, then set archived_at in an update, or select archive_on_destroy")
 	}
-	var policy map[string]interface{}
-	if err := json.Unmarshal([]byte(value.ValueString()), &policy); err != nil {
-		return nil, fmt.Errorf("execution_workspace_policy must be a JSON object: %w", err)
+	return nil
+}
+
+func (r *PaperclipProjectResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var config PaperclipProjectResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
-	if policy == nil {
-		return nil, errors.New("execution_workspace_policy must be a JSON object")
+	resp.Diagnostics.Append(validateProjectConfig(config)...)
+}
+
+func (r *PaperclipProjectResource) validateReferences(ctx context.Context, model PaperclipProjectResourceModel) diag.Diagnostics {
+	var ds diag.Diagnostics
+	for _, value := range model.GoalIDs.Elements() {
+		goalID := value.(types.String)
+		if goalID.IsUnknown() {
+			continue
+		}
+		goal, err := r.client.GetGoal(ctx, goalID.ValueString())
+		if err != nil {
+			ds.AddError("Invalid project goal reference", err.Error())
+		} else if goal.CompanyID != model.CompanyID.ValueString() {
+			ds.AddError("Invalid project goal reference", "goal_ids must belong to the project company")
+		}
 	}
-	return policy, nil
+	ds.Append(ValidateEnvBindingsApply(ctx, r.client, model.CompanyID.ValueString(), model.Env)...)
+	if !model.ExecutionWorkspacePolicy.IsNull() && !model.ExecutionWorkspacePolicy.IsUnknown() {
+		attrs := model.ExecutionWorkspacePolicy.Attributes()
+		if value := attrs["environment_id"].(types.String); !value.IsNull() && !value.IsUnknown() {
+			environment, err := r.client.GetEnvironment(ctx, value.ValueString())
+			if err != nil {
+				ds.AddError("Invalid project environment reference", err.Error())
+			} else if environment.Status == "archived" || (environment.Driver != "local" && environment.Driver != "ssh" && environment.Driver != "sandbox") || (environment.Driver == "sandbox" && environment.Config["provider"] == "fake") {
+				ds.AddError("Invalid project environment reference", "environment_id must identify a non-archived local, ssh or sandbox environment; the probe-only fake sandbox provider cannot execute runs")
+			}
+		}
+		if value := attrs["default_project_workspace_id"].(types.String); !value.IsNull() && !value.IsUnknown() {
+			if model.ID.ValueString() == "" {
+				ds.AddError("Invalid project workspace reference", "default_project_workspace_id requires an existing workspace in this project; create the project and workspace before setting this policy")
+			} else if _, err := r.client.GetWorkspaceInProject(ctx, model.ID.ValueString(), value.ValueString()); err != nil {
+				ds.AddError("Invalid project workspace reference", err.Error())
+			}
+		}
+	}
+	return ds
+}
+
+func (r *PaperclipProjectResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || r.client == nil {
+		return
+	}
+	var plan PaperclipProjectResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if req.State.Raw.IsNull() {
+		if err := validateProjectCreateArchive(plan.ArchivedAt); err != nil {
+			resp.Diagnostics.AddError("Unsupported project creation archive", err.Error())
+			return
+		}
+	}
+	if !plan.CompanyID.IsUnknown() {
+		resp.Diagnostics.Append(r.validateReferences(ctx, plan)...)
+	}
 }
 
 func (r *PaperclipProjectResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -160,29 +323,30 @@ func (r *PaperclipProjectResource) Create(ctx context.Context, req resource.Crea
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	policy, err := projectExecutionWorkspacePolicy(plan.ExecutionWorkspacePolicy)
-	if err != nil {
-		resp.Diagnostics.AddError("Invalid Paperclip project workspace policy", err.Error())
+	resp.Diagnostics.Append(validateProjectConfig(plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if err := validateProjectCreateArchive(plan.ArchivedAt); err != nil {
+		resp.Diagnostics.AddError("Unsupported project creation archive", err.Error())
+		return
+	}
+	resp.Diagnostics.Append(r.validateReferences(ctx, plan)...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	proj, err := r.client.CreateProject(
 		ctx,
 		plan.CompanyID.ValueString(),
-		plan.Name.ValueString(),
-		plan.Description.ValueString(),
-		policy,
+		projectRequest(ctx, plan),
 	)
 	if err != nil {
 		resp.Diagnostics.AddError("Error creating Paperclip project", err.Error())
 		return
 	}
 
-	plan.ID = types.StringValue(proj.ID)
-	plan.CompanyID = types.StringValue(proj.CompanyID)
-	plan.Name = types.StringValue(proj.Name)
-	plan.Description = stringOrNull(proj.Description)
-	plan.ExecutionWorkspacePolicy = refreshSemanticJSON(plan.ExecutionWorkspacePolicy, proj.ExecutionWorkspacePolicy)
+	resp.Diagnostics.Append(refreshProject(ctx, &plan, proj)...)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -204,13 +368,10 @@ func (r *PaperclipProjectResource) Read(ctx context.Context, req resource.ReadRe
 		return
 	}
 
-	state.ID = types.StringValue(proj.ID)
-	if proj.CompanyID != "" {
-		state.CompanyID = types.StringValue(proj.CompanyID)
+	resp.Diagnostics.Append(refreshProject(ctx, &state, proj)...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
-	state.Name = types.StringValue(proj.Name)
-	state.Description = stringOrNull(proj.Description)
-	state.ExecutionWorkspacePolicy = refreshSemanticJSON(state.ExecutionWorkspacePolicy, proj.ExecutionWorkspacePolicy)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -224,28 +385,29 @@ func (r *PaperclipProjectResource) Update(ctx context.Context, req resource.Upda
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	policy, err := projectExecutionWorkspacePolicy(plan.ExecutionWorkspacePolicy)
-	if err != nil {
-		resp.Diagnostics.AddError("Invalid Paperclip project workspace policy", err.Error())
+	resp.Diagnostics.Append(validateProjectConfig(plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(r.validateReferences(ctx, plan)...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
 	proj, err := r.client.UpdateProject(
 		ctx,
 		state.ID.ValueString(),
-		plan.Name.ValueString(),
-		plan.Description.ValueString(),
-		policy,
+		projectRequest(ctx, plan),
 	)
 	if err != nil {
 		resp.Diagnostics.AddError("Error updating Paperclip project", err.Error())
 		return
 	}
 
-	plan.ID = types.StringValue(proj.ID)
-	plan.Name = types.StringValue(proj.Name)
-	plan.Description = stringOrNull(proj.Description)
-	plan.ExecutionWorkspacePolicy = refreshSemanticJSON(plan.ExecutionWorkspacePolicy, proj.ExecutionWorkspacePolicy)
+	resp.Diagnostics.Append(refreshProject(ctx, &plan, proj)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -257,7 +419,13 @@ func (r *PaperclipProjectResource) Delete(ctx context.Context, req resource.Dele
 		return
 	}
 
-	if err := r.client.DeleteProject(ctx, state.ID.ValueString()); err != nil {
+	var err error
+	if state.ArchiveOnDestroy.ValueBool() {
+		err = r.client.ArchiveProject(ctx, state.ID.ValueString(), time.Now().UTC().Truncate(time.Millisecond).Format(time.RFC3339Nano))
+	} else {
+		err = r.client.DeleteProject(ctx, state.ID.ValueString())
+	}
+	if err != nil {
 		if !errors.Is(err, client.ErrNotFound) {
 			resp.Diagnostics.AddError("Error deleting Paperclip project", err.Error())
 			return

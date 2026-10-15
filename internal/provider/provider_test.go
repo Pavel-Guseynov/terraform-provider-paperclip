@@ -36,7 +36,7 @@ func TestPaperclipProjectUpgradeStateProtocol(t *testing.T) {
 		t.Fatalf("provider schema failed: %v, %v", err, schemas)
 	}
 	projectSchema := schemas.ResourceSchemas["paperclip_project"]
-	if projectSchema.Version != 1 {
+	if projectSchema.Version != 2 {
 		t.Fatalf("project schema has no versioned migration: %d", projectSchema.Version)
 	}
 	for _, test := range []struct {
@@ -51,12 +51,15 @@ func TestPaperclipProjectUpgradeStateProtocol(t *testing.T) {
 		{name: "current version", version: 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			description, policy := `"preserved description"`, `"{\"mode\":\"git_worktree\"}"`
+			description, policy := `"preserved description"`, `"{\"enabled\":true}"`
 			if test.nulls {
 				description, policy = "null", "null"
 			}
 			wantJSON := `{"id":"existing-project","company_id":"existing-company","name":"project","description":` + description + `,"execution_workspace_policy":` + policy + `}`
 			priorJSON := strings.TrimSuffix(wantJSON, "}") + test.lead + "}"
+			if !test.nulls {
+				wantJSON = strings.Replace(wantJSON, policy, `{"enabled":true}`, 1)
+			}
 			// No client is configured: migration must need neither credentials nor API calls.
 			upgraded, err := server.UpgradeResourceState(ctx, &tfprotov6.UpgradeResourceStateRequest{
 				TypeName: "paperclip_project", Version: test.version,
@@ -1577,18 +1580,18 @@ func TestSkillExactContentAndDescriptionRefresh(t *testing.T) {
 }
 
 func TestProjectExecutionWorkspacePolicyParsing(t *testing.T) {
-	policy, err := projectExecutionWorkspacePolicy(types.StringValue(`{"enabled":true,"defaultMode":"shared_workspace"}`))
+	policy, err := nativeJSONObject(types.StringValue(`{"enabled":true,"defaultMode":"shared_workspace"}`))
 	if err != nil || policy["defaultMode"] != "shared_workspace" {
 		t.Fatalf("valid project workspace policy did not parse: policy=%v err=%v", policy, err)
 	}
-	policy, err = projectExecutionWorkspacePolicy(types.StringNull())
+	policy, err = nativeJSONObject(types.StringNull())
 	if err != nil || policy != nil {
 		t.Fatalf("null project workspace policy must remain absent: policy=%v err=%v", policy, err)
 	}
-	if _, err := projectExecutionWorkspacePolicy(types.StringValue(`{"enabled":`)); err == nil {
+	if _, err := nativeJSONObject(types.StringValue(`{"enabled":`)); err == nil {
 		t.Fatalf("invalid project workspace policy JSON must fail")
 	}
-	if _, err := projectExecutionWorkspacePolicy(types.StringValue("null")); err == nil {
+	if _, err := nativeJSONObject(types.StringValue("null")); err == nil {
 		t.Fatalf("JSON null is not a project workspace policy object")
 	}
 }
@@ -2693,7 +2696,7 @@ func configureTestResource(t *testing.T, serverURL string, r resource.ResourceWi
 	return schemaResp.Schema
 }
 
-func TestPaperclipWorkspaceBranchMapsToRepoRefs(t *testing.T) {
+func TestPaperclipWorkspaceIndependentRefsAndExactRefresh(t *testing.T) {
 	ctx := context.Background()
 	var createdPayload, updatedPayload map[string]interface{}
 	liveRefs := map[string]interface{}{"repoRef": nil, "defaultRef": nil}
@@ -2730,10 +2733,10 @@ func TestPaperclipWorkspaceBranchMapsToRepoRefs(t *testing.T) {
 		t.Fatal("workspace schema still carries the classification field Paperclip never stores")
 	}
 	planModel := PaperclipWorkspaceResourceModel{
-		ProjectID:  types.StringValue("proj-1"),
-		Name:       types.StringValue("neumata"),
-		RepoURL:    types.StringValue("https://git.example.test/neumata.git"),
-		Branch:     types.StringValue("develop"),
+		ProjectID: types.StringValue("proj-1"),
+		Name:      types.StringValue("neumata"),
+		RepoURL:   types.StringValue("https://git.example.test/neumata.git"),
+		RepoRef:   types.StringValue("develop"), DefaultRef: types.StringValue("main"),
 		IsPrimary:  types.BoolValue(true),
 		SourceType: types.StringValue("git_repo"),
 	}
@@ -2750,13 +2753,13 @@ func TestPaperclipWorkspaceBranchMapsToRepoRefs(t *testing.T) {
 			t.Fatalf("create sent provider-only field %q", key)
 		}
 	}
-	if createdPayload["repoRef"] != "develop" || createdPayload["defaultRef"] != "develop" {
+	if createdPayload["repoRef"] != "develop" || createdPayload["defaultRef"] != "main" {
 		t.Fatalf("create did not apply the declared branch to both refs: %v", createdPayload)
 	}
 	var created PaperclipWorkspaceResourceModel
 	createResp.State.Get(ctx, &created)
-	if created.Branch.ValueString() != "develop" {
-		t.Fatalf("created branch read back as %q", created.Branch.ValueString())
+	if created.RepoRef.ValueString() != "develop" || created.DefaultRef.ValueString() != "main" {
+		t.Fatalf("created refs read back incorrectly: %+v", created)
 	}
 
 	readReq := resource.ReadRequest{State: createResp.State}
@@ -2769,14 +2772,14 @@ func TestPaperclipWorkspaceBranchMapsToRepoRefs(t *testing.T) {
 		}
 		var refreshed PaperclipWorkspaceResourceModel
 		readResp.State.Get(ctx, &refreshed)
-		return refreshed.Branch.ValueString()
+		return refreshed.DefaultRef.ValueString()
 	}
 	if branch := readBranch(); branch != "" {
 		t.Fatalf("missing live refs read back as %q instead of planning an update", branch)
 	}
 	liveRefs["repoRef"], liveRefs["defaultRef"] = "develop", "main"
-	if branch := readBranch(); branch != "" {
-		t.Fatalf("disagreeing live refs read back as %q instead of planning an update", branch)
+	if branch := readBranch(); branch != "main" {
+		t.Fatalf("independent live default ref read back as %q", branch)
 	}
 	liveRefs["defaultRef"] = "develop"
 	if branch := readBranch(); branch != "develop" {
@@ -2784,7 +2787,7 @@ func TestPaperclipWorkspaceBranchMapsToRepoRefs(t *testing.T) {
 	}
 
 	driftedState := created
-	driftedState.Branch = types.StringValue("")
+	driftedState.DefaultRef = types.StringNull()
 	var updateReq resource.UpdateRequest
 	updateReq.Plan = createReq.Plan
 	updateReq.State = tfsdk.State{Schema: wsSchema}
@@ -2794,13 +2797,13 @@ func TestPaperclipWorkspaceBranchMapsToRepoRefs(t *testing.T) {
 	if updateResp.Diagnostics.HasError() {
 		t.Fatalf("update failed: %v", updateResp.Diagnostics)
 	}
-	if updatedPayload["repoRef"] != "develop" || updatedPayload["defaultRef"] != "develop" {
+	if updatedPayload["repoRef"] != "develop" || updatedPayload["defaultRef"] != "main" {
 		t.Fatalf("update did not restore both refs: %v", updatedPayload)
 	}
 	var updated PaperclipWorkspaceResourceModel
 	updateResp.State.Get(ctx, &updated)
-	if updated.Branch.ValueString() != "develop" {
-		t.Fatalf("updated branch read back as %q", updated.Branch.ValueString())
+	if updated.DefaultRef.ValueString() != "main" {
+		t.Fatalf("updated default ref read back as %q", updated.DefaultRef.ValueString())
 	}
 }
 

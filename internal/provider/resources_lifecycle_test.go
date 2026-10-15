@@ -219,6 +219,7 @@ func TestPaperclipProjectResourceLifecycle(t *testing.T) {
 	schema := configureTestResource(t, server.URL, r)
 
 	model := PaperclipProjectResourceModel{
+		GoalIDs: types.SetNull(types.StringType), ExecutionWorkspacePolicy: types.ObjectNull(policyTypes(projectPolicyFields)),
 		CompanyID:   types.StringValue("comp-1"),
 		Name:        types.StringValue("Project Alpha"),
 		Description: types.StringValue("Alpha Project"),
@@ -256,7 +257,7 @@ func TestPaperclipProjectResourceLifecycle(t *testing.T) {
 
 	// 404 read
 	read404 := resource.ReadResponse{State: tfsdk.State{Schema: schema}}
-	m404 := PaperclipProjectResourceModel{ID: types.StringValue("proj-missing")}
+	m404 := PaperclipProjectResourceModel{ID: types.StringValue("proj-missing"), GoalIDs: types.SetNull(types.StringType), ExecutionWorkspacePolicy: types.ObjectNull(policyTypes(projectPolicyFields))}
 	_ = read404.State.Set(ctx, &m404)
 	r.Read(ctx, resource.ReadRequest{State: read404.State}, &read404)
 	if !read404.State.Raw.IsNull() {
@@ -758,11 +759,11 @@ func TestPaperclipWorkspaceAndStdioTemplateAndDataSources(t *testing.T) {
 	wsRes := NewPaperclipWorkspaceResource().(*PaperclipWorkspaceResource)
 	wsSchema := configureTestResource(t, server.URL, wsRes)
 	wsModel := PaperclipWorkspaceResourceModel{
-		ID:         types.StringValue("ws-1"),
-		ProjectID:  types.StringValue("proj-1"),
-		Name:       types.StringNull(),
-		RepoURL:    types.StringNull(),
-		Branch:     types.StringNull(),
+		ID:        types.StringValue("ws-1"),
+		ProjectID: types.StringValue("proj-1"),
+		Name:      types.StringNull(),
+		RepoURL:   types.StringNull(),
+		RepoRef:   types.StringNull(), DefaultRef: types.StringNull(),
 		IsPrimary:  types.BoolNull(),
 		SourceType: types.StringNull(),
 	}

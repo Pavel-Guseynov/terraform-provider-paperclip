@@ -2,12 +2,12 @@
 page_title: "paperclip_workspace Resource - terraform-provider-paperclip"
 subcategory: ""
 description: |-
-  Manages a Paperclip workspace for a project.
+  Manages all native project workspace source types. default_ref reads the effective native ref, including repo_ref inheritance; an independent null default_ref with non-null repo_ref is rejected. setup_command is stored but not executed by Paperclip; cleanup_command is executed. metadata excludes the runtimeConfig key owned by runtime_config.
 ---
 
 # paperclip_workspace (Resource)
 
-Manages a Paperclip workspace for a project.
+Manages all native project workspace source types. default_ref reads the effective native ref, including repo_ref inheritance; an independent null default_ref with non-null repo_ref is rejected. setup_command is stored but not executed by Paperclip; cleanup_command is executed. metadata excludes the runtimeConfig key owned by runtime_config.
 
 ## Example Usage
 
@@ -16,7 +16,8 @@ resource "paperclip_workspace" "main" {
   project_id  = paperclip_project.core.id
   name        = "primary"
   repo_url    = "https://git.example.com/acme/core-platform.git"
-  branch      = "develop"
+  repo_ref    = "develop"
+  default_ref = "main"
   is_primary  = true
   source_type = "git_repo"
 }
@@ -29,13 +30,23 @@ resource "paperclip_workspace" "main" {
 
 - `name` (String) Workspace identifier name.
 - `project_id` (String) The Paperclip project ID.
-- `repo_url` (String) Git repository URL for checkout.
 
 ### Optional
 
-- `branch` (String) Declared repository branch (e.g. develop or main), applied to Paperclip's repoRef and defaultRef; a live workspace whose refs are missing or disagree reads back empty and plans an update.
+- `cleanup_command` (String) Native cleanup command, executed when the runtime is cleaned up.
+- `cwd` (String) Local working directory; use a normalized absolute path.
+- `default_ref` (String) Effective native default ref. When repo_ref is set, configure an explicit default_ref (the same value represents native inheritance); clearing only default_ref is unsupported and rejected before mutation.
 - `is_primary` (Boolean) Whether this workspace is the project's primary workspace.
+- `metadata` (String) Native metadata JSON object, excluding runtimeConfig; null clears it.
+- `remote_provider` (String) Remote workspace provider.
+- `remote_workspace_ref` (String) Remote workspace reference.
+- `repo_ref` (String) Independent native repository ref; null clears it.
+- `repo_url` (String) Git repository URL for checkout.
+- `runtime_config` (String) Native runtime JSON object with workspaceRuntime, desiredState and serviceStates. Null clears it; null members and absent members compare equivalently.
+- `setup_command` (String) Persisted setup command. The current native API does not execute this command.
+- `shared_workspace_key` (String) Native shared workspace key.
 - `source_type` (String) Workspace source type (e.g. git_repo).
+- `visibility` (String) Native visibility: default or advanced.
 
 ### Read-Only
 

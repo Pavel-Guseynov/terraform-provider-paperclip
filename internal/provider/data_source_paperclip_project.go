@@ -140,11 +140,7 @@ func (d *PaperclipProjectDataSource) Read(ctx context.Context, req datasource.Re
 		config.CompanyID = types.StringValue(proj.CompanyID)
 	}
 	config.Name = types.StringValue(proj.Name)
-	if proj.Description != "" {
-		config.Description = types.StringValue(proj.Description)
-	} else {
-		config.Description = types.StringNull()
-	}
+	config.Description = projectStringValue(proj.Description)
 	if proj.LeadAgentID != "" {
 		config.LeadAgentID = types.StringValue(proj.LeadAgentID)
 	} else {

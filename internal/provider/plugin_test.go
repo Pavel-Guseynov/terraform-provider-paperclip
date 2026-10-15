@@ -953,6 +953,11 @@ func TestPluginConfigValidationHelpers(t *testing.T) {
 	}
 
 	// Secret reference verification error (server error)
+	d = ValidatePluginConfigJSONApply(ctx, secCli, "comp-1", `{"group":{"arr":[{"type":"secret_ref","secretId":"sec-1"}]}}`)
+	if d.HasError() {
+		t.Fatalf("nested env binding reference must be validated without resolving it: %v", d)
+	}
+
 	d = ValidatePluginConfigJSONApply(ctx, secCli, "comp-err", `{"s": {"type": "secret_ref", "secret_id": "sec-1"}}`)
 	if !d.HasError() {
 		t.Fatal("expected error when secret lookup fails with server error")

@@ -242,18 +242,18 @@ func (r *PaperclipAgentResource) UpgradeState(ctx context.Context) map[int64]res
 		0: {
 			PriorSchema: &schema.Schema{
 				Attributes: map[string]schema.Attribute{
-					"id": schema.StringAttribute{Computed: true},
-					"company_id": schema.StringAttribute{Required: true},
-					"name": schema.StringAttribute{Required: true},
-					"role": schema.StringAttribute{Optional: true, Computed: true},
-					"title": schema.StringAttribute{Optional: true},
-					"adapter_type": schema.StringAttribute{Optional: true, Computed: true},
-					"status": schema.StringAttribute{Computed: true},
-					"runtime_config": schema.StringAttribute{Optional: true},
-					"adapter_config": schema.StringAttribute{Optional: true, Computed: true},
-					"metadata": schema.StringAttribute{Optional: true},
-					"instructions": schema.StringAttribute{Optional: true},
-					"can_assign_tasks": schema.BoolAttribute{Required: true},
+					"id":                schema.StringAttribute{Computed: true},
+					"company_id":        schema.StringAttribute{Required: true},
+					"name":              schema.StringAttribute{Required: true},
+					"role":              schema.StringAttribute{Optional: true, Computed: true},
+					"title":             schema.StringAttribute{Optional: true},
+					"adapter_type":      schema.StringAttribute{Optional: true, Computed: true},
+					"status":            schema.StringAttribute{Computed: true},
+					"runtime_config":    schema.StringAttribute{Optional: true},
+					"adapter_config":    schema.StringAttribute{Optional: true, Computed: true},
+					"metadata":          schema.StringAttribute{Optional: true},
+					"instructions":      schema.StringAttribute{Optional: true},
+					"can_assign_tasks":  schema.BoolAttribute{Required: true},
 					"can_create_agents": schema.BoolAttribute{Required: true},
 				},
 			},
@@ -1067,52 +1067,12 @@ func refreshAgentEnvBindings(currentEnv map[string]EnvBindingModel, remoteAdapte
 		}
 		switch v := remoteVal.(type) {
 		case string:
-			currentBinding.Type = types.StringValue("plain")
-			currentBinding.Value = types.StringValue(v)
-			result[k] = currentBinding
+			result[k] = envBindingFromJSON(map[string]interface{}{"type": "plain", "value": v})
 		case map[string]interface{}:
 			bType, _ := v["type"].(string)
 			switch bType {
-			case "plain":
-				currentBinding.Type = types.StringValue("plain")
-				if valStr, ok := v["value"].(string); ok {
-					currentBinding.Value = types.StringValue(valStr)
-				}
-				result[k] = currentBinding
-			case "secret_ref":
-				currentBinding.Type = types.StringValue("secret_ref")
-				if secID, ok := v["secretId"].(string); ok {
-					currentBinding.SecretID = types.StringValue(secID)
-				}
-				if ver, ok := v["version"].(string); ok {
-					currentBinding.Version = types.StringValue(ver)
-				} else if currentBinding.Version.IsNull() || currentBinding.Version.IsUnknown() {
-					currentBinding.Version = types.StringNull()
-				}
-				if proj, ok := v["projectionClass"].(string); ok {
-					currentBinding.ProjectionClass = types.StringValue(proj)
-				}
-				if alk, ok := v["projectionAllowlistKey"].(string); ok {
-					currentBinding.ProjectionAllowlistKey = types.StringValue(alk)
-				}
-				result[k] = currentBinding
-			case "user_secret_ref":
-				currentBinding.Type = types.StringValue("user_secret_ref")
-				if keyVal, ok := v["key"].(string); ok {
-					currentBinding.Key = types.StringValue(keyVal)
-				}
-				if ver, ok := v["version"].(string); ok {
-					currentBinding.Version = types.StringValue(ver)
-				} else if currentBinding.Version.IsNull() || currentBinding.Version.IsUnknown() {
-					currentBinding.Version = types.StringNull()
-				}
-				if reqVal, ok := v["required"].(bool); ok {
-					currentBinding.Required = types.BoolValue(reqVal)
-				}
-				if amoVal, ok := v["allowMissingOverride"].(bool); ok {
-					currentBinding.AllowMissingOverride = types.BoolValue(amoVal)
-				}
-				result[k] = currentBinding
+			case "plain", "secret_ref", "user_secret_ref":
+				result[k] = envBindingFromJSON(v)
 			default:
 				result[k] = currentBinding
 			}

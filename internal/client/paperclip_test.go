@@ -519,7 +519,7 @@ func TestCreateBoardKey(t *testing.T) {
 		approval  string
 		identity  string
 	}{
-		"challenge failure":     {challenge: "error"},
+		"challenge failure":    {challenge: "error"},
 		"incomplete challenge": {challenge: `{}`},
 		"rejected approval": {
 			challenge: `{"id":"challenge-1","token":"secret","boardApiToken":"board"}`,
@@ -635,6 +635,11 @@ func TestPaperclipClientCRUD(t *testing.T) {
 		case r.URL.Path == "/api/projects/proj-123" && r.Method == http.MethodPatch:
 			var req map[string]interface{}
 			_ = json.NewDecoder(r.Body).Decode(&req)
+			if stamp, archive := req["archivedAt"]; archive && stamp != nil {
+				if len(req) != 1 || stamp != "2026-10-15T00:00:00Z" {
+					t.Errorf("archive changed other settings: %v", req)
+				}
+			}
 			if _, exists := req["leadAgentId"]; exists {
 				t.Error("project settings update must preserve the separately owned lead")
 			}
@@ -995,7 +1000,7 @@ func TestPaperclipClientCRUD(t *testing.T) {
 			"assignmentPolicy": map[string]interface{}{"mode": "protected"},
 		},
 	}
-	proj, err := cli.CreateProject(ctx, "comp-123", "harness", "desc", policy)
+	proj, err := cli.CreateProject(ctx, "comp-123", PaperclipProject{Name: "harness", Description: testStringPointer("desc"), ExecutionWorkspacePolicy: policy})
 	if err != nil || proj.ID != "proj-123" {
 		t.Fatalf("CreateProject failed: %v", err)
 	}
@@ -1009,7 +1014,7 @@ func TestPaperclipClientCRUD(t *testing.T) {
 	if err != nil || proj.Name != "harness" {
 		t.Fatalf("GetProject failed: %v", err)
 	}
-	proj, err = cli.UpdateProject(ctx, "proj-123", "harness2", "desc2", policy)
+	proj, err = cli.UpdateProject(ctx, "proj-123", PaperclipProject{Name: "harness2", Description: testStringPointer("desc2"), ExecutionWorkspacePolicy: policy})
 	if err != nil {
 		t.Fatalf("UpdateProject failed: %v", err)
 	}
@@ -1019,6 +1024,9 @@ func TestPaperclipClientCRUD(t *testing.T) {
 	projs, err := cli.ListProjects(ctx, "comp-123")
 	if err != nil || len(projs) != 1 {
 		t.Fatalf("ListProjects failed: %v", err)
+	}
+	if err := cli.ArchiveProject(ctx, "proj-123", "2026-10-15T00:00:00Z"); err != nil {
+		t.Fatalf("ArchiveProject failed: %v", err)
 	}
 	if err := cli.DeleteProject(ctx, "proj-123"); err != nil {
 		t.Fatalf("DeleteProject failed: %v", err)
@@ -1990,4 +1998,3 @@ func TestSecretProviderConfigAndUserSecretDefinitionCRUD(t *testing.T) {
 		t.Fatal("expected error on bad host ListUserSecretDefinitions")
 	}
 }
-

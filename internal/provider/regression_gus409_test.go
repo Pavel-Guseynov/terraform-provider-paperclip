@@ -504,7 +504,7 @@ func TestBackwardCompatibilityExistingStatePlansWithoutReplacementAcrossResource
 		},
 		{
 			typeName: "paperclip_project",
-			rawJSON:  `{"id":"proj-1","company_id":"comp-1","name":"Test Project","description":"Desc","execution_workspace_policy":null}`,
+			rawJSON:  `{"id":"proj-1","company_id":"comp-1","name":"Test Project","description":"Desc","execution_workspace_policy":null,"status":"backlog","archive_on_destroy":false}`,
 		},
 		{
 			typeName: "paperclip_project_lead",
@@ -512,7 +512,7 @@ func TestBackwardCompatibilityExistingStatePlansWithoutReplacementAcrossResource
 		},
 		{
 			typeName: "paperclip_workspace",
-			rawJSON:  `{"id":"ws-1","project_id":"proj-1","name":"Default","branch":"develop","is_primary":true,"repo_url":"https://git.example.com/acme/core-platform.git","source_type":"git_repo"}`,
+			rawJSON:  `{"id":"ws-1","project_id":"proj-1","name":"Default","repo_ref":"develop","default_ref":"develop","is_primary":true,"repo_url":"https://git.example.com/acme/core-platform.git","source_type":"git_repo","visibility":"default"}`,
 		},
 		{
 			typeName: "paperclip_local_environment",

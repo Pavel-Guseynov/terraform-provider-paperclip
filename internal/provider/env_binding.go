@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
@@ -16,6 +17,7 @@ import (
 )
 
 var secretKeyRegex = regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`)
+var envVariableKeyRegex = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 type EnvBindingModel struct {
 	Type                   types.String `tfsdk:"type"`
@@ -49,12 +51,14 @@ func EnvBindingAttributeType() map[string]schema.Attribute {
 			Optional:    true,
 		},
 		"version": schema.StringAttribute{
-			Description: "Optional version selector ('latest' or specific integer version string).",
+			Description: "Version selector for secret references: latest (native default) or a canonical positive integer string, sent as a native JSON integer.",
 			Optional:    true,
+			Computed:    true,
 		},
 		"projection_class": schema.StringAttribute{
-			Description: "Projection classification for secret_ref bindings ('unclassified' or 'class_3_static_lease').",
+			Description: "Projection classification for secret_ref bindings: unclassified (native default) or class_3_static_lease.",
 			Optional:    true,
+			Computed:    true,
 		},
 		"projection_allowlist_key": schema.StringAttribute{
 			Description: "Allowlist key required when projection_class is 'class_3_static_lease'.",
@@ -132,11 +136,11 @@ func ValidateEnvBindingPlan(p path.Path, binding EnvBindingModel, targetType, co
 		return diags
 	}
 
-	bType := strings.TrimSpace(binding.Type.ValueString())
+	bType := binding.Type.ValueString()
 	switch bType {
 	case "plain":
-		if binding.Value.IsNull() || (!binding.Value.IsUnknown() && binding.Value.ValueString() == "") {
-			diags.AddAttributeError(p.AtName("value"), "Missing Plain Binding Value", "Plain environment bindings require a non-empty value.")
+		if binding.Value.IsNull() {
+			diags.AddAttributeError(p.AtName("value"), "Missing Plain Binding Value", "Plain environment bindings require an explicit value; an empty string is supported by the native API.")
 		} else if !binding.Value.IsUnknown() && IsRedactedSentinel(binding.Value.ValueString()) {
 			diags.AddAttributeError(p.AtName("value"), "Invalid Plain Binding Value", "Invalid environment binding value: redacted sentinel \"[REDACTED]\" is prohibited during plan. Plain bindings must contain real configuration values, not redacted masking strings.")
 		}
@@ -190,6 +194,9 @@ func ValidateEnvBindingPlan(p path.Path, binding EnvBindingModel, targetType, co
 			diags.AddAttributeError(p.AtName("key"), "Missing User Secret Key", "user_secret_ref bindings require key.")
 		} else if !binding.Key.IsUnknown() {
 			k := strings.TrimSpace(binding.Key.ValueString())
+			if k != binding.Key.ValueString() {
+				diags.AddAttributeError(p.AtName("key"), "Invalid User Secret Key", "key must be trimmed: native normalization would change the configured value")
+			}
 			if len(k) > 120 || !secretKeyRegex.MatchString(k) {
 				diags.AddAttributeError(p.AtName("key"), "Invalid User Secret Key", fmt.Sprintf("Key %q must match ^[a-zA-Z0-9_.-]+$ and have length between 1 and 120.", k))
 			}
@@ -211,12 +218,25 @@ func ValidateEnvBindingPlan(p path.Path, binding EnvBindingModel, targetType, co
 		diags.AddAttributeError(p.AtName("type"), "Unsupported Environment Binding Type", fmt.Sprintf("Unsupported binding type %q; must be 'plain', 'secret_ref', or 'user_secret_ref'.", bType))
 	}
 
+	if !binding.Version.IsNull() && !binding.Version.IsUnknown() {
+		version := binding.Version.ValueString()
+		number, err := strconv.ParseInt(version, 10, 64)
+		if bType == "plain" || (version != "latest" && (err != nil || number <= 0 || number > 9007199254740991 || strconv.FormatInt(number, 10) != version)) {
+			diags.AddAttributeError(p.AtName("version"), "Invalid Environment Binding Version", "version is supported only for secret references and must be latest or a canonical positive integer string within the native safe integer range")
+		}
+	}
+	if bType != "user_secret_ref" && ((!binding.Required.IsNull() && !binding.Required.IsUnknown()) || (!binding.AllowMissingOverride.IsNull() && !binding.AllowMissingOverride.IsUnknown())) {
+		diags.AddAttributeError(p, "Invalid User Secret Binding Flags", "required and allow_missing_override are supported only for user_secret_ref bindings")
+	}
 	return diags
 }
 
 func ValidateEnvBindingsMapPlan(p path.Path, bindings map[string]EnvBindingModel, targetType string) diag.Diagnostics {
 	var diags diag.Diagnostics
 	for k, b := range bindings {
+		if !envVariableKeyRegex.MatchString(k) {
+			diags.AddAttributeError(p.AtMapKey(k), "Invalid Environment Variable Name", "environment variable names must match ^[A-Za-z_][A-Za-z0-9_]*$")
+		}
 		configPath := fmt.Sprintf("env.%s", k)
 		diags.Append(ValidateEnvBindingPlan(p.AtMapKey(k), b, targetType, configPath)...)
 	}
@@ -323,7 +343,7 @@ func EnvBindingsMapToAPI(bindings map[string]EnvBindingModel) map[string]interfa
 				"secretId": b.SecretID.ValueString(),
 			}
 			if !b.Version.IsNull() && !b.Version.IsUnknown() && b.Version.ValueString() != "" {
-				item["version"] = b.Version.ValueString()
+				item["version"] = envBindingVersionToAPI(b.Version.ValueString())
 			}
 			if !b.ProjectionClass.IsNull() && !b.ProjectionClass.IsUnknown() && b.ProjectionClass.ValueString() != "" {
 				item["projectionClass"] = b.ProjectionClass.ValueString()
@@ -338,7 +358,7 @@ func EnvBindingsMapToAPI(bindings map[string]EnvBindingModel) map[string]interfa
 				"key":  b.Key.ValueString(),
 			}
 			if !b.Version.IsNull() && !b.Version.IsUnknown() && b.Version.ValueString() != "" {
-				item["version"] = b.Version.ValueString()
+				item["version"] = envBindingVersionToAPI(b.Version.ValueString())
 			}
 			if !b.Required.IsNull() && !b.Required.IsUnknown() {
 				item["required"] = b.Required.ValueBool()
@@ -350,6 +370,14 @@ func EnvBindingsMapToAPI(bindings map[string]EnvBindingModel) map[string]interfa
 		}
 	}
 	return result
+}
+
+func envBindingVersionToAPI(version string) interface{} {
+	if version == "latest" {
+		return version
+	}
+	number, _ := strconv.ParseInt(version, 10, 64)
+	return number
 }
 
 // normalizeEnvBindingJSON is the shared wire-key authority for structured bindings.
@@ -378,12 +406,20 @@ func normalizeEnvBindingJSON(obj map[string]interface{}) map[string]interface{} 
 func envBindingFromJSON(obj map[string]interface{}) EnvBindingModel {
 	obj = normalizeEnvBindingJSON(obj)
 	stringField := func(key string) types.String {
+		if key == "version" {
+			switch version := obj[key].(type) {
+			case float64:
+				return types.StringValue(strconv.FormatFloat(version, 'f', -1, 64))
+			case int64:
+				return types.StringValue(strconv.FormatInt(version, 10))
+			}
+		}
 		if value, ok := obj[key].(string); ok {
 			return types.StringValue(value)
 		}
 		return types.StringNull()
 	}
-	return EnvBindingModel{
+	result := EnvBindingModel{
 		Type:                   stringField("type"),
 		Value:                  stringField("value"),
 		SecretID:               stringField("secretId"),
@@ -392,4 +428,11 @@ func envBindingFromJSON(obj map[string]interface{}) EnvBindingModel {
 		ProjectionClass:        stringField("projectionClass"),
 		ProjectionAllowlistKey: stringField("projectionAllowlistKey"),
 	}
+	if value, ok := obj["required"].(bool); ok {
+		result.Required = types.BoolValue(value)
+	}
+	if value, ok := obj["allowMissingOverride"].(bool); ok {
+		result.AllowMissingOverride = types.BoolValue(value)
+	}
+	return result
 }

@@ -2,12 +2,12 @@
 page_title: "paperclip_project Resource - terraform-provider-paperclip"
 subcategory: ""
 description: |-
-  Manages a Paperclip project under a company.
+  Manages native project configuration. The lead belongs to paperclip_project_lead. Environment bindings clear with an empty map. environment_id in execution_workspace_policy is stored but does not select run environments. Authorization trust keys are rejected because the native assignment evaluator cannot interpret them. archive_on_destroy selects archival instead of hard deletion.
 ---
 
 # paperclip_project (Resource)
 
-Manages a Paperclip project under a company.
+Manages native project configuration. The lead belongs to paperclip_project_lead. Environment bindings clear with an empty map. environment_id in execution_workspace_policy is stored but does not select run environments. Authorization trust keys are rejected because the native assignment evaluator cannot interpret them. archive_on_destroy selects archival instead of hard deletion.
 
 ## Example Usage
 
@@ -16,7 +16,20 @@ resource "paperclip_project" "core" {
   company_id                 = paperclip_company.acme.id
   name                       = "core-platform"
   description                = "Core platform engineering project"
-  execution_workspace_policy = jsonencode({ mode = "git_worktree" })
+  execution_workspace_policy {
+    enabled = true
+    default_mode = "isolated_workspace"
+    shared_workspace_concurrency = "serialize"
+    workspace_strategy {
+      type = "git_worktree"
+      base_ref = "develop"
+    }
+    authorization_policy {
+      assignment_policy {
+        mode = "protected"
+      }
+    }
+  }
 }
 ```
 
@@ -30,9 +43,99 @@ resource "paperclip_project" "core" {
 
 ### Optional
 
+- `archive_on_destroy` (Boolean) Archive on destroy instead of native hard deletion. Defaults to false, preserving existing resource retirement behavior.
+- `archived_at` (String) UTC RFC3339 archive timestamp at native millisecond precision. Configure after creating the project; null unarchives it.
+- `color` (String) Native project color; null clears it.
 - `description` (String) Optional project description.
-- `execution_workspace_policy` (String) Project-owned Paperclip execution workspace policy as a JSON object.
+- `env` (Map of Objects, see [below for nested schema](#nestedatt--env)) Native project environment bindings; null or {} clears all bindings via the API empty object.
+- `goal_ids` (Set of String) Associated native goal IDs in the same company; null or an empty set clears associations.
+- `icon` (String) Native project icon name; null clears it.
+- `status` (String) Native project status.
+- `target_date` (String) Native target date string; null clears it.
 
 ### Read-Only
 
 - `id` (String) Unique identifier for the project.
+
+<a id="nestedatt--env"></a>
+### Nested Schema for `env`
+
+### Required
+
+- `type` (String) Binding type: plain, secret_ref, or user_secret_ref.
+
+### Optional
+
+- `allow_missing_override` (Boolean) Whether to allow missing override for user_secret_ref bindings (default: false).
+- `key` (String) Target user secret definition key for user_secret_ref bindings.
+- `projection_allowlist_key` (String) Allowlist key required when projection_class is 'class_3_static_lease'.
+- `projection_class` (String) Projection classification for secret_ref bindings: unclassified (native default) or class_3_static_lease.
+- `required` (Boolean) Whether the secret is required for user_secret_ref bindings (default: true).
+- `secret_id` (String) Target Paperclip company secret ID for secret_ref bindings.
+- `value` (String, Sensitive) Plaintext value for plain bindings. Must not specify a redacted sentinel.
+- `version` (String) Version selector for secret references: latest (native default) or a canonical positive integer string, sent as a native JSON integer.
+
+### Block `execution_workspace_policy` (Optional, Single Nested Block)
+
+Typed native policy section. Omit this block to clear it; unknown arguments, including authorization trust keys, are rejected.
+
+### Optional
+
+- `allow_issue_override` (Boolean) Native allowIssueOverride setting.
+- `branch_policy` (String) Native branchPolicy setting. JSON object.
+- `cleanup_policy` (String) Native cleanupPolicy setting. JSON object.
+- `default_mode` (String) Native defaultMode setting. Allowed values: shared_workspace, isolated_workspace, operator_branch, adapter_default.
+- `default_project_workspace_id` (String) Native defaultProjectWorkspaceId setting.
+- `enabled` (Boolean) Native enabled setting. Required when this block is configured.
+- `environment_id` (String) Native environmentId setting.
+- `pull_request_policy` (String) Native pullRequestPolicy setting. JSON object.
+- `runtime_policy` (String) Native runtimePolicy setting. JSON object.
+- `shared_workspace_concurrency` (String) Native sharedWorkspaceConcurrency setting. Allowed values: auto, serialize, allow.
+- `workspace_runtime` (String) Native workspaceRuntime setting. JSON object.
+
+### Block `execution_workspace_policy.authorization_policy` (Optional, Single Nested Block)
+
+Typed native policy section. Omit this block to clear it; unknown arguments, including authorization trust keys, are rejected.
+
+### Optional
+
+- `managed_by` (String) Native managedBy setting. JSON object.
+
+### Block `execution_workspace_policy.authorization_policy.agent_visibility` (Optional, Single Nested Block)
+
+Typed native policy section. Omit this block to clear it; unknown arguments, including authorization trust keys, are rejected.
+
+### Optional
+
+- `mode` (String) Native mode setting. Allowed values: discoverable, private.
+
+### Block `execution_workspace_policy.authorization_policy.assignment_policy` (Optional, Single Nested Block)
+
+Typed native policy section. Omit this block to clear it; unknown arguments, including authorization trust keys, are rejected.
+
+### Optional
+
+- `mode` (String) Native mode setting. Allowed values: company_default, protected.
+
+### Block `execution_workspace_policy.authorization_policy.protected_agent` (Optional, Single Nested Block)
+
+Typed native policy section. Omit this block to clear it; unknown arguments, including authorization trust keys, are rejected.
+
+### Optional
+
+- `block_assignment` (Boolean) Native blockAssignment setting.
+- `block_reason` (String) Native blockReason setting.
+
+### Block `execution_workspace_policy.workspace_strategy` (Optional, Single Nested Block)
+
+Typed native policy section. Omit this block to clear it; unknown arguments, including authorization trust keys, are rejected.
+
+### Optional
+
+- `base_ref` (String) Native baseRef setting.
+- `branch_template` (String) Native branchTemplate setting.
+- `provision_command` (String) Native provisionCommand setting.
+- `runtime_provision_command` (String) Native runtimeProvisionCommand setting.
+- `teardown_command` (String) Native teardownCommand setting.
+- `type` (String) Native type setting. Allowed values: project_primary, git_worktree, adapter_managed, cloud_sandbox.
+- `worktree_parent_dir` (String) Native worktreeParentDir setting.

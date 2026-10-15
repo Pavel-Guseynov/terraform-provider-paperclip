@@ -6,8 +6,28 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 )
+
+func testStringPointer(value string) *string { return &value }
+
+func TestGetLocalEnvironmentRejectsNativeSSHWithoutMutation(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if req.Method != "GET" || req.URL.Path != "/api/environments/env" {
+			t.Errorf("unexpected environment request %s %s", req.Method, req.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(PaperclipEnvironment{ID: "env", Driver: "ssh"})
+	}))
+	defer server.Close()
+	c, err := NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.GetLocalEnvironment(context.Background(), "env"); err == nil || !strings.Contains(err.Error(), "requested local execution environment") {
+		t.Fatalf("non-local environment was managed as local: %v", err)
+	}
+}
 
 func TestLocalEnvironmentPathReconciliation(t *testing.T) {
 	ctx := context.Background()

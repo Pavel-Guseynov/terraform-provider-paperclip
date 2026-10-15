@@ -146,8 +146,8 @@ func TestEnvBindingUnit(t *testing.T) {
 		Type:  types.StringValue("plain"),
 		Value: types.StringValue(""),
 	}, "agent", "env.KEY")
-	if !diags.HasError() {
-		t.Fatal("plain with empty value should produce error")
+	if diags.HasError() {
+		t.Fatalf("native plain empty-string binding must round-trip: %v", diags)
 	}
 
 	diags = ValidateEnvBindingPlan(basePath, EnvBindingModel{
@@ -441,7 +441,7 @@ func TestEnvBindingUnit(t *testing.T) {
 	if pEntry, ok := apiMap["PLAIN"].(map[string]interface{}); !ok || pEntry["type"] != "plain" || pEntry["value"] != "val" {
 		t.Fatalf("invalid plain api projection: %#v", apiMap["PLAIN"])
 	}
-	if sEntry, ok := apiMap["SEC"].(map[string]interface{}); !ok || sEntry["secretId"] != "sec-1" || sEntry["version"] != "2" || sEntry["projectionClass"] != "class_3_static_lease" || sEntry["projectionAllowlistKey"] != "slack.bot_token" {
+	if sEntry, ok := apiMap["SEC"].(map[string]interface{}); !ok || sEntry["secretId"] != "sec-1" || sEntry["version"] != int64(2) || sEntry["projectionClass"] != "class_3_static_lease" || sEntry["projectionAllowlistKey"] != "slack.bot_token" {
 		t.Fatalf("invalid secret_ref api projection: %#v", apiMap["SEC"])
 	}
 	if uEntry, ok := apiMap["USD"].(map[string]interface{}); !ok || uEntry["key"] != "openai_key" || uEntry["version"] != "latest" || uEntry["required"] != true || uEntry["allowMissingOverride"] != false {

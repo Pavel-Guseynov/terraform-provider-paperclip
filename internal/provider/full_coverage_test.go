@@ -846,9 +846,10 @@ func TestFullCoverageProjectRemaining(t *testing.T) {
 	// Create with invalid workspace policy JSON (line 165)
 	planInvalid := tfsdk.Plan{Schema: schema}
 	_ = planInvalid.Set(ctx, &PaperclipProjectResourceModel{
+		GoalIDs:                  types.SetNull(types.StringType),
 		CompanyID:                types.StringValue("comp-1"),
 		Name:                     types.StringValue("proj"),
-		ExecutionWorkspacePolicy: types.StringValue("not valid json"),
+		ExecutionWorkspacePolicy: invalidProjectPolicyJSON(t),
 	})
 	var createResp resource.CreateResponse
 	createResp.State = tfsdk.State{Schema: schema}
@@ -860,6 +861,7 @@ func TestFullCoverageProjectRemaining(t *testing.T) {
 	// Update with invalid workspace policy JSON (line 229)
 	state := tfsdk.State{Schema: schema}
 	_ = state.Set(ctx, &PaperclipProjectResourceModel{
+		GoalIDs: types.SetNull(types.StringType), ExecutionWorkspacePolicy: types.ObjectNull(policyTypes(projectPolicyFields)),
 		ID:        types.StringValue("proj-1"),
 		CompanyID: types.StringValue("comp-1"),
 	})
