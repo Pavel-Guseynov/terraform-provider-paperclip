@@ -185,8 +185,11 @@ func TestFullCoverageClientRemaining(t *testing.T) {
 	if _, err := cli.GetSecret(ctx, "c1", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatal("expected ErrNotFound for empty secret ID in GetSecret")
 	}
-	if _, err := cli.GetToolApp(ctx, ""); !errors.Is(err, ErrNotFound) {
+	if _, err := cli.GetToolApp(ctx, "c1", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatal("expected ErrNotFound for empty app ID")
+	}
+	if _, err := cli.GetToolApp(ctx, "", "app-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatal("expected ErrNotFound for empty application company ID")
 	}
 	if _, err := cli.GetToolConnection(ctx, ""); !errors.Is(err, ErrNotFound) {
 		t.Fatal("expected ErrNotFound for empty conn ID")
@@ -230,14 +233,12 @@ func TestFullCoverageClientRemaining(t *testing.T) {
 				{ID: "conn-1", CompanyID: "comp-test", Name: "C1"},
 				{ID: "conn-2", CompanyID: "", Name: "C2"},
 			})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/tool-applications/app-with-type":
-			_ = json.NewEncoder(w).Encode(PaperclipToolApp{ID: "app-with-type", Type: "mcp_http", CompanyID: "comp-test"})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/tool-applications/app-no-type-no-list-match":
-			_ = json.NewEncoder(w).Encode(PaperclipToolApp{ID: "app-no-type-no-list-match", CompanyID: "comp-test"})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-test/tools/applications":
-			_ = json.NewEncoder(w).Encode([]PaperclipToolApp{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []PaperclipToolApp{
+				{ID: "app-with-type", Type: "mcp_http", CompanyID: "comp-test"},
+				{ID: "app-without-type", CompanyID: "comp-test"},
 				{ID: "other-app", Type: "mcp_stdio"},
-			})
+			}})
 		case r.Method == http.MethodGet && strings.Contains(r.URL.Path, "/environments"):
 			_ = json.NewEncoder(w).Encode([]PaperclipEnvironment{
 				{ID: "env-1", Driver: "local"},
@@ -332,13 +333,13 @@ func TestFullCoverageClientRemaining(t *testing.T) {
 	}
 
 	// Test GetToolApp branches
-	appWithType, err := cliMock.GetToolApp(ctx, "app-with-type")
+	appWithType, err := cliMock.GetToolApp(ctx, "comp-test", "app-with-type")
 	if err != nil || appWithType.Type != "mcp_http" {
 		t.Fatalf("expected app-with-type to have mcp_http, got: %v, %v", appWithType, err)
 	}
-	appNoMatch, err := cliMock.GetToolApp(ctx, "app-no-type-no-list-match")
+	appNoMatch, err := cliMock.GetToolApp(ctx, "comp-test", "app-without-type")
 	if err != nil || appNoMatch.Type != "" {
-		t.Fatalf("expected app with empty type when not in list, got: %v, %v", appNoMatch, err)
+		t.Fatalf("expected listed app with empty type, got: %v, %v", appNoMatch, err)
 	}
 }
 

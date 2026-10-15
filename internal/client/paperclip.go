@@ -2813,26 +2813,20 @@ func (c *Client) CreateToolApp(ctx context.Context, companyID string, app Paperc
 	return &resp, nil
 }
 
-func (c *Client) GetToolApp(ctx context.Context, appID string) (*PaperclipToolApp, error) {
-	if appID == "" {
+func (c *Client) GetToolApp(ctx context.Context, companyID, appID string) (*PaperclipToolApp, error) {
+	if companyID == "" || appID == "" {
 		return nil, ErrNotFound
 	}
-	var resp PaperclipToolApp
-	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/tool-applications/%s", url.PathEscape(appID)), nil, &resp); err != nil {
+	apps, err := c.ListToolApps(ctx, companyID)
+	if err != nil {
 		return nil, err
 	}
-	if resp.Type == "" && resp.CompanyID != "" {
-		apps, err := c.ListToolApps(ctx, resp.CompanyID)
-		if err == nil {
-			for _, a := range apps {
-				if a.ID == appID {
-					resp.Type = a.Type
-					break
-				}
-			}
+	for i := range apps {
+		if apps[i].ID == appID {
+			return &apps[i], nil
 		}
 	}
-	return &resp, nil
+	return nil, ErrNotFound
 }
 
 func (c *Client) UpdateToolApp(ctx context.Context, appID string, app PaperclipToolApp) (*PaperclipToolApp, error) {
@@ -2867,23 +2861,30 @@ func (c *Client) ArchiveToolApp(ctx context.Context, appID string) error {
 }
 
 func (c *Client) ListToolApps(ctx context.Context, companyID string) ([]PaperclipToolApp, error) {
-	var raw interface{}
-	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/companies/%s/tools/applications", url.PathEscape(companyID)), nil, &raw); err != nil {
+	var response struct {
+		Applications []PaperclipToolApp `json:"applications"`
+	}
+	if err := c.paperclipRequest(ctx, http.MethodGet, fmt.Sprintf("/api/companies/%s/tools/applications", url.PathEscape(companyID)), nil, &response); err != nil {
 		return nil, err
 	}
-	items := extractItems(raw, "applications")
-	var result []PaperclipToolApp
-	for _, item := range items {
-		var a PaperclipToolApp
-		bytesData, _ := json.Marshal(item)
-		if err := json.Unmarshal(bytesData, &a); err == nil {
-			if a.CompanyID == "" {
-				a.CompanyID = companyID
-			}
-			result = append(result, a)
-		}
+	if response.Applications == nil {
+		return nil, fmt.Errorf("Paperclip did not return an applications array for company %s", companyID)
 	}
-	return result, nil
+	seen := make(map[string]bool, len(response.Applications))
+	for i := range response.Applications {
+		app := &response.Applications[i]
+		if app.CompanyID == "" {
+			app.CompanyID = companyID
+		}
+		if app.ID == "" || app.CompanyID != companyID {
+			return nil, fmt.Errorf("invalid application identity in company %s list", companyID)
+		}
+		if seen[app.ID] {
+			return nil, fmt.Errorf("duplicate application %s in company %s list", app.ID, companyID)
+		}
+		seen[app.ID] = true
+	}
+	return response.Applications, nil
 }
 
 // Tool Connections

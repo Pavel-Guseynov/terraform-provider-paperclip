@@ -241,7 +241,7 @@ func TestAllClientMethodsFailures(t *testing.T) {
 	_ = cli.UpdateAgentInstructionsFile(ctx, "agent-1", "AGENTS.md", "content")
 	_, _ = cli.CreateAgentKey(ctx, "agent-1", "key-name", nil)
 	_, _ = cli.CreateToolApp(ctx, "comp-1", PaperclipToolApp{Name: "app"})
-	_, _ = cli.GetToolApp(ctx, "app-1")
+	_, _ = cli.GetToolApp(ctx, "comp-1", "app-1")
 	_, _ = cli.FindCompanyByName(ctx, "app-1")
 	_, _ = cli.UpdateToolApp(ctx, "app-1", PaperclipToolApp{Name: "app"})
 	_ = cli.ArchiveToolApp(ctx, "app-1")
@@ -325,9 +325,9 @@ func TestClientSpecificBranches(t *testing.T) {
 				{"id": "conn-1", "name": "Connection One", "status": "active"},
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/tools/applications":
-			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{
 				{"id": "app-1", "name": "App One", "status": "active"},
-			})
+			}})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/tools/stdio-templates":
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
 				{"id": "tmpl-1", "name": "Tmpl One", "command": "cmd"},
@@ -791,8 +791,6 @@ func TestClientRemainingCoverage(t *testing.T) {
 			http.NotFound(w, r)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies":
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{{"id": "c1"}})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/tool-applications/app-fallback":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "app-fallback", "companyId": "c1"})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/companies/c-err/tools/applications":
 			http.Error(w, "app create error", http.StatusInternalServerError) // line 1303
 		case r.Method == http.MethodPost && r.URL.Path == "/api/companies/c1/tools/applications":
@@ -802,7 +800,7 @@ func TestClientRemainingCoverage(t *testing.T) {
 		case r.Method == http.MethodPatch && r.URL.Path == "/api/tool-applications/app-no-type":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "app-no-type"}) // line 1363
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/c1/tools/applications":
-			_ = json.NewEncoder(w).Encode([]map[string]interface{}{{"id": "app-1"}, {"id": "app-fallback", "type": "mcp_http"}}) // line 1326, 1387
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{{"id": "app-1"}, {"id": "app-listed", "type": "mcp_http"}}})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/companies/c1/tools/connections":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "conn-1"}) // line 1405
 		case r.Method == http.MethodPost && r.URL.Path == "/api/companies/c1/tools/apps/connect":
@@ -919,10 +917,10 @@ func TestClientRemainingCoverage(t *testing.T) {
 		t.Fatalf("expected empty content, got %q, %v", content, err)
 	}
 
-	// GetToolApp backfills Type when direct response omits it
-	appFallback, err := cliMock.GetToolApp(ctx, "app-fallback")
-	if err != nil || appFallback.ID != "app-fallback" || appFallback.Type != "mcp_http" {
-		t.Fatalf("expected app-fallback with type mcp_http, got %v, %v", appFallback, err)
+	// A scoped list supplies the application type and company identity.
+	appListed, err := cliMock.GetToolApp(ctx, "c1", "app-listed")
+	if err != nil || appListed.ID != "app-listed" || appListed.Type != "mcp_http" || appListed.CompanyID != "c1" {
+		t.Fatalf("expected listed application with type and company, got %v, %v", appListed, err)
 	}
 
 	// CreateToolApp error (line 1303)

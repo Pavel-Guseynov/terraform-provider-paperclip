@@ -99,7 +99,7 @@ func (r *PaperclipAppResource) createAppState(ctx context.Context, plan Papercli
 }
 
 func (r *PaperclipAppResource) readAppState(ctx context.Context, state PaperclipAppResourceModel) (PaperclipAppResourceModel, error) {
-	app, err := r.client.GetToolApp(ctx, state.ID.ValueString())
+	app, err := r.client.GetToolApp(ctx, state.CompanyID.ValueString(), state.ID.ValueString())
 	if err != nil {
 		return state, err
 	}
@@ -148,7 +148,7 @@ func (r *PaperclipAppResource) Metadata(ctx context.Context, req resource.Metada
 
 func (r *PaperclipAppResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Paperclip-native MCP application registration. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.",
+		Description: "Manages a Paperclip-native MCP application registration. Refresh and import select the exact application ID from the declared company's application list. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Description: "Unique identifier for the application.",

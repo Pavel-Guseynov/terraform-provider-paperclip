@@ -1831,6 +1831,11 @@ func TestApplicationCRUDRefreshesRemoteKey(t *testing.T) {
 	returnAppKey := true
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if req.Method == http.MethodGet && req.URL.Path != "/api/companies/comp-123/tools/applications" {
+			t.Errorf("unexpected application read: %s", req.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		if req.Method == http.MethodPost || req.Method == http.MethodPatch {
 			var body client.PaperclipToolApp
 			if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
@@ -1848,7 +1853,11 @@ func TestApplicationCRUDRefreshesRemoteKey(t *testing.T) {
 		if returnAppKey {
 			resp["applicationKey"] = "harness.mcp.gitea-committer"
 		}
-		_ = json.NewEncoder(w).Encode(resp)
+		if req.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{resp}})
+		} else {
+			_ = json.NewEncoder(w).Encode(resp)
+		}
 	}))
 	defer server.Close()
 	cli, err := client.NewClient(server.URL, "test-token")
@@ -2015,14 +2024,14 @@ func TestPaperclipAppLifecycle(t *testing.T) {
 				"type":           createdPayload["type"],
 				"applicationKey": createdPayload["applicationKey"],
 			})
-		case r.URL.Path == "/api/tool-applications/app-456" && r.Method == http.MethodGet:
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		case r.URL.Path == "/api/companies/comp-1/tools/applications" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{{
 				"id":             "app-456",
 				"companyId":      "comp-1",
 				"name":           "harness.mcp.gitea-committer",
 				"type":           "mcp_http",
 				"applicationKey": "harness.mcp.gitea-committer",
-			})
+			}}})
 		case r.URL.Path == "/api/tool-applications/app-456" && r.Method == http.MethodPatch:
 			_ = json.NewDecoder(r.Body).Decode(&updatedPayload)
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -2273,14 +2282,12 @@ func TestPaperclipAppImportWithoutTypeFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/tool-applications/app-null":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		case "/api/companies/comp-1/tools/applications":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{{
 				"id":        "app-null",
 				"companyId": "comp-1",
 				"name":      "harness.mcp.untyped",
-			})
-		case "/api/companies":
-			_ = json.NewEncoder(w).Encode([]map[string]interface{}{})
+			}}})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -2811,18 +2818,11 @@ func TestPaperclipAppRetirementArchivesAndReadsArchivedAsAbsent(t *testing.T) {
 		case r.URL.Path == "/api/tool-applications/app-9" && r.Method == http.MethodDelete:
 			t.Errorf("hard application delete reached Paperclip")
 			w.WriteHeader(http.StatusConflict)
-		case r.URL.Path == "/api/tool-applications/app-9" && r.Method == http.MethodGet:
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "app-9", "companyId": "comp-1", "name": "phonemata", "type": "mcp_stdio",
-				"applicationKey": "harness.mcp.phonemata", "status": status,
-			})
-		case r.URL.Path == "/api/companies" && r.Method == http.MethodGet:
-			_ = json.NewEncoder(w).Encode([]map[string]interface{}{{"id": "comp-1", "name": "acme"}})
 		case r.URL.Path == "/api/companies/comp-1/tools/applications" && r.Method == http.MethodGet:
-			_ = json.NewEncoder(w).Encode([]map[string]interface{}{{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{{
 				"id": "app-9", "companyId": "comp-1", "name": "phonemata", "type": "mcp_stdio",
 				"applicationKey": "harness.mcp.phonemata", "status": status,
-			}})
+			}}})
 		default:
 			t.Errorf("unexpected application request: %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
