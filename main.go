@@ -30,12 +30,14 @@ func run(ctx context.Context, opts providerserver.ServeOpts) error {
 
 func main() {
 	var debug bool
+	var address string
 
 	flag.BoolVar(&debug, "debug", false, "set to true to run the provider with support for debuggers like delve")
+	flag.StringVar(&address, "address", "registry.opentofu.org/guseynov/paperclip", "provider registry address for debug reattach mode")
 	flag.Parse()
 
 	opts := providerserver.ServeOpts{
-		Address: "git.guseynov.org/guseynov/paperclip",
+		Address: address,
 		Debug:   debug,
 	}
 
