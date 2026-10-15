@@ -83,6 +83,13 @@ func stringOrNull(v string) types.String {
 	return types.StringValue(v)
 }
 
+func stringPointerOrNull(v *string) types.String {
+	if v == nil || *v == "" {
+		return types.StringNull()
+	}
+	return types.StringValue(*v)
+}
+
 // jsonStringOrNull resolves an API JSON object into a known attribute value:
 // absent objects become null so computed attributes never remain unknown
 // after apply.
@@ -473,6 +480,8 @@ func (p *PaperclipProvider) Resources(ctx context.Context) []func() resource.Res
 		NewPaperclipInstanceAdminResource,
 		NewPaperclipUserCompanyAccessResource,
 		NewPaperclipUserInstanceAccessResource,
+		NewPaperclipPluginResource,
+		NewPaperclipPluginConfigResource,
 	}
 }
 

@@ -3414,3 +3414,152 @@ func (c *Client) FindBudgetPolicyByID(ctx context.Context, policyID string) (*Pa
 	return nil, ErrNotFound
 }
 
+// ---------------------------------------------------------------------------
+// Plugins & Plugin Configuration
+// ---------------------------------------------------------------------------
+
+type PaperclipPluginInstallInput struct {
+	PackageName string `json:"packageName"`
+	Version     string `json:"version,omitempty"`
+	IsLocalPath bool   `json:"isLocalPath,omitempty"`
+}
+
+type PaperclipPlugin struct {
+	ID          string                 `json:"id"`
+	PluginKey   string                 `json:"pluginKey"`
+	PackageName string                 `json:"packageName"`
+	Version     string                 `json:"version"`
+	APIVersion  int64                  `json:"apiVersion"`
+	Status      string                 `json:"status"`
+	PackagePath *string                `json:"packagePath,omitempty"`
+	LastError   *string                `json:"lastError,omitempty"`
+	Manifest    map[string]interface{} `json:"manifestJson,omitempty"`
+}
+
+type PaperclipPluginConfig struct {
+	ID         string                 `json:"id"`
+	PluginID   string                 `json:"pluginId"`
+	CompanyID  string                 `json:"companyId"`
+	ConfigJSON map[string]interface{} `json:"configJson"`
+	LastError  *string                `json:"lastError,omitempty"`
+}
+
+type PaperclipPluginConfigInput struct {
+	CompanyID  string                 `json:"companyId"`
+	ConfigJSON map[string]interface{} `json:"configJson"`
+}
+
+type PluginConfigFieldError struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
+}
+
+type PluginConfigValidationError struct {
+	Error       string                   `json:"error"`
+	FieldErrors []PluginConfigFieldError `json:"fieldErrors"`
+}
+
+func ParsePluginConfigValidationError(err error) (*PluginConfigValidationError, bool) {
+	if err == nil {
+		return nil, false
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		return nil, false
+	}
+	var valErr PluginConfigValidationError
+	if jsonErr := json.Unmarshal([]byte(apiErr.Body), &valErr); jsonErr == nil && len(valErr.FieldErrors) > 0 {
+		return &valErr, true
+	}
+	return nil, false
+}
+
+func (c *Client) InstallPlugin(ctx context.Context, input PaperclipPluginInstallInput) (*PaperclipPlugin, error) {
+	var res PaperclipPlugin
+	if err := c.paperclipRequest(ctx, http.MethodPost, "/api/plugins/install", input, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) GetPlugin(ctx context.Context, pluginID string) (*PaperclipPlugin, error) {
+	var res PaperclipPlugin
+	path := fmt.Sprintf("/api/plugins/%s", url.PathEscape(pluginID))
+	if err := c.paperclipRequest(ctx, http.MethodGet, path, nil, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) EnablePlugin(ctx context.Context, pluginID string) (*PaperclipPlugin, error) {
+	var res PaperclipPlugin
+	path := fmt.Sprintf("/api/plugins/%s/enable", url.PathEscape(pluginID))
+	if err := c.paperclipRequest(ctx, http.MethodPost, path, map[string]interface{}{}, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) DisablePlugin(ctx context.Context, pluginID, reason string) (*PaperclipPlugin, error) {
+	var res PaperclipPlugin
+	path := fmt.Sprintf("/api/plugins/%s/disable", url.PathEscape(pluginID))
+	body := map[string]interface{}{}
+	if reason != "" {
+		body["reason"] = reason
+	}
+	if err := c.paperclipRequest(ctx, http.MethodPost, path, body, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) UpgradePlugin(ctx context.Context, pluginID, version string) (*PaperclipPlugin, error) {
+	var res PaperclipPlugin
+	path := fmt.Sprintf("/api/plugins/%s/upgrade", url.PathEscape(pluginID))
+	body := map[string]interface{}{}
+	if version != "" {
+		body["version"] = version
+	}
+	if err := c.paperclipRequest(ctx, http.MethodPost, path, body, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) UninstallPlugin(ctx context.Context, pluginID string, purge bool) (*PaperclipPlugin, error) {
+	var res PaperclipPlugin
+	path := fmt.Sprintf("/api/plugins/%s", url.PathEscape(pluginID))
+	if purge {
+		path += "?purge=true"
+	}
+	if err := c.paperclipRequest(ctx, http.MethodDelete, path, nil, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+
+func (c *Client) GetPluginConfig(ctx context.Context, pluginID, companyID string) (*PaperclipPluginConfig, error) {
+	var res *PaperclipPluginConfig
+	path := fmt.Sprintf("/api/plugins/%s/config?companyId=%s", url.PathEscape(pluginID), url.QueryEscape(companyID))
+	if err := c.paperclipRequest(ctx, http.MethodGet, path, nil, &res); err != nil {
+		return nil, err
+	}
+	if res == nil || res.ID == "" {
+		return nil, ErrNotFound
+	}
+	return res, nil
+}
+
+func (c *Client) UpsertPluginConfig(ctx context.Context, pluginID, companyID string, configJSON map[string]interface{}) (*PaperclipPluginConfig, error) {
+	var res PaperclipPluginConfig
+	path := fmt.Sprintf("/api/plugins/%s/config", url.PathEscape(pluginID))
+	body := PaperclipPluginConfigInput{
+		CompanyID:  companyID,
+		ConfigJSON: configJSON,
+	}
+	if err := c.paperclipRequest(ctx, http.MethodPost, path, body, &res); err != nil {
+		return nil, err
+	}
+	return &res, nil
+}
+

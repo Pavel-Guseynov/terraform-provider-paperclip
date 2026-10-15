@@ -466,6 +466,8 @@ func TestAllResourcesBadPlanStateAndConfigure(t *testing.T) {
 		NewPaperclipInstanceAdminResource(),
 		NewPaperclipUserCompanyAccessResource(),
 		NewPaperclipUserInstanceAccessResource(),
+		NewPaperclipPluginResource(),
+		NewPaperclipPluginConfigResource(),
 	}
 
 	for _, r := range resources {

@@ -300,6 +300,24 @@ resource "paperclip_agent_key" "agent_key" {
   company_ids       = [paperclip_company.acme.id]
 }
 `,
+	"paperclip_plugin": `resource "paperclip_plugin" "linear" {
+  package_name     = "@paperclipai/plugin-linear"
+  version          = "1.0.0"
+  enabled          = true
+  purge_on_destroy = false
+}
+`,
+	"paperclip_plugin_config": `resource "paperclip_plugin_config" "linear" {
+  company_id = paperclip_company.acme.id
+  plugin_id  = paperclip_plugin.linear.id
+  config = jsonencode({
+    apiKey = {
+      type     = "secret_ref"
+      secretId = paperclip_secret.api_token.id
+    }
+  })
+}
+`,
 }
 
 var dataSourceExamples = map[string]string{
