@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -50,7 +51,7 @@ var resourceExamples = map[string]string{
 	"paperclip_workspace": `resource "paperclip_workspace" "main" {
   project_id  = paperclip_project.core.id
   name        = "primary"
-  repo_url    = "https://git.guseynov.org/guseynov/paperclip.git"
+  repo_url    = "https://git.example.com/acme/core-platform.git"
   branch      = "develop"
   is_primary  = true
   source_type = "git_repo"
@@ -142,7 +143,7 @@ var resourceExamples = map[string]string{
 `,
 	"paperclip_stdio_template": `resource "paperclip_stdio_template" "gitea_stdio" {
   company_id  = paperclip_company.acme.id
-  template_id = "harness.mcp.gitea"
+  template_id = "acme.mcp.gitea"
   name        = "gitea"
   description = "Managed Gitea MCP stdio launcher"
   command     = "gitea-mcp"
@@ -668,5 +669,39 @@ func TestOpenTofuRegistryRepositoryLayoutAndDocs(t *testing.T) {
 		verifyOrWriteFile(t, filepath.Join(repoRoot, "examples", "ephemeral-resources", typeName, "ephemeral-resource.tf"), ex, generate)
 		docContent := renderComponentDoc("Ephemeral Resource", typeName, schemas.EphemeralResourceSchemas[typeName], ex)
 		verifyOrWriteFile(t, filepath.Join(repoRoot, "docs", "ephemeral-resources", shortName+".md"), docContent, generate)
+	}
+}
+
+func TestPublicProviderModuleIdentity(t *testing.T) {
+	module, err := os.ReadFile(filepath.Join("..", "..", "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.SplitN(string(module), "\n", 2)[0] != "module github.com/Pavel-Guseynov/terraform-provider-paperclip" {
+		t.Fatal("provider module must use its public standalone repository identity")
+	}
+}
+
+func TestPublicProviderDocumentationHasNoPrivateDeploymentDetails(t *testing.T) {
+	err := filepath.WalkDir(filepath.Join("..", ".."), func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || (filepath.Ext(path) != ".md" && filepath.Ext(path) != ".tf") {
+			return nil
+		}
+		content, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		for _, privateDetail := range []string{"guseynov.org", "Local Forge Mirror", "Harness", "harness.", "paperclip-fleet-health"} {
+			if strings.Contains(string(content), privateDetail) {
+				t.Errorf("%s contains private deployment detail %q", path, privateDetail)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

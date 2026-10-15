@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
+	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	dsschema "github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -1038,12 +1038,12 @@ func TestPaperclipAppResourceLifecycle(t *testing.T) {
 				"applicationKey": "app-key-1", "description": "App Desc", "status": "active",
 				"metadata": map[string]interface{}{"env": "prod"},
 			})
-		case req.Method == http.MethodGet && req.URL.Path == "/api/tool-applications/app-1":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/tools/applications":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{{
 				"id": "app-1", "companyId": "comp-1", "name": "App 1", "type": "mcp_http",
 				"applicationKey": "app-key-1", "description": "App Desc", "status": "active",
 				"metadata": map[string]interface{}{"env": "prod"},
-			})
+			}}})
 		case req.Method == http.MethodPatch && req.URL.Path == "/api/tool-applications/app-1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": "app-1", "companyId": "comp-1", "name": "App Updated", "type": "mcp_http",
@@ -1090,6 +1090,9 @@ func TestPaperclipAppResourceLifecycle(t *testing.T) {
 	if read.Diagnostics.HasError() {
 		t.Fatalf("app read failed: %v", read.Diagnostics)
 	}
+	if read.State.Raw.IsNull() {
+		t.Fatal("refresh removed an existing company-scoped application")
+	}
 
 	model.Name = types.StringValue("App Updated")
 	model.Description = types.StringValue("New Desc")
@@ -1107,16 +1110,18 @@ func TestPaperclipAppResourceLifecycle(t *testing.T) {
 	// ImportState
 	importResp := resource.ImportStateResponse{State: tfsdk.State{Schema: schema}}
 	_ = importResp.State.Set(ctx, &PaperclipAppResourceModel{})
-	r.ImportState(ctx, resource.ImportStateRequest{ID: "app-1"}, &importResp)
 	r.ImportState(ctx, resource.ImportStateRequest{ID: "comp-1/app-1"}, &importResp)
+	if importResp.Diagnostics.HasError() {
+		t.Fatal(importResp.Diagnostics)
+	}
 
-	// 404 read removes resource
+	// A valid company list without the exact ID removes the resource.
 	read404 := resource.ReadResponse{State: tfsdk.State{Schema: schema}}
 	m404 := PaperclipAppResourceModel{ID: types.StringValue("app-missing"), CompanyID: types.StringValue("comp-1")}
 	_ = read404.State.Set(ctx, &m404)
 	r.Read(ctx, resource.ReadRequest{State: read404.State}, &read404)
 	if !read404.State.Raw.IsNull() {
-		t.Fatal("expected state to be removed on 404")
+		t.Fatal("expected state to be removed after verified absence")
 	}
 
 	// Server failure error paths

@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/client"
-	"git.guseynov.org/guseynov/paperclip/terraform-provider-paperclip/internal/provider"
+	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
+	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/provider"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 )
 

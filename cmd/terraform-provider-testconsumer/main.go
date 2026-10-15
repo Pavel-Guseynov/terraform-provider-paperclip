@@ -27,7 +27,7 @@ func main() {
 	flag.Parse()
 
 	opts := providerserver.ServeOpts{
-		Address: "git.guseynov.org/guseynov/testconsumer",
+		Address: "registry.opentofu.org/example/testconsumer",
 		Debug:   debug,
 	}
 

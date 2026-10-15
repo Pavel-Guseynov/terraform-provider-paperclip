@@ -2,12 +2,12 @@
 page_title: "paperclip_app Resource - terraform-provider-paperclip"
 subcategory: ""
 description: |-
-  Manages a Paperclip-native MCP application registration. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.
+  Manages a Paperclip-native MCP application registration. Refresh and import select the exact application ID from the declared company's application list. Import using <company_id>/<app_id>. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.
 ---
 
 # paperclip_app (Resource)
 
-Manages a Paperclip-native MCP application registration. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.
+Manages a Paperclip-native MCP application registration. Refresh and import select the exact application ID from the declared company's application list. Import using <company_id>/<app_id>. Removing the resource archives the application, the retirement Paperclip accepts while connection rows keep referencing it; an archived application reads back as absent.
 
 ## Example Usage
 
@@ -26,7 +26,7 @@ resource "paperclip_app" "gitea" {
 ### Required
 
 - `company_id` (String) The Paperclip company ID.
-- `name` (String) Application name (e.g. harness.mcp.openobserve).
+- `name` (String) Application name (e.g. acme.mcp.openobserve).
 - `type` (String) Application type, one of: mcp_http, mcp_stdio. Changing this forces replacement, because the type defines which connection and template shapes hang off the application.
 
 ### Optional

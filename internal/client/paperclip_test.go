@@ -478,7 +478,7 @@ func TestCreateBoardKey(t *testing.T) {
 				}
 				var body map[string]interface{}
 				_ = json.NewDecoder(r.Body).Decode(&body)
-				if body["clientName"] != "Harness OpenTofu" || body["requestedAccess"] != "board" {
+				if body["command"] != "terraform-provider-paperclip" || body["clientName"] != "OpenTofu client" || body["requestedAccess"] != "board" {
 					t.Fatalf("unexpected challenge body: %#v", body)
 				}
 				_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -505,11 +505,11 @@ func TestCreateBoardKey(t *testing.T) {
 		defer server.Close()
 
 		cli, _ := NewClient(server.URL, "")
-		key, err := cli.CreateBoardKey(context.Background(), "Harness OpenTofu", nil, "")
+		key, err := cli.CreateBoardKey(context.Background(), "OpenTofu client", nil, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if key.ID != "key-1" || key.Name != "Harness OpenTofu" || key.Token != "pcp_board_secret" {
+		if key.ID != "key-1" || key.Name != "OpenTofu client" || key.Token != "pcp_board_secret" {
 			t.Fatalf("unexpected board key: %#v", key)
 		}
 	})
@@ -550,7 +550,7 @@ func TestCreateBoardKey(t *testing.T) {
 			}))
 			defer server.Close()
 			cli, _ := NewClient(server.URL, "")
-			if _, err := cli.CreateBoardKey(context.Background(), "Harness OpenTofu", nil, ""); err == nil {
+			if _, err := cli.CreateBoardKey(context.Background(), "OpenTofu client", nil, ""); err == nil {
 				t.Fatal("expected board key creation failure")
 			}
 		})
@@ -809,21 +809,14 @@ func TestPaperclipClientCRUD(t *testing.T) {
 				"name":      req["name"],
 				"type":      req["type"],
 			})
-		case r.URL.Path == "/api/tool-applications/app-123" && r.Method == http.MethodGet:
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":        "app-123",
-				"companyId": "comp-123",
-				"name":      "harness.mcp.openobserve",
-				"type":      "mcp_http",
-			})
 		case r.URL.Path == "/api/tool-applications/app-123" && r.Method == http.MethodPatch:
 			var req map[string]interface{}
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			_ = json.NewEncoder(w).Encode(req)
 		case r.URL.Path == "/api/companies/comp-123/tools/applications" && r.Method == http.MethodGet:
-			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{
 				{"id": "app-123", "companyId": "comp-123", "name": "harness.mcp.openobserve", "type": "mcp_http"},
-			})
+			}})
 		case r.URL.Path == "/api/companies/comp-123/tools/connections" && r.Method == http.MethodPost:
 			var req map[string]interface{}
 			_ = json.NewDecoder(r.Body).Decode(&req)
@@ -1169,7 +1162,7 @@ func TestPaperclipClientCRUD(t *testing.T) {
 	if err != nil || app.ID != "app-123" || app.Type != "mcp_http" {
 		t.Fatalf("CreateToolApp failed: %v", err)
 	}
-	app, err = cli.GetToolApp(ctx, "app-123")
+	app, err = cli.GetToolApp(ctx, "comp-123", "app-123")
 	if err != nil || app.Name != "harness.mcp.openobserve" || app.Type != "mcp_http" {
 		t.Fatalf("GetToolApp failed: %v", err)
 	}
@@ -1471,31 +1464,16 @@ func TestToolAppValidation(t *testing.T) {
 	}
 }
 
-func TestGetToolAppBackfillsType(t *testing.T) {
+func TestGetToolAppReturnsTheListedType(t *testing.T) {
 	ctx := context.Background()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
-		case "/api/tool-applications/app-7":
-			// The direct GET route omits the type field.
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":        "app-7",
-				"companyId": "comp-1",
-				"name":      "harness.mcp.gitea-committer",
-			})
-		case "/api/tool-applications/app-8":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":   "app-8",
-				"name": "harness.mcp.unlisted",
-			})
-		case "/api/companies":
-			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
-				{"id": "comp-1", "name": "guseynov"},
-			})
 		case "/api/companies/comp-1/tools/applications":
-			_ = json.NewEncoder(w).Encode([]map[string]interface{}{
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []map[string]interface{}{
 				{"id": "app-7", "companyId": "comp-1", "name": "harness.mcp.gitea-committer", "type": "mcp_http"},
-			})
+				{"id": "app-8", "companyId": "comp-1", "name": "untyped"},
+			}})
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
@@ -1507,18 +1485,18 @@ func TestGetToolAppBackfillsType(t *testing.T) {
 		t.Fatalf("failed to create client: %v", err)
 	}
 
-	app, err := cli.GetToolApp(ctx, "app-7")
+	app, err := cli.GetToolApp(ctx, "comp-1", "app-7")
 	if err != nil {
 		t.Fatalf("GetToolApp failed: %v", err)
 	}
 	if app.Type != "mcp_http" {
-		t.Fatalf("expected type mcp_http backfilled from the company list, got %q", app.Type)
+		t.Fatalf("expected type mcp_http from the company list, got %q", app.Type)
 	}
 
-	// An app absent from every company list keeps an empty type rather than failing
-	app, err = cli.GetToolApp(ctx, "app-8")
+	// Missing remote type remains observable to the resource's state validation.
+	app, err = cli.GetToolApp(ctx, "comp-1", "app-8")
 	if err != nil || app.ID != "app-8" || app.Type != "" {
-		t.Fatalf("expected unlisted app to resolve with empty type, got %+v, %v", app, err)
+		t.Fatalf("expected listed app with missing type, got %+v, %v", app, err)
 	}
 }
 
