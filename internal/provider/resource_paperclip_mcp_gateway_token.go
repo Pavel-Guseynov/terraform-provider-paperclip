@@ -20,6 +20,7 @@ import (
 type PaperclipMCPGatewayTokenResource struct{ client *client.Client }
 type gatewayTokenModel struct {
 	ID             types.String `tfsdk:"id"`
+	OwnerID        types.String `tfsdk:"owner_id"`
 	CompanyID      types.String `tfsdk:"company_id"`
 	GatewayID      types.String `tfsdk:"gateway_id"`
 	Name           types.String `tfsdk:"name"`
@@ -41,6 +42,7 @@ func (r *PaperclipMCPGatewayTokenResource) Schema(_ context.Context, _ resource.
 		a[k] = schema.StringAttribute{Required: true}
 	}
 	a["id"] = schema.StringAttribute{Computed: true, PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}}
+	a["owner_id"] = schema.StringAttribute{Computed: true, Description: "Single lifecycle owner within this configured provider process; independent states must coordinate externally.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}}
 	a["generation"] = schema.Int64Attribute{Required: true, Description: "Positive generation. Increase to mint and deliver a replacement before revoking the predecessor. All token attribute changes require a new generation."}
 	a["allowed_actions"] = schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString(`["tools/list","tools/call"]`), Description: "JSON array of native MCP token actions.", PlanModifiers: []planmodifier.String{SemanticJSONPlanModifier()}}
 	resp.Schema = schema.Schema{Description: "Non-secret gateway_client token lifecycle record. Requires ephemeral.paperclip_mcp_gateway_token and depends_on the external write-only consumer. Never stores a token value. Not importable: generation and delivery cannot be inferred from the native API.", Attributes: a}
@@ -150,6 +152,9 @@ func (r *PaperclipMCPGatewayTokenResource) delivered(ctx context.Context, m *gat
 	if err := validateGatewayToken(ctx, r.client, *m); err != nil {
 		return err
 	}
+	if err := claimAggregate(r.client, "mcp_gateway_token", m.CompanyID.ValueString()+"/"+m.GatewayID.ValueString()+"/"+m.Name.ValueString(), &m.OwnerID); err != nil {
+		return err
+	}
 	id, token, _ := r.client.GatewayTokenGeneration(m.CompanyID.ValueString(), m.GatewayID.ValueString(), m.Name.ValueString(), m.Generation.ValueInt64())
 	if id == "" || token == "" || id == oldID {
 		return fmt.Errorf("missing ephemeral gateway token mint for this generation; deliver ephemeral.paperclip_mcp_gateway_token.token to a write-only consumer and depend on that consumer before recording delivery")
@@ -186,6 +191,7 @@ func (r *PaperclipMCPGatewayTokenResource) Update(ctx context.Context, req resou
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	m.OwnerID = prior.OwnerID
 	if err := gatewayTokenTransition(m, prior); err != nil {
 		resp.Diagnostics.AddError("Unsupported gateway token transition", err.Error())
 		return
@@ -234,6 +240,10 @@ func (r *PaperclipMCPGatewayTokenResource) Read(ctx context.Context, req resourc
 		priorExpiry, _ := time.Parse(time.RFC3339, m.ExpiresAt.ValueString())
 		if !remoteExpiry.Equal(priorExpiry) {
 			m.ExpiresAt = types.StringValue(remoteExpiry.Format(time.RFC3339Nano))
+		}
+		if err := claimAggregate(r.client, "mcp_gateway_token", m.CompanyID.ValueString()+"/"+m.GatewayID.ValueString()+"/"+m.Name.ValueString(), &m.OwnerID); err != nil {
+			resp.Diagnostics.AddError("Gateway token ownership conflict", err.Error())
+			return
 		}
 		m.AllowedActions = refreshSemanticJSON(m.AllowedActions, token.AllowedActions)
 		r.client.RecordGatewayTokenDelivery(m.CompanyID.ValueString(), m.GatewayID.ValueString(), m.Name.ValueString(), m.Generation.ValueInt64(), token.ID)

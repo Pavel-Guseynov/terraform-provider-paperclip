@@ -39,7 +39,8 @@ var resourceExamples = map[string]string{
 `,
 	"paperclip_mcp_gateway_token": `# Use the same attributes for the ephemeral producer and durable record.
 # Deliver the ephemeral token to an external write-only consumer. Bind that
-# consumer's rotation trigger to this generation, and add depends_on referencing
+# consumer's rotation trigger to company/gateway/name identity and generation,
+# and add depends_on referencing
 # that consumer to the durable record before applying.
 resource "paperclip_mcp_gateway_token" "automation" {
   company_id = paperclip_company.acme.id
@@ -434,7 +435,8 @@ var ephemeralExamples = map[string]string{
   applying = tofu.applying
 }
 # Pass .token only to an external write-only consumer. Couple its rotation
-# trigger to generation and order the matching durable token record after it.
+# trigger to company/gateway/name identity and generation, and order the matching
+# durable token record after it.
 `,
 	"paperclip_board_key": `ephemeral "paperclip_board_key" "board_token" {
   name       = "automation-board-key"

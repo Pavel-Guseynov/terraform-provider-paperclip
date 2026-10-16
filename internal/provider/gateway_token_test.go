@@ -237,3 +237,34 @@ func TestGatewayTokenRecordRejectsMismatchedProducerConfiguration(t *testing.T) 
 		t.Fatal("mismatched producer left live unrecorded token")
 	}
 }
+
+func TestGatewayTokenRejectsDuplicateLifecycleOwners(t *testing.T) {
+	f := newGatewayFixture(t)
+	_, _, _, _ = createGateway(t, f)
+	ctx := context.Background()
+	c, _ := client.NewClient(f.server.URL, "")
+	e := &PaperclipMCPGatewayTokenEphemeralResource{client: c}
+	r := &PaperclipMCPGatewayTokenResource{client: c}
+	var s resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &s)
+	m := gatewayTokenTestModel()
+	_, open := openGatewayToken(t, e, gatewayEphemeralModel(m), false, true)
+	requireToolDiagnostics(t, open.Diagnostics)
+	first := resource.CreateResponse{State: tfsdk.State{Schema: s.Schema}}
+	r.Create(ctx, resource.CreateRequest{Plan: toolPlan(t, s.Schema, &m)}, &first)
+	requireToolDiagnostics(t, first.Diagnostics)
+	second := resource.CreateResponse{State: tfsdk.State{Schema: s.Schema}}
+	r.Create(ctx, resource.CreateRequest{Plan: toolPlan(t, s.Schema, &m)}, &second)
+	if !second.Diagnostics.HasError() {
+		t.Fatal("two lifecycle records claimed the same native gateway token")
+	}
+	var conflicting gatewayTokenModel
+	requireToolDiagnostics(t, first.State.Get(ctx, &conflicting))
+	conflicting.OwnerID = types.StringValue("another-owner")
+	conflictState := toolState(t, s.Schema, &conflicting)
+	read := resource.ReadResponse{State: conflictState}
+	r.Read(ctx, resource.ReadRequest{State: conflictState}, &read)
+	if !read.Diagnostics.HasError() || !read.State.Raw.Equal(conflictState.Raw) {
+		t.Fatal("refresh silently claimed a conflicting lifecycle owner")
+	}
+}

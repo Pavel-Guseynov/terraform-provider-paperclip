@@ -37,7 +37,7 @@ ephemeral "paperclip_mcp_gateway_token" "client" {
 resource "testconsumer_secret" "client" {
   name = "gateway-credential"
   value_wo = ephemeral.paperclip_mcp_gateway_token.client.token
-  rotation = tostring(var.generation)
+  rotation = jsonencode({ company_id = "comp-1", gateway_id = paperclip_mcp_gateway.client.id, name = "automation", generation = var.generation })
   endpoint = "${var.endpoint}/api/test/gateway-delivery"
   fail_on_write = var.fail_delivery
 }

@@ -112,7 +112,8 @@ archives and has no exact read route. Archive does not set `archivedAt`, revoke
 tokens or remove bindings. Profile changes insert a new native gateway binding
 and retain the old binding. Coordinate binding ownership explicitly; never
 declare a second owner for a gateway-created binding. One configured provider
-process rejects duplicate gateway owners; independent states must coordinate.
+process rejects duplicate gateway and token lifecycle owners; independent
+states must coordinate.
 
 `ephemeral.paperclip_mcp_gateway_token` produces only `gateway_client` tokens.
 Required inputs are `company_id`, `gateway_id`, `name`, `client_label`, positive
@@ -121,14 +122,15 @@ Required inputs are `company_id`, `gateway_id`, `name`, `client_label`, positive
 resources/list, resources/read, prompts/list and prompts/get. The durable
 `paperclip_mcp_gateway_token` record has the same inputs except `applying` and
 defaults `allowed_actions` to tools/list and tools/call. It stores only the token
-ID and non-secret configuration; import is unsupported because the native API
+ID, ownership ID and non-secret configuration; import is unsupported because the native API
 cannot establish generation or delivery. Name, company and gateway form its
 immutable identity; retire it explicitly to change them. Attribute changes
 require an increased generation.
 
 Use one shared set of non-secret inputs for both declarations. Pass the
 ephemeral `.token` only into an external consumer's write-only value, bind its
-write trigger to generation, and set the durable record's `depends_on` to that
+write trigger to the producing `company_id`/`gateway_id`/`name` identity and
+generation, and set the durable record's `depends_on` to that
 consumer. This dependency is the caller's delivery acknowledgement contract;
 the provider cannot inspect an external consumer's write. The external consumer
 owns secret distribution and any native owner approval; this provider never
@@ -147,6 +149,12 @@ cannot be refreshed, and the provider retains the record with a diagnostic
 rather than claiming absence. Native authorization or inventory errors retain
 state. The parent pure-Nix unit and real OpenTofu gates prove these contracts
 against test-owned fixtures, including failed delivery and reference validation.
+
+For the external consumer's non-secret write trigger, use
+`jsonencode({ company_id = local.company_id, gateway_id = paperclip_mcp_gateway.automation.id, name = local.token_name, generation = local.generation })`.
+Use the same locals in both token declarations and retain the consumer's native
+approval. This binds delivery to a new producer identity even if its initial
+generation equals the retired producer's generation.
 
 `paperclip_tool_profile` is the sole aggregate writer of one profile's complete
 `entries` JSON array (maximum 250). Entries use native camelCase fields:

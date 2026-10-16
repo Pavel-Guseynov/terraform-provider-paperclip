@@ -1,6 +1,7 @@
 # Use the same attributes for the ephemeral producer and durable record.
 # Deliver the ephemeral token to an external write-only consumer. Bind that
-# consumer's rotation trigger to this generation, and add depends_on referencing
+# consumer's rotation trigger to company/gateway/name identity and generation,
+# and add depends_on referencing
 # that consumer to the durable record before applying.
 resource "paperclip_mcp_gateway_token" "automation" {
   company_id = paperclip_company.acme.id
