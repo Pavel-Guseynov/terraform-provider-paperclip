@@ -49,11 +49,12 @@ type supersededKeyRecord struct {
 }
 
 type mintedKeyRecord struct {
-	keyID   string
-	token   string
-	name    string
-	isBoard bool
-	agentID string
+	keyID     string
+	token     string
+	name      string
+	isBoard   bool
+	agentID   string
+	routineID string
 }
 
 type Client struct {

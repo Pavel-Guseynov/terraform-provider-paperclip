@@ -1374,6 +1374,11 @@ func (c *Client) CleanupUnconfirmedKeys(ctx context.Context) error {
 		var err error
 		if rec.isBoard {
 			err = c.RevokeBoardKey(ctx, rec.keyID)
+		} else if rec.routineID != "" {
+			err = c.DeleteRoutineTrigger(ctx, rec.keyID)
+			if errors.Is(err, ErrNotFound) {
+				err = nil
+			}
 		} else if rec.agentID != "" {
 			err = c.RevokeAgentKey(ctx, rec.agentID, rec.keyID)
 		}
@@ -1412,12 +1417,25 @@ func (c *Client) ClearMintedToken(keyID string) {
 	delete(c.supersededKeys, keyID)
 	delete(c.agentKeyAgents, keyID)
 	if rec, ok := c.mintedKeys[keyID]; ok {
-		lk := lookupKey(rec.name, rec.isBoard, rec.agentID)
+		if rec.routineID != "" && c.acknowledgedDeliveries[keyID] {
+			rec.token = ""
+			c.mintedKeys[keyID] = rec
+			return
+		}
+		owner := rec.agentID
+		if rec.routineID != "" {
+			owner = routineWebhookOwner(rec.routineID)
+		}
+		lk := lookupKey(rec.name, rec.isBoard, owner)
 		delete(c.mintedKeys, keyID)
 		if c.mintedKeysByName[lk] == keyID {
 			delete(c.mintedKeysByName, lk)
 			for otherID, otherRec := range c.mintedKeys {
-				if lookupKey(otherRec.name, otherRec.isBoard, otherRec.agentID) == lk {
+				otherOwner := otherRec.agentID
+				if otherRec.routineID != "" {
+					otherOwner = routineWebhookOwner(otherRec.routineID)
+				}
+				if lookupKey(otherRec.name, otherRec.isBoard, otherOwner) == lk {
 					c.mintedKeysByName[lk] = otherID
 					break
 				}

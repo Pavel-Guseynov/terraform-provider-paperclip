@@ -424,6 +424,7 @@ func (p *PaperclipProvider) EphemeralResources(ctx context.Context) []func() eph
 	return []func() ephemeral.EphemeralResource{
 		NewPaperclipBoardKeyEphemeralResource,
 		NewPaperclipAgentKeyEphemeralResource,
+		NewPaperclipRoutineWebhookSecretEphemeralResource,
 	}
 }
 
@@ -452,6 +453,8 @@ func (p *PaperclipProvider) Resources(ctx context.Context) []func() resource.Res
 		NewPaperclipSkillAssignmentResource,
 		NewPaperclipSkillPolicyResource,
 		NewPaperclipGoalResource,
+		NewPaperclipRoutineResource,
+		NewPaperclipRoutineTriggerResource,
 		NewPaperclipBudgetPolicyResource,
 		NewPaperclipBoardKeyResource,
 		NewPaperclipAgentKeyResource,

@@ -60,6 +60,60 @@ provider_installation {
 
 ## Integration contract
 
+### Routines and triggers
+
+`paperclip_routine` manages title, nullable description, project_id, goal_id,
+parent_issue_id and assignee_agent_id; priority (medium), status (active),
+concurrency_policy (coalesce_if_active), catch_up_policy (skip_missed),
+activity_gate_policy (always), activity_gate_scope (company), variables JSON,
+and the shared typed env bindings. Active routines require an assignee.
+Omission clears nullable fields, variables and env. Variable names and order
+must exactly match title/description placeholders, excluding date and timestamp.
+Native defaults within variable JSON are label/defaultValue null, type text,
+required true and options []; include them when importing for a zero-change plan.
+Native validation owns variable value semantics, cron syntax and responsible-user
+requirements. Read-only reference validation runs during plan and again before
+mutation. Environment secret values are never resolved.
+
+Import routines by native ID. Destroy archives via PATCH with baseRevisionId;
+updates use that same revision guard. A concurrent edit yields an error and
+is never overwritten by retrying against a newer revision. Trigger changes
+also advance the routine revision. Delete triggers in an earlier apply before
+refreshing/planning routine retirement; a stale plan requires refresh.
+
+`paperclip_routine_trigger` creates schedule, API and initially delivered webhook triggers. Import existing
+webhooks as routine_id/trigger_id to manage metadata and hard-delete through
+the native DELETE operation. Label is nullable, enabled defaults true; schedules
+require explicit cron_expression and timezone. Imported webhooks accept nullable
+signing_mode (bearer, hmac_sha256, github_hmac, none) and replay_window_sec
+(30–86400). Kind and routine ownership cannot be changed in place. Reads use
+the owning routine detail, which is the native trigger inventory authority.
+
+`ephemeral.paperclip_routine_webhook_secret` creates native pending setup for
+generation 1 only during apply. Configure routine_id, name, generation = 1,
+applying = tofu.applying, signing_mode and replay_window_sec. Bind the Lock
+write-only consumer to the returned trigger_id and generation. The managed
+webhook must use that name as webhook_delivery_name, webhook_generation = 1,
+matching signing settings and depends_on the successful consumer. Its creation
+then clears setupPending and acknowledges delivery. Failed delivery or private
+state writes cause native trigger deletion; graceful exit uses the same
+credential cleanup registry as keys. An unchanged generation returns its
+existing ID and null secret, without rewriting the consumer. An import without
+webhook_delivery_name manages metadata only. A hard crash or lost state after
+native creation can leave pending setup requiring manual native cleanup;
+native trigger deletion performs best-effort vault cleanup.
+
+Rotation is unsupported and returns a diagnostic before mutation: the native
+API immediately replaces the active value and cannot retain the predecessor
+until acknowledgement or restore it after failed delivery. Keep generation 1;
+the provider never replaces a delivered trigger identity to emulate recovery.
+Secrets remain absent from plans, state and diagnostics. Unit tests and the
+parent real OpenTofu gate prove initial delivery, failure cleanup, unchanged
+generation, rejected rotation and supported metadata lifecycles. No server
+changes or host activation are part of this integration.
+
+### Tool profiles
+
 `paperclip_tool_profile` is the sole aggregate writer of one profile's complete
 `entries` JSON array (maximum 250). Entries use native camelCase fields:
 `selectorType` (`application`, `connection`, `catalog_entry`, `tool_name` or

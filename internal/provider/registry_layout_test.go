@@ -27,6 +27,22 @@ type registryManifest struct {
 }
 
 var resourceExamples = map[string]string{
+	"paperclip_routine": `resource "paperclip_routine" "daily" {
+  company_id        = paperclip_company.acme.id
+  title             = "Daily status {{date}}"
+  description       = "Prepare the daily report"
+  assignee_agent_id = paperclip_agent.engineer.id
+  status            = "active"
+  env = { REPORT_FORMAT = { type = "plain", value = "markdown" } }
+}
+`,
+	"paperclip_routine_trigger": `resource "paperclip_routine_trigger" "daily" {
+  routine_id      = paperclip_routine.daily.id
+  kind            = "schedule"
+  cron_expression = "0 9 * * *"
+  timezone        = "UTC"
+}
+`,
 	"paperclip_company": `resource "paperclip_company" "acme" {
   name                                  = "Acme"
   description                           = "Autonomous engineering organization"
@@ -400,6 +416,18 @@ var dataSourceExamples = map[string]string{
 }
 
 var ephemeralExamples = map[string]string{
+	"paperclip_routine_webhook_secret": `# Deliver secret to a write-only consumer bound to trigger_id. The managed
+# webhook must depend on that consumer before acknowledging pending setup.
+# Generation changes are rejected because native rotation is irreversible.
+ephemeral "paperclip_routine_webhook_secret" "initial" {
+  routine_id = paperclip_routine.daily.id
+  name = "daily-webhook"
+  generation = 1
+  applying = tofu.applying
+  signing_mode = "hmac_sha256"
+  replay_window_sec = 300
+}
+`,
 	"paperclip_board_key": `ephemeral "paperclip_board_key" "board_token" {
   name       = "automation-board-key"
   generation = 1
