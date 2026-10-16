@@ -26,6 +26,7 @@ type settingsFixture struct {
 	health                                     map[string]interface{}
 	environment                                map[string]interface{}
 	writes                                     []string
+	bodies                                     []map[string]interface{}
 	failPath, failMethod                       string
 	readbackFails, ignorePatch                 bool
 	ownershipAfterPatch, healthFailsAfterPatch bool
@@ -70,6 +71,7 @@ func newSettingsFixture(t *testing.T) (*PaperclipInstanceSettingsResource, *sett
 		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
+		f.bodies = append(f.bodies, body)
 		target := f.root
 		if strings.HasSuffix(req.URL.Path, "/general") {
 			target = f.root["general"].(map[string]interface{})
@@ -166,6 +168,9 @@ func TestInstanceSettingsLifecycleOwnsOnlyDeclaredKeys(t *testing.T) {
 	r.Create(ctx, resource.CreateRequest{Plan: p}, &created)
 	if created.Diagnostics.HasError() || len(f.writes) != 3 {
 		t.Fatal(created.Diagnostics, f.writes)
+	}
+	if len(f.bodies[0]) != 1 || f.bodies[0]["defaultEnvironmentId"] != settingsEnvironmentID || len(f.bodies[1]) != 5 || len(f.bodies[2]) != 1 || f.bodies[2]["enableEnvironments"] != true {
+		t.Fatal("PATCH included undeclared keys or omitted declared values", f.bodies)
 	}
 	var m instanceSettingsModel
 	if d := created.State.Get(ctx, &m); d.HasError() {
@@ -470,5 +475,16 @@ func TestInstanceSettingsAbsentExecutionModeMeansAny(t *testing.T) {
 	_ = read.State.Get(ctx, &m)
 	if read.Diagnostics.HasError() || !strings.Contains(m.General.ValueString(), `"executionMode":"any"`) {
 		t.Fatal(m, read.Diagnostics)
+	}
+}
+
+func TestInstanceSettingsPartialGeneralPatchPreservesUndeclaredSettings(t *testing.T) {
+	r, f, p := newSettingsFixture(t)
+	ctx := context.Background()
+	setSettingsPlan(t, &p, instanceSettingsModel{General: types.StringValue(`{"keyboardShortcuts":true}`)})
+	result := resource.CreateResponse{State: tfsdk.State{Schema: p.Schema}}
+	r.Create(ctx, resource.CreateRequest{Plan: p}, &result)
+	if result.Diagnostics.HasError() || len(f.bodies) != 1 || f.writes[0] != "/api/instance/settings/general" || len(f.bodies[0]) != 1 || f.bodies[0]["keyboardShortcuts"] != true || f.root["general"].(map[string]interface{})["censorUsernameInLogs"] != false {
+		t.Fatal(result.Diagnostics, f.bodies)
 	}
 }
