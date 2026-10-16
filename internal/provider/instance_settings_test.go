@@ -208,7 +208,7 @@ func TestInstanceSettingsLifecycleOwnsOnlyDeclaredKeys(t *testing.T) {
 	}
 }
 func TestInstanceSettingsPlanRejectsDeploymentOwnersAndInvalidReferences(t *testing.T) {
-	for _, mode := range []string{"managed", "hidden general", "hidden experimental", "hidden page", "cloud", "archived", "fake", "missing", "bad UUID", "unknown flag", "unknown general", "read denied", "health denied", "incomplete", "unknown", "valid"} {
+	for _, mode := range []string{"managed", "hidden general", "hidden experimental", "hidden page", "cloud", "archived", "fake", "missing", "bad UUID", "unknown flag", "unknown general", "missing flag", "missing general", "read denied", "health denied", "incomplete", "unknown", "valid"} {
 		t.Run(mode, func(t *testing.T) {
 			r, f, p := newSettingsFixture(t)
 			ctx := context.Background()
@@ -250,6 +250,12 @@ func TestInstanceSettingsPlanRejectsDeploymentOwnersAndInvalidReferences(t *test
 			case "unknown general":
 				m.General = types.StringValue(`{"inventedSetting":true}`)
 				want = "unsupported general"
+			case "missing flag":
+				delete(f.root["experimental"].(map[string]interface{}), "enableEnvironments")
+				want = "target API does not expose experimental.enableEnvironments"
+			case "missing general":
+				delete(f.root["general"].(map[string]interface{}), "keyboardShortcuts")
+				want = "target API does not expose general.keyboardShortcuts"
 			case "read denied":
 				f.failPath, f.failMethod = "/api/instance/settings", "GET"
 				want = "Instance admin required"

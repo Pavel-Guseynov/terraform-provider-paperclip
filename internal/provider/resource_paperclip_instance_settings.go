@@ -165,9 +165,16 @@ func (r *PaperclipInstanceSettingsResource) preflight(ctx context.Context, m ins
 		return nil, nil, err
 	}
 	for index, section := range []string{"", "general", "experimental"} {
+		values := remote.General
+		if section == "experimental" {
+			values = remote.Experimental
+		}
 		for key := range bodies[index] {
 			if owner := settingOwner(health, remote, section, key); owner != "" {
 				return nil, nil, fmt.Errorf("%s.%s is managedBy %s; remove this key from configuration", section, key, owner)
+			}
+			if _, present := values[key]; index > 0 && !present && !(section == "general" && key == "executionMode") {
+				return nil, nil, fmt.Errorf("target API does not expose %s.%s; remove this unsupported setting from configuration", section, key)
 			}
 		}
 	}

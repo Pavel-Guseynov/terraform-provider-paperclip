@@ -77,7 +77,8 @@ the hidden Experimental page, `managedKeys` (naming `managedBy`) and
 cloud-managed execution mode, even for equal values. Environment references are
 validated read-only at plan when known and again before apply mutations. Unknown,
 deprecated and bookkeeping flags are rejected locally because native PATCH
-silently strips unknown fields. Writes require instance-admin access. Refresh
+silently strips unknown fields. Declared keys absent from target responses fail
+before mutation; absent `executionMode` means `any`. Writes require instance-admin access. Refresh
 exposes declared drift and plans reject changed deployment ownership; apply errors
 on non-convergent readback. The API has no conditional write or owner lock:
 coordinate one settings owner per instance externally, including concurrent
