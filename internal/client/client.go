@@ -58,6 +58,7 @@ type mintedKeyRecord struct {
 	gatewayID     string
 	generation    int64
 	configuration string
+	routineID     string
 }
 
 type Client struct {

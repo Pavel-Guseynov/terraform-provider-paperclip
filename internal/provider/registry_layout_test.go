@@ -39,6 +39,32 @@ var resourceExamples = map[string]string{
   experimental = jsonencode({ enableEnvironments = true })
 }
 `,
+	"paperclip_routine_webhook_delivery": `# This receipt must depend on the successful write-only Lock consumer.
+# Bind that consumer to paperclip_routine_trigger.webhook.id, and deliver
+# ephemeral.paperclip_routine_webhook_secret.initial.secret to its write-only input.
+resource "paperclip_routine_webhook_delivery" "confirmed" {
+  routine_id = paperclip_routine.daily.id
+  trigger_id = paperclip_routine_trigger.webhook.id
+  generation = 1
+  # depends_on = [your_write_only_consumer.resource_name]
+}
+`,
+	"paperclip_routine": `resource "paperclip_routine" "daily" {
+  company_id        = paperclip_company.acme.id
+  title             = "Daily status {{date}}"
+  description       = "Prepare the daily report"
+  assignee_agent_id = paperclip_agent.engineer.id
+  status            = "active"
+  env = { REPORT_FORMAT = { type = "plain", value = "markdown" } }
+}
+`,
+	"paperclip_routine_trigger": `resource "paperclip_routine_trigger" "daily" {
+  routine_id      = paperclip_routine.daily.id
+  kind            = "schedule"
+  cron_expression = "0 9 * * *"
+  timezone        = "UTC"
+}
+`,
 	"paperclip_mcp_gateway": `resource "paperclip_mcp_gateway" "automation" {
   company_id = paperclip_company.acme.id
   name = "Automation gateway"
@@ -436,6 +462,19 @@ var dataSourceExamples = map[string]string{
 }
 
 var ephemeralExamples = map[string]string{
+	"paperclip_routine_webhook_secret": `# First adopt pending setup with a trigger resource depending on this producer.
+# Bind the write-only consumer to that persistent trigger ID, then create
+# paperclip_routine_webhook_delivery depending on the successful consumer.
+# Generation changes are rejected because native rotation is irreversible.
+ephemeral "paperclip_routine_webhook_secret" "initial" {
+  routine_id = paperclip_routine.daily.id
+  name = "daily-webhook"
+  generation = 1
+  applying = tofu.applying
+  signing_mode = "hmac_sha256"
+  replay_window_sec = 300
+}
+`,
 	"paperclip_mcp_gateway_token": `ephemeral "paperclip_mcp_gateway_token" "automation" {
   company_id = paperclip_company.acme.id
   gateway_id = paperclip_mcp_gateway.automation.id

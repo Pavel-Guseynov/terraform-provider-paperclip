@@ -91,6 +91,64 @@ partial failures retain the singleton binding and observed state and require a
 fresh reconciliation plan. No rollback or API extension is attempted. Transport
 and authorization failures preserve state and surface sanitized native errors.
 
+### Routines and triggers
+
+`paperclip_routine` manages title, nullable description, project_id, goal_id,
+parent_issue_id and assignee_agent_id; priority (medium), status (active),
+concurrency_policy (coalesce_if_active), catch_up_policy (skip_missed),
+activity_gate_policy (always), activity_gate_scope (company), variables JSON,
+and the shared typed env bindings. Active routines require an assignee.
+Omission clears nullable fields, variables and env. Variable names and order
+must exactly match title/description placeholders, excluding date and timestamp.
+Native defaults within variable JSON are label/defaultValue null, type text,
+required true and options []; include them when importing for a zero-change plan.
+Native validation owns variable value semantics, cron syntax and responsible-user
+requirements. Read-only reference validation runs during plan and again before
+mutation. Environment secret values are never resolved.
+
+Import routines by native ID. Destroy archives via PATCH with baseRevisionId;
+updates use that same revision guard. A concurrent edit yields an error and
+is never overwritten by retrying against a newer revision. Trigger changes
+also advance the routine revision. Delete triggers in an earlier apply before
+refreshing/planning routine retirement; a stale plan requires refresh.
+
+`paperclip_routine_trigger` creates schedule, API and initially delivered webhook triggers. Import existing
+webhooks as routine_id/trigger_id to manage metadata and hard-delete through
+the native DELETE operation. Label is nullable, enabled defaults true; schedules
+require explicit cron_expression and timezone. Imported webhooks accept nullable
+signing_mode (bearer, hmac_sha256, github_hmac, none) and replay_window_sec
+(30–86400). Kind and routine ownership cannot be changed in place. Reads use
+the owning routine detail, which is the native trigger inventory authority.
+
+`ephemeral.paperclip_routine_webhook_secret` creates native pending setup for
+generation 1 only during apply. Configure routine_id, name, generation = 1,
+applying = tofu.applying, signing_mode and replay_window_sec. The managed
+trigger uses matching webhook_delivery_name, webhook_generation = 1 and signing
+settings, and depends_on the ephemeral producer. It records pending setup's
+non-secret native ID before consumption. Bind the Lock write-only consumer to
+that persistent trigger resource's id and generation, never an ephemeral ID in
+a persistent attribute. `paperclip_routine_webhook_delivery` then takes
+routine_id, that trigger_id and generation = 1, and depends_on the successful
+consumer. Only this receipt clears setupPending and acknowledges delivery.
+It has no independent native object; destroy relinquishes acknowledgement,
+while the managed trigger's native deletion owns revocation. Unconfirmed Close
+fails after cleanup so undelivered setup cannot claim convergence. Failed delivery or private
+state writes cause native trigger deletion; graceful exit uses the same
+credential cleanup registry as keys. An unchanged generation returns its
+existing ID and null secret, without rewriting the consumer. An import without
+webhook_delivery_name manages metadata only. A hard crash or lost state after
+native creation can leave pending setup requiring manual native cleanup;
+native trigger deletion performs best-effort vault cleanup.
+
+Rotation is unsupported and returns a diagnostic before mutation: the native
+API immediately replaces the active value and cannot retain the predecessor
+until acknowledgement or restore it after failed delivery. Keep generation 1;
+the provider never replaces a delivered trigger identity to emulate recovery.
+Secrets remain absent from plans, state and diagnostics. Unit tests and the
+parent real OpenTofu gate prove initial delivery, failure cleanup, unchanged
+generation, rejected rotation and supported metadata lifecycles. No server
+changes or host activation are part of this integration.
+
 ### Named MCP gateways and gateway client tokens
 
 `paperclip_mcp_gateway` owns a named gateway through Paperclip's existing
@@ -186,6 +244,8 @@ For the external consumer's non-secret write trigger, use
 Use the same locals in both token declarations and retain the consumer's native
 approval. This binds delivery to a new producer identity even if its initial
 generation equals the retired producer's generation.
+
+### Tool profiles
 
 `paperclip_tool_profile` is the sole aggregate writer of one profile's complete
 `entries` JSON array (maximum 250). Entries use native camelCase fields:

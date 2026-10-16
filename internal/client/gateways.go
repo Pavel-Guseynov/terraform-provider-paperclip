@@ -138,6 +138,9 @@ func (rec mintedKeyRecord) lookupKey() string {
 	if rec.gatewayID != "" {
 		return gatewayTokenLookup(rec.companyID, rec.gatewayID, rec.name)
 	}
+	if rec.routineID != "" {
+		return lookupKey(rec.name, false, routineWebhookOwner(rec.routineID))
+	}
 	return lookupKey(rec.name, rec.isBoard, rec.agentID)
 }
 
