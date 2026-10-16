@@ -63,8 +63,8 @@ resource "paperclip_routine" "daily" {
 - `allow_missing_override` (Boolean) Whether to allow missing override for user_secret_ref bindings (default: false).
 - `key` (String) Target user secret definition key for user_secret_ref bindings.
 - `projection_allowlist_key` (String) Allowlist key required when projection_class is 'class_3_static_lease'.
-- `projection_class` (String) Projection classification for secret_ref bindings ('unclassified' or 'class_3_static_lease').
+- `projection_class` (String) Projection classification for secret_ref bindings: unclassified (native default) or class_3_static_lease.
 - `required` (Boolean) Whether the secret is required for user_secret_ref bindings (default: true).
 - `secret_id` (String) Target Paperclip company secret ID for secret_ref bindings.
 - `value` (String, Sensitive) Plaintext value for plain bindings. Must not specify a redacted sentinel.
-- `version` (String) Optional version selector ('latest' or specific integer version string).
+- `version` (String) Version selector for secret references: latest (native default) or a canonical positive integer string, sent as a native JSON integer.
