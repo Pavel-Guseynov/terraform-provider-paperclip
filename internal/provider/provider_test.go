@@ -1034,8 +1034,8 @@ func TestProviderStructure(t *testing.T) {
 	}
 
 	res := p.Resources(ctx)
-	if len(res) != 37 {
-		t.Fatalf("expected exactly 37 resources, got %d", len(res))
+	if len(res) != 39 {
+		t.Fatalf("expected exactly 39 resources, got %d", len(res))
 	}
 	for _, rFn := range res {
 		r := rFn()
@@ -1051,8 +1051,8 @@ func TestProviderStructure(t *testing.T) {
 		t.Fatal("provider does not expose ephemeral resources")
 	}
 	ephemeralResources := ephemeralProvider.EphemeralResources(ctx)
-	if len(ephemeralResources) != 2 {
-		t.Fatalf("expected exactly two ephemeral resources, got %d", len(ephemeralResources))
+	if len(ephemeralResources) != 3 {
+		t.Fatalf("expected exactly three ephemeral resources, got %d", len(ephemeralResources))
 	}
 	for _, ephemeralResource := range ephemeralResources {
 		var ephemeralSchemaResp ephemeral.SchemaResponse

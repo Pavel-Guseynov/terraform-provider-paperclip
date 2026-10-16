@@ -816,6 +816,7 @@ func (c *Client) paperclipRequestWithToken(ctx context.Context, method, path str
 
 var sensitiveKeyPattern = regexp.MustCompile(`(?i)^(value|token|secret|password|boardapitoken|board_token|apikey|api_key|credential|credentials|authorization|privatekey|private_key)$`)
 var sensitiveRegexPattern = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9\-_\.]+|((?:token|secret|password|key|value)\s*[:=]\s*["']?)[^"'\s,;]+(["']?)`)
+var gatewayBearerPattern = regexp.MustCompile(`\bpcgw_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
 
 func isSensitiveKey(key string) bool {
 	if sensitiveKeyPattern.MatchString(key) {
@@ -909,6 +910,7 @@ func sanitizeResponseBody(body []byte, extraSecrets ...string) string {
 			result = strings.ReplaceAll(result, trimmed, "[REDACTED]")
 		}
 	}
+	result = gatewayBearerPattern.ReplaceAllString(result, "[REDACTED]")
 
 	if len(result) > 2048 {
 		result = result[:2048] + "..."
@@ -1372,7 +1374,9 @@ func (c *Client) CleanupUnconfirmedKeys(ctx context.Context) error {
 	var errs []error
 	for _, rec := range unconfirmed {
 		var err error
-		if rec.isBoard {
+		if rec.gatewayID != "" {
+			err = c.RevokeGatewayToken(ctx, rec.companyID, rec.keyID)
+		} else if rec.isBoard {
 			err = c.RevokeBoardKey(ctx, rec.keyID)
 		} else if rec.agentID != "" {
 			err = c.RevokeAgentKey(ctx, rec.agentID, rec.keyID)
@@ -1412,12 +1416,12 @@ func (c *Client) ClearMintedToken(keyID string) {
 	delete(c.supersededKeys, keyID)
 	delete(c.agentKeyAgents, keyID)
 	if rec, ok := c.mintedKeys[keyID]; ok {
-		lk := lookupKey(rec.name, rec.isBoard, rec.agentID)
+		lk := rec.lookupKey()
 		delete(c.mintedKeys, keyID)
 		if c.mintedKeysByName[lk] == keyID {
 			delete(c.mintedKeysByName, lk)
 			for otherID, otherRec := range c.mintedKeys {
-				if lookupKey(otherRec.name, otherRec.isBoard, otherRec.agentID) == lk {
+				if otherRec.lookupKey() == lk {
 					c.mintedKeysByName[lk] = otherID
 					break
 				}

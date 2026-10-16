@@ -27,6 +27,29 @@ type registryManifest struct {
 }
 
 var resourceExamples = map[string]string{
+	"paperclip_mcp_gateway": `resource "paperclip_mcp_gateway" "automation" {
+  company_id = paperclip_company.acme.id
+  name = "Automation gateway"
+  slug = "automation"
+  profile_id = paperclip_tool_profile.automation.id
+  default_profile_mode = "gateway_only"
+  context_scope_type = "none"
+  on_demand_tools_config = jsonencode({ enabled = true })
+}
+`,
+	"paperclip_mcp_gateway_token": `# Use the same attributes for the ephemeral producer and durable record.
+# Deliver the ephemeral token to an external write-only consumer. Bind that
+# consumer's rotation trigger to this generation, and add depends_on referencing
+# that consumer to the durable record before applying.
+resource "paperclip_mcp_gateway_token" "automation" {
+  company_id = paperclip_company.acme.id
+  gateway_id = paperclip_mcp_gateway.automation.id
+  name = "automation-client"
+  client_label = "Automation"
+  generation = 1
+  expires_at = "2030-01-01T00:00:00Z"
+}
+`,
 	"paperclip_company": `resource "paperclip_company" "acme" {
   name                                  = "Acme"
   description                           = "Autonomous engineering organization"
@@ -400,6 +423,19 @@ var dataSourceExamples = map[string]string{
 }
 
 var ephemeralExamples = map[string]string{
+	"paperclip_mcp_gateway_token": `ephemeral "paperclip_mcp_gateway_token" "automation" {
+  company_id = paperclip_company.acme.id
+  gateway_id = paperclip_mcp_gateway.automation.id
+  name = "automation-client"
+  client_label = "Automation"
+  generation = 1
+  expires_at = "2030-01-01T00:00:00Z"
+  allowed_actions = jsonencode(["tools/list", "tools/call"])
+  applying = tofu.applying
+}
+# Pass .token only to an external write-only consumer. Couple its rotation
+# trigger to generation and order the matching durable token record after it.
+`,
 	"paperclip_board_key": `ephemeral "paperclip_board_key" "board_token" {
   name       = "automation-board-key"
   generation = 1
