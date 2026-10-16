@@ -494,3 +494,25 @@ func TestInstanceSettingsPartialGeneralPatchPreservesUndeclaredSettings(t *testi
 		t.Fatal(result.Diagnostics, f.bodies)
 	}
 }
+
+func TestInstanceSettingsEveryWritableFlagAppliesAndReadsBack(t *testing.T) {
+	for _, key := range strings.Fields(writableExperimental) {
+		t.Run(key, func(t *testing.T) {
+			r, f, plan := newSettingsFixture(t)
+			ctx := context.Background()
+			f.root["experimental"].(map[string]interface{})[key] = false
+			declaration := fmt.Sprintf(`{"%s":true}`, key)
+			setSettingsPlan(t, &plan, instanceSettingsModel{Experimental: types.StringValue(declaration)})
+			result := resource.CreateResponse{State: tfsdk.State{Schema: plan.Schema}}
+			r.Create(ctx, resource.CreateRequest{Plan: plan}, &result)
+			var observed instanceSettingsModel
+			diagnostics := result.State.Get(ctx, &observed)
+			if result.Diagnostics.HasError() || diagnostics.HasError() || observed.Experimental.ValueString() != declaration || f.root["experimental"].(map[string]interface{})[key] != true {
+				t.Fatal("flag did not apply and read back", result.Diagnostics, diagnostics, observed)
+			}
+			if len(f.bodies) != 1 || f.writes[0] != "/api/instance/settings/experimental" || len(f.bodies[0]) != 1 || f.bodies[0][key] != true {
+				t.Fatal("flag PATCH did not contain exactly the declared key", f.writes, f.bodies)
+			}
+		})
+	}
+}
