@@ -1035,16 +1035,10 @@ func TestProviderStructure(t *testing.T) {
 	if _, ok := schemaResp.Schema.Attributes["token"]; !ok {
 		t.Fatalf("missing token attribute in schema")
 	}
-	if _, ok := schemaResp.Schema.Attributes["paperclip_endpoint"]; !ok {
-		t.Fatalf("missing paperclip_endpoint attribute in schema")
-	}
-	if _, ok := schemaResp.Schema.Attributes["paperclip_token"]; !ok {
-		t.Fatalf("missing paperclip_token attribute in schema")
-	}
 
 	res := p.Resources(ctx)
-	if len(res) != 35 {
-		t.Fatalf("expected exactly 35 resources, got %d", len(res))
+	if len(res) != 43 {
+		t.Fatalf("expected exactly 43 resources, got %d", len(res))
 	}
 	for _, rFn := range res {
 		r := rFn()
@@ -1060,8 +1054,8 @@ func TestProviderStructure(t *testing.T) {
 		t.Fatal("provider does not expose ephemeral resources")
 	}
 	ephemeralResources := ephemeralProvider.EphemeralResources(ctx)
-	if len(ephemeralResources) != 2 {
-		t.Fatalf("expected exactly two ephemeral resources, got %d", len(ephemeralResources))
+	if len(ephemeralResources) != 4 {
+		t.Fatalf("expected exactly four ephemeral resources, got %d", len(ephemeralResources))
 	}
 	for _, ephemeralResource := range ephemeralResources {
 		var ephemeralSchemaResp ephemeral.SchemaResponse
@@ -1069,7 +1063,11 @@ func TestProviderStructure(t *testing.T) {
 		if ephemeralSchemaResp.Diagnostics.HasError() {
 			t.Fatalf("ephemeral schema error: %v", ephemeralSchemaResp.Diagnostics)
 		}
-		token, ok := ephemeralSchemaResp.Schema.Attributes["token"].(ephemeralschema.StringAttribute)
+		attribute := "token"
+		if _, exists := ephemeralSchemaResp.Schema.Attributes["secret"]; exists {
+			attribute = "secret"
+		}
+		token, ok := ephemeralSchemaResp.Schema.Attributes[attribute].(ephemeralschema.StringAttribute)
 		if !ok || !token.Sensitive || !token.Computed {
 			t.Fatal("ephemeral token must be sensitive and computed")
 		}

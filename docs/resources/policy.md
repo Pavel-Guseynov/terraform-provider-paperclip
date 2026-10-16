@@ -2,12 +2,12 @@
 page_title: "paperclip_policy Resource - terraform-provider-paperclip"
 subcategory: ""
 description: |-
-  Manages a Paperclip-native tool permission policy.
+  Owns one declaratively creatable native policy. trust_rule requires native action-request promotion and is excluded. app_permission/finish-owned policies cannot be imported or mutated. Rules and metadata were unsupported native fields and are removed in schema version 1; upgrade retains the same remote ID and refreshes native fields.
 ---
 
 # paperclip_policy (Resource)
 
-Manages a Paperclip-native tool permission policy.
+Owns one declaratively creatable native policy. trust_rule requires native action-request promotion and is excluded. app_permission/finish-owned policies cannot be imported or mutated. Rules and metadata were unsupported native fields and are removed in schema version 1; upgrade retains the same remote ID and refreshes native fields.
 
 ## Example Usage
 
@@ -16,7 +16,10 @@ resource "paperclip_policy" "require_review" {
   company_id  = paperclip_company.acme.id
   name        = "require-write-approval"
   policy_type = "require_approval"
-  rules       = jsonencode({ enabled = true })
+  priority    = 50
+  enabled     = true
+  selectors   = jsonencode({ projectId = paperclip_project.core.id })
+  conditions  = jsonencode({ risk = { isWrite = true } })
 }
 ```
 
@@ -25,15 +28,20 @@ resource "paperclip_policy" "require_review" {
 
 ### Required
 
-- `company_id` (String) The Paperclip company ID.
-- `name` (String) Policy name.
+- `company_id` (String)
+- `name` (String)
 
 ### Optional
 
-- `metadata` (String) Optional JSON metadata object for the policy.
-- `policy_type` (String) Policy type (e.g. allow, ask; default: allow).
-- `rules` (String) Optional JSON rules object.
+- `conditions` (String) Native strict condition object: arguments/args, actor, context, risk, credentialScope, trustBoundary and timeWindow. Omission clears to null.
+- `config` (String) Native config, only for rate_limit: positive limit and windowSeconds, optionally keyBy (or a nested rateLimit object). Omission clears to null.
+- `description` (String) Native nullable description; omission clears it.
+- `enabled` (Boolean)
+- `policy_type` (String)
+- `priority` (Number) 0-10000; lower values evaluate first. Only this policy is patched; global reorder is never invoked.
+- `selectors` (String) Native loose selector object; omission clears to {}. Producer schemas and annotations are never changed.
 
 ### Read-Only
 
-- `id` (String) Unique identifier for the policy.
+- `id` (String)
+- `owner_id` (String) Single resource ownership identity within this provider configuration. Independent states must coordinate ownership externally; the API has no persistent owner/CAS field.

@@ -790,14 +790,13 @@ type PaperclipToolPolicy struct {
 	ID          string                 `json:"id,omitempty"`
 	CompanyID   string                 `json:"companyId,omitempty"`
 	Name        string                 `json:"name"`
-	Description string                 `json:"description,omitempty"`
+	Description *string                `json:"description"`
 	PolicyType  string                 `json:"policyType,omitempty"`
 	Priority    int                    `json:"priority,omitempty"`
 	Enabled     *bool                  `json:"enabled,omitempty"`
 	Selectors   map[string]interface{} `json:"selectors,omitempty"`
 	Config      map[string]interface{} `json:"config,omitempty"`
-	Rules       map[string]interface{} `json:"rules,omitempty"`
-	Metadata    map[string]interface{} `json:"metadata,omitempty"`
+	Conditions  map[string]interface{} `json:"conditions,omitempty"`
 }
 
 // PaperclipStdioTemplate carries the approved stdio template fields Paperclip
@@ -833,6 +832,7 @@ func (c *Client) paperclipRequestWithToken(ctx context.Context, method, path str
 
 var sensitiveKeyPattern = regexp.MustCompile(`(?i)^(value|token|secret|password|boardapitoken|board_token|apikey|api_key|credential|credentials|authorization|privatekey|private_key)$`)
 var sensitiveRegexPattern = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9\-_\.]+|((?:token|secret|password|key|value)\s*[:=]\s*["']?)[^"'\s,;]+(["']?)`)
+var gatewayBearerPattern = regexp.MustCompile(`\bpcgw_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
 
 func isSensitiveKey(key string) bool {
 	if sensitiveKeyPattern.MatchString(key) {
@@ -908,6 +908,9 @@ func sanitizeResponseBody(body []byte, extraSecrets ...string) string {
 		result = string(body)
 	}
 
+	// Redact complete native credentials before a short public tokenPrefix in
+	// request metadata can replace their prefix and leave the secret suffix.
+	result = gatewayBearerPattern.ReplaceAllString(result, "[REDACTED]")
 	result = sensitiveRegexPattern.ReplaceAllStringFunc(result, func(m string) string {
 		lower := strings.ToLower(m)
 		if strings.HasPrefix(lower, "bearer ") {
@@ -1389,8 +1392,15 @@ func (c *Client) CleanupUnconfirmedKeys(ctx context.Context) error {
 	var errs []error
 	for _, rec := range unconfirmed {
 		var err error
-		if rec.isBoard {
+		if rec.gatewayID != "" {
+			err = c.RevokeGatewayToken(ctx, rec.companyID, rec.keyID)
+		} else if rec.isBoard {
 			err = c.RevokeBoardKey(ctx, rec.keyID)
+		} else if rec.routineID != "" {
+			err = c.DeleteRoutineTrigger(ctx, rec.keyID)
+			if errors.Is(err, ErrNotFound) {
+				err = nil
+			}
 		} else if rec.agentID != "" {
 			err = c.RevokeAgentKey(ctx, rec.agentID, rec.keyID)
 		}
@@ -1429,12 +1439,17 @@ func (c *Client) ClearMintedToken(keyID string) {
 	delete(c.supersededKeys, keyID)
 	delete(c.agentKeyAgents, keyID)
 	if rec, ok := c.mintedKeys[keyID]; ok {
-		lk := lookupKey(rec.name, rec.isBoard, rec.agentID)
+		if rec.routineID != "" && c.acknowledgedDeliveries[keyID] {
+			rec.token = ""
+			c.mintedKeys[keyID] = rec
+			return
+		}
+		lk := rec.lookupKey()
 		delete(c.mintedKeys, keyID)
 		if c.mintedKeysByName[lk] == keyID {
 			delete(c.mintedKeysByName, lk)
 			for otherID, otherRec := range c.mintedKeys {
-				if lookupKey(otherRec.name, otherRec.isBoard, otherRec.agentID) == lk {
+				if otherRec.lookupKey() == lk {
 					c.mintedKeysByName[lk] = otherID
 					break
 				}
@@ -3181,7 +3196,17 @@ func (c *Client) FinishAppPermissions(ctx context.Context, companyID, connection
 // Tool Policies
 func (c *Client) CreateToolPolicy(ctx context.Context, companyID string, pol PaperclipToolPolicy) (*PaperclipToolPolicy, error) {
 	var resp PaperclipToolPolicy
-	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/tools/policies", url.PathEscape(companyID)), pol, &resp); err != nil {
+	payload := toolPolicyPayload(pol)
+	if pol.Enabled == nil {
+		delete(payload, "enabled")
+	}
+	if pol.Config == nil {
+		delete(payload, "config")
+	}
+	if pol.Conditions == nil {
+		delete(payload, "conditions")
+	}
+	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/companies/%s/tools/policies", url.PathEscape(companyID)), payload, &resp); err != nil {
 		return nil, err
 	}
 	if resp.CompanyID == "" {
@@ -3196,7 +3221,7 @@ func (c *Client) GetToolPolicy(ctx context.Context, companyID, polID string) (*P
 	}
 	policies, err := c.ListToolPolicies(ctx, companyID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("native policy inventory could not be read: %v", err)
 	}
 	for _, p := range policies {
 		if p.ID == polID {
@@ -3210,35 +3235,35 @@ func (c *Client) GetToolPolicy(ctx context.Context, companyID, polID string) (*P
 }
 
 func (c *Client) UpdateToolPolicy(ctx context.Context, companyID, polID string, pol PaperclipToolPolicy) (*PaperclipToolPolicy, error) {
+	if companyID == "" || polID == "" {
+		return nil, fmt.Errorf("policy updates require company and policy IDs")
+	}
 	var resp PaperclipToolPolicy
 	reqPath := fmt.Sprintf("/api/companies/%s/tools/policies/%s", url.PathEscape(companyID), url.PathEscape(polID))
-	if companyID == "" {
-		reqPath = fmt.Sprintf("/api/tool-policies/%s", url.PathEscape(polID))
-	}
-	payload := map[string]interface{}{
-		"name":       pol.Name,
-		"policyType": pol.PolicyType,
-		"rules":      pol.Rules,
-		"metadata":   pol.Metadata,
-	}
-	if pol.Rules == nil {
-		payload["rules"] = map[string]interface{}{}
-	}
-	if pol.Metadata == nil {
-		payload["metadata"] = map[string]interface{}{}
-	}
-	if err := c.paperclipRequest(ctx, http.MethodPatch, reqPath, payload, &resp); err != nil {
+	if err := c.paperclipRequest(ctx, http.MethodPatch, reqPath, toolPolicyPayload(pol), &resp); err != nil {
 		return nil, err
 	}
 	return &resp, nil
 }
 
 func (c *Client) DeleteToolPolicy(ctx context.Context, companyID, polID string) error {
-	reqPath := fmt.Sprintf("/api/companies/%s/tools/policies/%s", url.PathEscape(companyID), url.PathEscape(polID))
-	if companyID == "" {
-		reqPath = fmt.Sprintf("/api/tool-policies/%s", url.PathEscape(polID))
+	if companyID == "" || polID == "" {
+		return fmt.Errorf("policy deletion requires company and policy IDs")
 	}
+	reqPath := fmt.Sprintf("/api/companies/%s/tools/policies/%s", url.PathEscape(companyID), url.PathEscape(polID))
 	return c.paperclipRequest(ctx, http.MethodDelete, reqPath, nil, nil)
+}
+
+func toolPolicyPayload(pol PaperclipToolPolicy) map[string]interface{} {
+	selectors := pol.Selectors
+	if selectors == nil {
+		selectors = map[string]interface{}{}
+	}
+	enabled := true
+	if pol.Enabled != nil {
+		enabled = *pol.Enabled
+	}
+	return map[string]interface{}{"name": pol.Name, "description": pol.Description, "policyType": pol.PolicyType, "priority": pol.Priority, "enabled": enabled, "selectors": selectors, "conditions": pol.Conditions, "config": pol.Config}
 }
 
 func (c *Client) ListToolPolicies(ctx context.Context, companyID string) ([]PaperclipToolPolicy, error) {
@@ -3326,7 +3351,7 @@ func (c *Client) ReconcileAskFirstPolicies(ctx context.Context, companyID, conne
 		}
 		policy := PaperclipToolPolicy{
 			Name:        "Ask first: " + string(label) + suffix,
-			Description: fmt.Sprintf("Ask first before running any of the %d ask-first tools of %s.", len(ids), connectionName),
+			Description: new(fmt.Sprintf("Ask first before running any of the %d ask-first tools of %s.", len(ids), connectionName)),
 			PolicyType:  "require_approval",
 			Priority:    askFirstPolicyPriority,
 			Selectors:   map[string]interface{}{"catalogEntryIds": ids, "agentIds": agents},

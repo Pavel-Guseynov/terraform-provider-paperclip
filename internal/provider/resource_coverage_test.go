@@ -657,18 +657,18 @@ func TestPolicyAndSecretAndConnectionEdgeCases(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/companies/comp-1/tools/policies":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "pol-1", "companyId": "comp-1", "name": "p1", "policyType": "approval",
-				"rules": map[string]interface{}{"mode": "strict"}, "metadata": map[string]interface{}{"env": "prod"},
+				"id": "pol-1", "companyId": "comp-1", "name": "p1", "policyType": "require_approval",
+				"conditions": map[string]interface{}{"risk": map[string]interface{}{"isWrite": true}}, "selectors": map[string]interface{}{},
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/tools/policies":
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{{
-				"id": "pol-1", "companyId": "comp-1", "name": "p1", "policyType": "approval",
-				"rules": map[string]interface{}{"mode": "strict"}, "metadata": map[string]interface{}{"env": "prod"},
+				"id": "pol-1", "companyId": "comp-1", "name": "p1", "policyType": "require_approval",
+				"conditions": map[string]interface{}{"risk": map[string]interface{}{"isWrite": true}}, "selectors": map[string]interface{}{},
 			}})
 		case r.Method == http.MethodPatch && r.URL.Path == "/api/companies/comp-1/tools/policies/pol-1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "pol-1", "companyId": "comp-1", "name": "p1-upd", "policyType": "approval",
-				"rules": map[string]interface{}{"mode": "strict"}, "metadata": map[string]interface{}{"env": "prod"},
+				"id": "pol-1", "companyId": "comp-1", "name": "p1-upd", "policyType": "require_approval",
+				"conditions": map[string]interface{}{"risk": map[string]interface{}{"isWrite": true}}, "selectors": map[string]interface{}{},
 			})
 		default:
 			http.NotFound(w, r)
@@ -682,9 +682,9 @@ func TestPolicyAndSecretAndConnectionEdgeCases(t *testing.T) {
 	_ = planPol.Set(ctx, &PaperclipPolicyResourceModel{
 		CompanyID:  types.StringValue("comp-1"),
 		Name:       types.StringValue("p1"),
-		PolicyType: types.StringValue("approval"),
-		Rules:      types.StringValue(`{"mode":"strict"}`),
-		Metadata:   types.StringValue(`{"env":"prod"}`),
+		PolicyType: types.StringValue("require_approval"),
+		Conditions: types.StringValue(`{"risk":{"isWrite":true}}`),
+		Selectors:  types.StringValue(`{}`),
 	})
 	var createPolResp resource.CreateResponse
 	createPolResp.State = tfsdk.State{Schema: polSchema}
@@ -702,6 +702,7 @@ func TestPolicyAndSecretAndConnectionEdgeCases(t *testing.T) {
 
 	var updPolResp resource.UpdateResponse
 	updPolResp.State = createPolResp.State
+	planPol.Raw = createPolResp.State.Raw
 	rPol.Update(ctx, resource.UpdateRequest{Plan: planPol, State: createPolResp.State}, &updPolResp)
 	if updPolResp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error on policy update: %v", updPolResp.Diagnostics)

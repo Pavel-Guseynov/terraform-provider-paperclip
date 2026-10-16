@@ -533,15 +533,15 @@ func TestResourceValidationAndHandlingOfMalformedJSON(t *testing.T) {
 	var polSchemaResp resource.SchemaResponse
 	rPol.Schema(ctx, resource.SchemaRequest{}, &polSchemaResp)
 
-	for _, field := range []string{"rules", "metadata"} {
+	for _, field := range []string{"conditions", "selectors"} {
 		polModel := PaperclipPolicyResourceModel{
 			CompanyID: types.StringValue("comp-1"),
 			Name:      types.StringValue("pol-test"),
 		}
-		if field == "rules" {
-			polModel.Rules = types.StringValue("{invalid")
+		if field == "conditions" {
+			polModel.Conditions = types.StringValue("{invalid")
 		} else {
-			polModel.Metadata = types.StringValue("{invalid")
+			polModel.Selectors = types.StringValue("{invalid")
 		}
 		plan := tfsdk.Plan{Schema: polSchemaResp.Schema}
 		_ = plan.Set(ctx, &polModel)

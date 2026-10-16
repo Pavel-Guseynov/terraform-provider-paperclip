@@ -526,10 +526,8 @@ func TestPaperclipPolicyResourceLifecycle(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": "pol-1", "companyId": "comp-1", "name": "Policy 1", "policyType": "allow",
 			})
-		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/tools/policies/pol-1":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id": "pol-1", "companyId": "comp-1", "name": "Policy 1", "policyType": "allow",
-			})
+		case req.Method == http.MethodGet && req.URL.Path == "/api/companies/comp-1/tools/policies":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"policies": []map[string]interface{}{{"id": "pol-1", "companyId": "comp-1", "name": "Policy 1", "policyType": "allow"}}})
 		case req.Method == http.MethodPatch && req.URL.Path == "/api/companies/comp-1/tools/policies/pol-1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"id": "pol-1", "companyId": "comp-1", "name": "Policy Updated", "policyType": "allow",
@@ -557,8 +555,8 @@ func TestPaperclipPolicyResourceLifecycle(t *testing.T) {
 		CompanyID:  types.StringValue("comp-1"),
 		Name:       types.StringValue("Policy 1"),
 		PolicyType: types.StringValue("allow"),
-		Rules:      types.StringNull(),
-		Metadata:   types.StringNull(),
+		Conditions: types.StringNull(),
+		Selectors:  types.StringNull(),
 	}
 	plan := tfsdk.Plan{Schema: schema}
 	_ = plan.Set(ctx, &model)

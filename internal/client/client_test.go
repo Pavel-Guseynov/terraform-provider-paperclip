@@ -34,6 +34,29 @@ func TestNewClient(t *testing.T) {
 	}
 }
 
+func TestNewClientRejectsUnsafeEndpointWithoutDisclosingInput(t *testing.T) {
+	for _, endpoint := range []string{
+		"/relative", "ftp://example.invalid", "http://", "http://example.invalid?",
+		"http://user:fixture-secret@example.invalid", "http://example.invalid?token=fixture-secret",
+		"http://example.invalid/#fixture-secret", "http://example.invalid/\nfixture-secret",
+	} {
+		c, err := NewClient(endpoint, "fixture-token")
+		if err == nil || c != nil {
+			t.Fatal("unsafe endpoint was accepted")
+		}
+		if strings.Contains(err.Error(), "fixture-secret") || strings.Contains(err.Error(), "fixture-token") || !strings.Contains(err.Error(), "absolute HTTP(S) URL") {
+			t.Fatal("endpoint diagnostic is not actionable and secret-safe")
+		}
+	}
+}
+
+func TestNewClientAcceptsCaseInsensitiveHTTPS(t *testing.T) {
+	c, err := NewClient("HTTPS://example.invalid/base/", "")
+	if err != nil || c.Endpoint != "https://example.invalid/base" {
+		t.Fatal("valid HTTP scheme was not normalized for native HTTP requests")
+	}
+}
+
 func TestClientHealth(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/health" {

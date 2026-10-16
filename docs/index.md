@@ -32,7 +32,5 @@ provider "paperclip" {
 
 ### Optional
 
-- `endpoint` (String) The HTTP endpoint of the Paperclip board API (defaults to http://127.0.0.1:3100, or PAPERCLIP_API_URL / PAPERCLIP_ENDPOINT env var).
-- `paperclip_endpoint` (String) Optional alias for endpoint for backward compatibility with the legacy mixed provider configuration.
-- `paperclip_token` (String, Sensitive) Optional alias for token for backward compatibility with the legacy mixed provider configuration.
-- `token` (String, Sensitive) The API bearer token for Paperclip (or PAPERCLIP_API_KEY / PAPERCLIP_BOARD_TOKEN env var).
+- `endpoint` (String) Absolute HTTP(S) base URL of the Paperclip board API, without credentials, query or fragment. When omitted, uses PAPERCLIP_API_URL or defaults to http://127.0.0.1:3100. An explicitly empty or unknown value is invalid.
+- `token` (String, Sensitive) Sensitive Paperclip bearer token. When omitted, uses PAPERCLIP_API_KEY. An explicitly empty value selects unauthenticated native access; an unknown value is invalid.

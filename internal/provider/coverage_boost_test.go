@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"testing"
 
 	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
@@ -13,99 +12,12 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
-	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
-
-func TestProviderConfigureAndMetadata(t *testing.T) {
-	ctx := context.Background()
-	p := New("0.1.0")().(*PaperclipProvider)
-
-	var mResp provider.MetadataResponse
-	p.Metadata(ctx, provider.MetadataRequest{}, &mResp)
-	if mResp.TypeName != "paperclip" || mResp.Version != "0.1.0" {
-		t.Fatalf("unexpected metadata: %+v", mResp)
-	}
-
-	var sResp provider.SchemaResponse
-	p.Schema(ctx, provider.SchemaRequest{}, &sResp)
-	if len(sResp.Schema.Attributes) == 0 {
-		t.Fatal("expected provider schema attributes")
-	}
-
-	if len(p.Resources(ctx)) == 0 || len(p.DataSources(ctx)) == 0 || len(p.EphemeralResources(ctx)) == 0 {
-		t.Fatal("expected provider resources, data sources, and ephemeral resources")
-	}
-
-	// Bad config raw
-	badConfig := tfsdk.Config{Schema: sResp.Schema, Raw: tftypes.NewValue(tftypes.String, "invalid")}
-	var badResp provider.ConfigureResponse
-	p.Configure(ctx, provider.ConfigureRequest{Config: badConfig}, &badResp)
-	if !badResp.Diagnostics.HasError() {
-		t.Fatal("expected error on bad provider config")
-	}
-
-	// Configure with env vars
-	os.Setenv("PAPERCLIP_API_URL", "http://127.0.0.1:3100")
-	os.Setenv("PAPERCLIP_API_KEY", "test-key")
-	defer func() {
-		os.Unsetenv("PAPERCLIP_API_URL")
-		os.Unsetenv("PAPERCLIP_API_KEY")
-		os.Unsetenv("PAPERCLIP_ENDPOINT")
-		os.Unsetenv("PAPERCLIP_URL")
-		os.Unsetenv("PAPERCLIP_BOARD_TOKEN")
-		os.Unsetenv("PAPERCLIP_TOKEN")
-	}()
-
-	var okResp provider.ConfigureResponse
-	validPlan := tfsdk.Plan{Schema: sResp.Schema}
-	_ = validPlan.Set(ctx, &PaperclipProviderModel{
-		Endpoint: types.StringValue("http://127.0.0.1:3100"),
-		Token:    types.StringValue("key"),
-	})
-	validConfig := tfsdk.Config{Schema: sResp.Schema, Raw: validPlan.Raw}
-	p.Configure(ctx, provider.ConfigureRequest{Config: validConfig}, &okResp)
-	if okResp.Diagnostics.HasError() {
-		t.Fatalf("unexpected configure error: %v", okResp.Diagnostics)
-	}
-
-	// Fallback env vars
-	os.Unsetenv("PAPERCLIP_API_URL")
-	os.Setenv("PAPERCLIP_ENDPOINT", "http://127.0.0.1:3100")
-	os.Unsetenv("PAPERCLIP_API_KEY")
-	os.Setenv("PAPERCLIP_BOARD_TOKEN", "board-token")
-	var envResp1 provider.ConfigureResponse
-	emptyPlan := tfsdk.Plan{Schema: sResp.Schema}
-	_ = emptyPlan.Set(ctx, &PaperclipProviderModel{})
-	emptyModelConfig := tfsdk.Config{Schema: sResp.Schema, Raw: emptyPlan.Raw}
-	p.Configure(ctx, provider.ConfigureRequest{Config: emptyModelConfig}, &envResp1)
-
-	os.Unsetenv("PAPERCLIP_ENDPOINT")
-	os.Setenv("PAPERCLIP_URL", "http://127.0.0.1:3100")
-	os.Unsetenv("PAPERCLIP_BOARD_TOKEN")
-	os.Setenv("PAPERCLIP_TOKEN", "token")
-	var envResp2 provider.ConfigureResponse
-	p.Configure(ctx, provider.ConfigureRequest{Config: emptyModelConfig}, &envResp2)
-
-	// PaperclipEndpoint & PaperclipToken attributes
-	var legacyResp provider.ConfigureResponse
-	legacyPlan := tfsdk.Plan{Schema: sResp.Schema}
-	_ = legacyPlan.Set(ctx, &PaperclipProviderModel{
-		PaperclipEndpoint: types.StringValue("http://127.0.0.1:3100"),
-		PaperclipToken:    types.StringValue("legacy-token"),
-	})
-	legacyConfig := tfsdk.Config{Schema: sResp.Schema, Raw: legacyPlan.Raw}
-	p.Configure(ctx, provider.ConfigureRequest{Config: legacyConfig}, &legacyResp)
-
-	// Default 127.0.0.1:3100 when endpoint is empty
-	os.Unsetenv("PAPERCLIP_URL")
-	var defaultResp provider.ConfigureResponse
-	p.Configure(ctx, provider.ConfigureRequest{Config: emptyModelConfig}, &defaultResp)
-}
 
 func TestEphemeralsLifecycle(t *testing.T) {
 	ctx := context.Background()

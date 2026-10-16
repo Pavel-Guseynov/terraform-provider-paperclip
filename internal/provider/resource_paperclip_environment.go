@@ -446,8 +446,12 @@ func refreshEnvironment(model *PaperclipEnvironmentModel, remote *client.Papercl
 	if remote.Metadata != nil && model.Metadata.IsNull() {
 		model.Metadata = types.StringValue(marshalEnvironmentJSON(remote.Metadata))
 	}
-	env := make(map[string]EnvBindingModel, len(remote.EnvVars))
-	for key, value := range remote.EnvVars {
+	model.Env = refreshEnvBindings(model.Env, remote.EnvVars)
+}
+
+func refreshEnvBindings(previous map[string]EnvBindingModel, remote map[string]interface{}) map[string]EnvBindingModel {
+	env := make(map[string]EnvBindingModel, len(remote))
+	for key, value := range remote {
 		if text, ok := value.(string); ok {
 			value = map[string]interface{}{"type": "plain", "value": text}
 		}
@@ -459,7 +463,7 @@ func refreshEnvironment(model *PaperclipEnvironmentModel, remote *client.Papercl
 		if version, ok := obj["version"].(float64); ok {
 			binding.Version = types.StringValue(strconv.FormatFloat(version, 'f', -1, 64))
 		}
-		if prior, exists := model.Env[key]; exists {
+		if prior, exists := previous[key]; exists {
 			if prior.Version.IsNull() && binding.Version.ValueString() == "latest" {
 				binding.Version = types.StringNull()
 			}
@@ -475,8 +479,8 @@ func refreshEnvironment(model *PaperclipEnvironmentModel, remote *client.Papercl
 		}
 		env[key] = binding
 	}
-	if len(env) == 0 && model.Env == nil {
-		return
+	if len(env) == 0 && previous == nil {
+		return nil
 	}
-	model.Env = env
+	return env
 }
