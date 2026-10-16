@@ -7,9 +7,13 @@ variable "endpoint" { type = string }
 variable "token" { default = "settings-admin" }
 variable "environment_id" { default = "11111111-1111-4111-8111-111111111111" }
 variable "general" {
+  type = any
   default = { censorUsernameInLogs = true, keyboardShortcuts = true, feedbackDataSharingPreference = "not_allowed", backupRetention = { dailyDays = 14, weeklyWeeks = 2, monthlyMonths = 3 }, executionMode = "any" }
 }
-variable "experimental" { default = { enableEnvironments = true } }
+variable "experimental" {
+  type = map(bool)
+  default = { enableEnvironments = true }
+}
 provider "paperclip" {
   endpoint = var.endpoint
   token = var.token
