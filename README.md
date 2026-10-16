@@ -91,6 +91,102 @@ partial failures retain the singleton binding and observed state and require a
 fresh reconciliation plan. No rollback or API extension is attempted. Transport
 and authorization failures preserve state and surface sanitized native errors.
 
+### Named MCP gateways and gateway client tokens
+
+`paperclip_mcp_gateway` owns a named gateway through Paperclip's existing
+board API with `tools:admin`. Required inputs are `company_id`, `name`, `slug`
+and `profile_id`. Import uses `company_id/gateway_id` and preserves that ID.
+Company identity cannot change in place; retire explicitly before declaring
+a gateway for another company. The native issue/project relationship is
+validated before writes as well as each referenced object's company.
+`default_profile_mode` defaults to `gateway_only`; the other native modes are
+`inherit_context_then_gateway` and `gateway_then_context`. `context_scope_type`
+defaults to `none`; company, project, routine, issue and agent scopes require
+`context_scope_id`. References are checked read-only at plan when known and
+again before mutation. Optional `agent_id`, `project_id`, `issue_id` and
+`approval_issue_id` supply the separate native context fields. Scope metadata
+does not replace these native runtime identity fields. Description and optional
+IDs clear to null when omitted; metadata resets to `{}`.
+
+The JSON policies `auth_config`, `header_policy`, `metadata_policy` and
+`on_demand_tools_config` accept native camelCase fields and expand omitted
+fields to native defaults. Removing a policy resets it to those defaults.
+Auth version is 1, bearer is enabled with prefix `pcgw`, default TTL 7776000
+seconds, finite-expiry and long-lived-override flags true; OAuth is fixed to
+disabled with `reservedFor = "v1_5"`. Default header policy disables caller
+passthrough and generated metadata with empty header lists and static headers;
+response forwarding enables MCP-required and safe-cache headers. Metadata
+forwarding defaults false except correlation ID. On-demand tools default off
+with fixed names `search_tools` and `run_tool`. Native policy settings are
+persisted as provided by the API; their downstream runtime enforcement belongs
+to Paperclip. JSON values enter state: use only public policy data, never
+credentials in static header values or metadata. No secret resolution is
+implemented for header policy `valueRef`.
+
+In native JSON, header options are `callerPassthrough.enabled/allowedHeaders`,
+`generatedMetadata.enabled/allowedHeaders`, `staticHeaders` entries with required
+`name` and optional nullable `valueRef`/`value`, and
+`responseHeaders.forwardMcpRequiredHeaders/forwardSafeCacheHeaders`. Header lists
+and static headers allow 50 entries, except generated metadata allows 20.
+Header names allow 1–120 HTTP token characters; public values allow 4000
+characters and trimmed references 240. Metadata flags are `forwardCompanyId`,
+`forwardGatewayId`, `forwardProjectId`, `forwardIssueId`, `forwardAgentId`,
+`forwardRunId` and `forwardCorrelationId`. Bearer `defaultTtlSeconds` accepts
+null or an integer from 1 to 31536000. OAuth's optional
+`protectedResourceMetadataPath` is nullable (240 trimmed characters);
+`dynamicClientRegistration` and `authorizationCodePkce` support only false.
+
+Creation always uses active status. Create active, then update to draft,
+active or disabled. Destroy archives the gateway using PATCH; declared
+`status = "archived"` fails before mutation because the native inventory omits
+archives and has no exact read route. Archive does not set `archivedAt`, revoke
+tokens or remove bindings. Profile changes insert a new native gateway binding
+and retain the old binding. Coordinate binding ownership explicitly; never
+declare a second owner for a gateway-created binding. One configured provider
+process rejects duplicate gateway and token lifecycle owners; independent
+states must coordinate.
+
+`ephemeral.paperclip_mcp_gateway_token` produces only `gateway_client` tokens.
+Required inputs are `company_id`, `gateway_id`, `name`, `client_label`, positive
+`generation`, finite RFC3339 `expires_at`, JSON `allowed_actions`, and
+`applying = tofu.applying`. Native actions are tools/list, tools/call,
+resources/list, resources/read, prompts/list and prompts/get. The durable
+`paperclip_mcp_gateway_token` record has the same inputs except `applying` and
+defaults `allowed_actions` to tools/list and tools/call. It stores only the token
+ID, ownership ID and non-secret configuration; import is unsupported because the native API
+cannot establish generation or delivery. Name, company and gateway form its
+immutable identity; retire it explicitly to change them. Attribute changes
+require an increased generation.
+
+Use one shared set of non-secret inputs for both declarations. Pass the
+ephemeral `.token` only into an external consumer's write-only value, bind its
+write trigger to the producing `company_id`/`gateway_id`/`name` identity and
+generation, and set the durable record's `depends_on` to that
+consumer. This dependency is the caller's delivery acknowledgement contract;
+the provider cannot inspect an external consumer's write. The external consumer
+owns secret distribution and any native owner approval; this provider never
+connects to a secret manager. Plans defer minting. An unchanged generation
+learned from durable state mints and writes nothing. Apply mints once, delivers,
+then records delivery and revokes the predecessor. Failed consumer delivery,
+private-state failures and graceful exits revoke unconfirmed mints while
+preserving the predecessor. Revocation errors are explicit and retain cleanup
+metadata; a hard crash can leave a token live until its required expiry or
+explicit native revocation. Token bytes never enter plans, state or diagnostics.
+If a mint response is lost or lacks a token ID, the native API cannot prove
+generation or delivery: inspect its token inventory and revoke the ambiguous
+mint before retrying. The provider never adopts or revokes a token by name.
+Destroy token records before archiving their gateway: archived token inventory
+cannot be refreshed, and the provider retains the record with a diagnostic
+rather than claiming absence. Native authorization or inventory errors retain
+state. The parent pure-Nix unit and real OpenTofu gates prove these contracts
+against test-owned fixtures, including failed delivery and reference validation.
+
+For the external consumer's non-secret write trigger, use
+`jsonencode({ company_id = local.company_id, gateway_id = paperclip_mcp_gateway.automation.id, name = local.token_name, generation = local.generation })`.
+Use the same locals in both token declarations and retain the consumer's native
+approval. This binds delivery to a new producer identity even if its initial
+generation equals the retired producer's generation.
+
 `paperclip_tool_profile` is the sole aggregate writer of one profile's complete
 `entries` JSON array (maximum 250). Entries use native camelCase fields:
 `selectorType` (`application`, `connection`, `catalog_entry`, `tool_name` or
