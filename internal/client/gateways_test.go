@@ -133,13 +133,18 @@ func TestGatewayIssueReferencesRejectWrongCompanyProjectAndUnreadableIdentity(t 
 
 func TestGatewayErrorsRedactNativeTokenInFreeText(t *testing.T) {
 	secret := "pcgw_11111111-1111-4111-8111-111111111111.testsecret"
-	for name, body := range map[string]string{"json": `{"error":"injected failure for ` + secret + `"}`, "text": "injected failure for " + secret} {
+	for name, body := range map[string]string{"json": `{"error":"injected failure for ` + secret + `"}`, "text": "injected failure for " + secret, "policy_prefix": `{"error":"injected failure for ` + secret + `"}`} {
 		t.Run(name, func(t *testing.T) {
 			s := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500); fmt.Fprint(w, body) }))
 			defer s.Close()
 			c, _ := NewClient(s.URL, "")
-			_, err := c.CreateGatewayToken(context.Background(), "c", "g", map[string]interface{}{})
-			if err == nil || strings.Contains(err.Error(), secret) || !strings.Contains(err.Error(), "injected failure") {
+			var err error
+			if name == "policy_prefix" {
+				_, err = c.WriteGateway(context.Background(), "c", "g", map[string]interface{}{"authConfig": map[string]interface{}{"bearer": map[string]interface{}{"tokenPrefix": "pcgw"}}})
+			} else {
+				_, err = c.CreateGatewayToken(context.Background(), "c", "g", map[string]interface{}{})
+			}
+			if err == nil || strings.Contains(err.Error(), "testsecret") || !strings.Contains(err.Error(), "injected failure") {
 				t.Fatal("native token leaked or original failure was lost")
 			}
 		})

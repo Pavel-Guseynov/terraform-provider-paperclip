@@ -892,6 +892,9 @@ func sanitizeResponseBody(body []byte, extraSecrets ...string) string {
 		result = string(body)
 	}
 
+	// Redact complete native credentials before a short public tokenPrefix in
+	// request metadata can replace their prefix and leave the secret suffix.
+	result = gatewayBearerPattern.ReplaceAllString(result, "[REDACTED]")
 	result = sensitiveRegexPattern.ReplaceAllStringFunc(result, func(m string) string {
 		lower := strings.ToLower(m)
 		if strings.HasPrefix(lower, "bearer ") {
@@ -910,7 +913,6 @@ func sanitizeResponseBody(body []byte, extraSecrets ...string) string {
 			result = strings.ReplaceAll(result, trimmed, "[REDACTED]")
 		}
 	}
-	result = gatewayBearerPattern.ReplaceAllString(result, "[REDACTED]")
 
 	if len(result) > 2048 {
 		result = result[:2048] + "..."
