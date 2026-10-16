@@ -4,6 +4,7 @@ terraform {
   }
 }
 variable "endpoint" { type = string }
+variable "company_id" { default = "comp-1" }
 variable "clear" { default = false }
 variable "trigger_kind" { default = "api" }
 variable "project_id" {
@@ -15,7 +16,7 @@ provider "paperclip" {
   token    = "board-token"
 }
 resource "paperclip_routine" "daily" {
-  company_id           = "comp-1"
+  company_id           = var.company_id
   title                = var.clear ? "Daily" : "Daily {{name}}"
   description          = var.clear ? null : "Report {{date}}"
   project_id           = var.project_id

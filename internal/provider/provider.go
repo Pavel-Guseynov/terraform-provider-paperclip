@@ -455,6 +455,7 @@ func (p *PaperclipProvider) Resources(ctx context.Context) []func() resource.Res
 		NewPaperclipGoalResource,
 		NewPaperclipRoutineResource,
 		NewPaperclipRoutineTriggerResource,
+		NewPaperclipRoutineWebhookDeliveryResource,
 		NewPaperclipBudgetPolicyResource,
 		NewPaperclipBoardKeyResource,
 		NewPaperclipAgentKeyResource,

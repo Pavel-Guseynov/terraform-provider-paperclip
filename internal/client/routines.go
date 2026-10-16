@@ -151,6 +151,12 @@ func (c *Client) RoutineWebhookDelivered(name, routineID string, generation int6
 func (c *Client) ConfirmRoutineWebhook(name, routineID, id string, generation int64) {
 	c.RecordDeliveredGeneration(name, false, routineWebhookOwner(routineID), generation, id)
 }
+func (c *Client) RoutineWebhookIdentity(id string) (string, string, bool) {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	record, ok := c.mintedKeys[id]
+	return record.name, record.routineID, ok && record.routineID != ""
+}
 
 func (c *Client) MintRoutineWebhook(ctx context.Context, routineID, name, signingMode string, replayWindow int64) (*PaperclipRoutineTrigger, string, error) {
 	var result struct {

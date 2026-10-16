@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -57,8 +56,19 @@ func TestRoutineWebhookInitialDeliveryAndUnchangedGeneration(t *testing.T) {
 	created := resource.CreateResponse{State: tfsdk.State{Schema: s}}
 	managed.Create(ctx, resource.CreateRequest{Plan: routinePlan(t, s, &m)}, &created)
 	assertRoutineOK(t, created.Diagnostics)
+	if f.triggers[0]["setupPending"] != true {
+		t.Fatal("identity adoption activated an undelivered webhook")
+	}
+	delivery := NewPaperclipRoutineWebhookDeliveryResource().(*PaperclipRoutineWebhookDeliveryResource)
+	delivery.client = managed.client
+	var deliverySchema resource.SchemaResponse
+	delivery.Schema(ctx, resource.SchemaRequest{}, &deliverySchema)
+	deliveryModel := PaperclipRoutineWebhookDeliveryModel{RoutineID: m.RoutineID, TriggerID: value.TriggerID, Generation: types.Int64Value(1)}
+	confirmed := resource.CreateResponse{State: tfsdk.State{Schema: deliverySchema.Schema}}
+	delivery.Create(ctx, resource.CreateRequest{Plan: routinePlan(t, deliverySchema.Schema, &deliveryModel)}, &confirmed)
+	assertRoutineOK(t, confirmed.Diagnostics)
 	if f.triggers[0]["setupPending"] != false {
-		t.Fatal("successful delivery was not acknowledged")
+		t.Fatal("delivery receipt did not activate confirmed setup")
 	}
 	if strings.Contains(created.State.Raw.String(), "one-time-webhook-fixture-secret") {
 		t.Fatal("secret persisted in managed state")
@@ -105,7 +115,7 @@ func TestRoutineWebhookInitialDeliveryAndUnchangedGeneration(t *testing.T) {
 }
 
 func TestRoutineWebhookFailedDeliveryDeletesOnlyUnconfirmedTrigger(t *testing.T) {
-	for _, failure := range []string{"consumer", "private unavailable", "private encoding", "result state", "delete failure", "mint failure", "reference failure", "missing pending", "already active", "activation failure", "settings mismatch"} {
+	for _, failure := range []string{"consumer", "cancelled close", "private unavailable", "result state", "delete failure", "mint failure", "reference failure", "missing pending", "already active", "activation failure", "settings mismatch"} {
 		t.Run(failure, func(t *testing.T) {
 			f := newRoutineFixture(t)
 			ctx := context.Background()
@@ -123,11 +133,6 @@ func TestRoutineWebhookFailedDeliveryDeletesOnlyUnconfirmedTrigger(t *testing.T)
 			if failure == "result state" {
 				opened.Result.Schema = ephemeralschema.Schema{}
 			}
-			if failure == "private encoding" {
-				original := jsonMarshal
-				jsonMarshal = func(interface{}) ([]byte, error) { return nil, fmt.Errorf("private encoding failure") }
-				defer func() { jsonMarshal = original }()
-			}
 			r.Open(ctx, req, &opened)
 			if failure == "mint failure" || failure == "reference failure" {
 				if !opened.Diagnostics.HasError() || len(f.triggers) != 0 {
@@ -135,7 +140,7 @@ func TestRoutineWebhookFailedDeliveryDeletesOnlyUnconfirmedTrigger(t *testing.T)
 				}
 				return
 			}
-			if failure == "private unavailable" || failure == "private encoding" || failure == "result state" {
+			if failure == "private unavailable" || failure == "result state" {
 				if !opened.Diagnostics.HasError() || len(f.triggers) != 0 {
 					t.Fatal("private state failure did not compensate")
 				}
@@ -169,7 +174,13 @@ func TestRoutineWebhookFailedDeliveryDeletesOnlyUnconfirmedTrigger(t *testing.T)
 			closeReq := ephemeral.CloseRequest{}
 			initCloseRequestPrivate(&closeReq, opened.Private)
 			closed := ephemeral.CloseResponse{}
-			r.Close(ctx, closeReq, &closed)
+			closeCtx := ctx
+			if failure == "cancelled close" {
+				cancelled, cancel := context.WithCancel(ctx)
+				cancel()
+				closeCtx = cancelled
+			}
+			r.Close(closeCtx, closeReq, &closed)
 			if failure == "delete failure" {
 				assertDiagContains(t, closed.Diagnostics, "Error deleting unconfirmed webhook", "500")
 				if len(f.triggers) != 1 {
@@ -180,7 +191,7 @@ func TestRoutineWebhookFailedDeliveryDeletesOnlyUnconfirmedTrigger(t *testing.T)
 					t.Fatal(err)
 				}
 			} else {
-				assertRoutineOK(t, closed.Diagnostics)
+				assertDiagContains(t, closed.Diagnostics, "Webhook delivery unconfirmed", "Deleted pending setup")
 			}
 			if len(f.triggers) != 0 {
 				t.Fatal("unconfirmed trigger survived failed delivery")

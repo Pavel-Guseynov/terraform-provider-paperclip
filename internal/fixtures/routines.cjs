@@ -1,5 +1,5 @@
 // Test-owned boundary fixture for the pinned routine routes. It intentionally
-// offers no delivery acknowledgement, staged credential activation or rollback.
+// offers only native setupPending acknowledgement, never staged rotation or rollback.
 const routines = {};
 const triggers = {};
 const events = [];
@@ -10,7 +10,7 @@ const templateNames = (title, description) => [...new Set([title, description].f
 module.exports = (req, res, body) => {
   const path = new URL(req.url, "http://127.0.0.1").pathname;
   const reply = (status, value) => { res.writeHead(status); res.end(value === undefined ? undefined : JSON.stringify(value)); return true; };
-  const detail = r => ({ ...r, triggers: Object.values(triggers).filter(t => t.routineId === r.id) });
+  const detail = r => ({ ...r, triggers: Object.values(triggers).filter(t => t.routineId === r.id && !t.archived) });
   if (path === "/api/test/routines" && req.method === "GET") return reply(200, { routines: Object.values(routines), triggers: Object.values(triggers), events });
   if (path === "/api/test/routines/delivery" && req.method === "POST") {
     if (body.value !== "routine-webhook-secret-must-never-appear") return reply(400, { error: "one-time webhook secret was not delivered" });
@@ -20,19 +20,21 @@ module.exports = (req, res, body) => {
   }
   if (path === "/api/test/routines/conflict" && req.method === "POST") {
     routines[body.id].title = "Concurrent edit";
+    routines[body.id].variables = [];
     routines[body.id].latestRevisionId = id();
     return reply(200, { changed: true });
   }
   if (path === "/api/test/routines/webhook" && req.method === "POST") {
-    const t = { id: "00000000-0000-4000-8000-000000009999", routineId: body.routineId, companyId: "comp-1", kind: "webhook", label: null, enabled: false, cronExpression: null, timezone: null, signingMode: "bearer", replayWindowSec: 300 };
+    const t = { id: "00000000-0000-4000-8000-000000009999", routineId: body.routineId, companyId: "comp-1", kind: "webhook", label: null, enabled: false, setupPending: false, cronExpression: null, timezone: null, signingMode: "bearer", replayWindowSec: 300 };
     triggers[t.id] = t;
+    routines[t.routineId].latestRevisionId = id();
     return reply(200, t);
   }
   if (path === "/api/companies/comp-1/routines" && req.method === "POST") {
     if (Object.keys(body).some(k => !["title", "description", "projectId", "folderId", "goalId", "parentIssueId", "assigneeAgentId", "priority", "status", "concurrencyPolicy", "catchUpPolicy", "activityGatePolicy", "activityGateScope", "variables", "env"].includes(k))) return reply(400, { error: "Unknown native routine field" });
-    if (body.status === "active" && !body.assigneeAgentId) return reply(422, { error: "Default agent required" });
     const variables = templateNames(body.title, body.description).map(name => ({ name, label: null, type: "text", defaultValue: null, required: true, options: [], ...body.variables.find(v => v.name === name) }));
     const r = { id: id(), companyId: "comp-1", ...body, variables, latestRevisionId: id() };
+    if (r.status === "active" && !r.assigneeAgentId) r.status = "paused";
     routines[r.id] = r;
     events.push({ method: req.method, path, body: clone(body) });
     return reply(201, r);
@@ -79,6 +81,7 @@ module.exports = (req, res, body) => {
       return reply(204);
     }
     if (triggerMatch[2] && req.method === "POST") {
+      if (t.kind !== "webhook") return reply(400, { error: "Only webhook triggers have secrets" });
       events.push({ method: req.method, path, body: clone(body) });
       routines[t.routineId].latestRevisionId = id();
       return reply(200, { trigger: t, secretMaterial: { webhookUrl: "https://example.test/hooks/fixture", webhookSecret: "routine-webhook-secret-must-never-appear" } });

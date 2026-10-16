@@ -2,12 +2,12 @@
 page_title: "paperclip_routine_trigger Resource - terraform-provider-paperclip"
 subcategory: ""
 description: |-
-  Manages native routine triggers. New webhooks require generation-1 ephemeral delivery to a write-only consumer before setup acknowledgement. Rotation is rejected without mutation. Imported webhooks support metadata and native deletion. Kind and owning routine cannot change in place.
+  Manages native routine triggers. New webhooks adopt pending generation 1 from the ephemeral producer before write-only consumption; paperclip_routine_webhook_delivery acknowledges delivery afterwards. Rotation is rejected. Imported webhooks support metadata and native deletion. Kind and routine ownership cannot change.
 ---
 
 # paperclip_routine_trigger (Resource)
 
-Manages native routine triggers. New webhooks require generation-1 ephemeral delivery to a write-only consumer before setup acknowledgement. Rotation is rejected without mutation. Imported webhooks support metadata and native deletion. Kind and owning routine cannot change in place.
+Manages native routine triggers. New webhooks adopt pending generation 1 from the ephemeral producer before write-only consumption; paperclip_routine_webhook_delivery acknowledges delivery afterwards. Rotation is rejected. Imported webhooks support metadata and native deletion. Kind and routine ownership cannot change.
 
 ## Example Usage
 

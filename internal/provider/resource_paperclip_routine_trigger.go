@@ -41,7 +41,7 @@ func (r *PaperclipRoutineTriggerResource) Metadata(_ context.Context, req resour
 	resp.TypeName = req.ProviderTypeName + "_routine_trigger"
 }
 func (r *PaperclipRoutineTriggerResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
-	resp.Schema = schema.Schema{Description: "Manages native routine triggers. New webhooks require generation-1 ephemeral delivery to a write-only consumer before setup acknowledgement. Rotation is rejected without mutation. Imported webhooks support metadata and native deletion. Kind and owning routine cannot change in place.", Attributes: map[string]schema.Attribute{
+	resp.Schema = schema.Schema{Description: "Manages native routine triggers. New webhooks adopt pending generation 1 from the ephemeral producer before write-only consumption; paperclip_routine_webhook_delivery acknowledges delivery afterwards. Rotation is rejected. Imported webhooks support metadata and native deletion. Kind and routine ownership cannot change.", Attributes: map[string]schema.Attribute{
 		"id":                    schema.StringAttribute{Computed: true, Description: "Native trigger identity.", PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()}},
 		"routine_id":            schema.StringAttribute{Required: true, Description: "Owning routine identity; immutable."},
 		"kind":                  schema.StringAttribute{Required: true, Description: "schedule, webhook, or api; immutable.", Validators: []validator.String{stringOneOfValidator{allowed: []string{"schedule", "webhook", "api"}}}},
@@ -122,7 +122,7 @@ func (r *PaperclipRoutineTriggerResource) ModifyPlan(ctx context.Context, req re
 	resp.Diagnostics.Append(validateRoutineTrigger(m)...)
 	if req.State.Raw.IsNull() {
 		if m.Kind.ValueString() == "webhook" && m.WebhookDeliveryName.IsNull() {
-			resp.Diagnostics.AddError("Missing initial webhook delivery", "Use the ephemeral webhook producer with webhook_delivery_name and depend on its write-only consumer before acknowledging setup.")
+			resp.Diagnostics.AddError("Missing initial webhook delivery", "Use the ephemeral webhook producer with webhook_delivery_name. Adopt its pending identity before the write-only consumer; a delivery receipt acknowledges setup afterwards.")
 		}
 	} else {
 		var previous PaperclipRoutineTriggerModel
@@ -185,7 +185,7 @@ func (r *PaperclipRoutineTriggerResource) Create(ctx context.Context, req resour
 	if m.Kind.ValueString() == "webhook" {
 		id, secret, ok := r.client.RoutineWebhookForName(m.WebhookDeliveryName.ValueString(), m.RoutineID.ValueString())
 		if !ok || secret == "" {
-			resp.Diagnostics.AddError("Missing initial webhook delivery", "Use the generation-1 ephemeral producer and depend on its successful write-only consumer before creating the managed trigger.")
+			resp.Diagnostics.AddError("Missing initial webhook delivery", "Use the generation-1 ephemeral producer before creating this pending identity for the write-only consumer.")
 			return
 		}
 		pending, readErr := r.client.GetRoutineTrigger(ctx, m.RoutineID.ValueString(), id)
@@ -201,7 +201,6 @@ func (r *PaperclipRoutineTriggerResource) Create(ctx context.Context, req resour
 			resp.Diagnostics.AddError("Pending webhook settings differ", "Match the ephemeral producer signing_mode and replay_window_sec before acknowledging its delivery.")
 			return
 		}
-		input["setupPending"] = false
 		remote, err = r.client.UpdateRoutineTrigger(ctx, id, input)
 	} else {
 		input["kind"] = m.Kind.ValueString()
@@ -213,9 +212,6 @@ func (r *PaperclipRoutineTriggerResource) Create(ctx context.Context, req resour
 	}
 	refreshRoutineTrigger(&m, remote)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
-	if !resp.Diagnostics.HasError() && m.Kind.ValueString() == "webhook" {
-		r.client.ConfirmRoutineWebhook(m.WebhookDeliveryName.ValueString(), m.RoutineID.ValueString(), m.ID.ValueString(), 1)
-	}
 }
 func (r *PaperclipRoutineTriggerResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
 	var m PaperclipRoutineTriggerModel

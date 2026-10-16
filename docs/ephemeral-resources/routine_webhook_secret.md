@@ -2,18 +2,19 @@
 page_title: "paperclip_routine_webhook_secret Ephemeral Resource - terraform-provider-paperclip"
 subcategory: ""
 description: |-
-  Produces generation 1 of a pending native webhook only during apply. Deliver secret to a write-only consumer before the managed trigger acknowledges setup. Unconfirmed triggers are deleted on Close and graceful exit. Rotation is rejected before mutation.
+  Produces generation 1 of a pending native webhook only during apply. The trigger resource first records its non-secret identity; bind the write-only consumer to that ID, then acknowledge through paperclip_routine_webhook_delivery. Unconfirmed triggers are deleted on Close and graceful exit. Rotation is rejected.
 ---
 
 # paperclip_routine_webhook_secret (Ephemeral Resource)
 
-Produces generation 1 of a pending native webhook only during apply. Deliver secret to a write-only consumer before the managed trigger acknowledges setup. Unconfirmed triggers are deleted on Close and graceful exit. Rotation is rejected before mutation.
+Produces generation 1 of a pending native webhook only during apply. The trigger resource first records its non-secret identity; bind the write-only consumer to that ID, then acknowledge through paperclip_routine_webhook_delivery. Unconfirmed triggers are deleted on Close and graceful exit. Rotation is rejected.
 
 ## Example Usage
 
 ```terraform
-# Deliver secret to a write-only consumer bound to trigger_id. The managed
-# webhook must depend on that consumer before acknowledging pending setup.
+# First adopt pending setup with a trigger resource depending on this producer.
+# Bind the write-only consumer to that persistent trigger ID, then create
+# paperclip_routine_webhook_delivery depending on the successful consumer.
 # Generation changes are rejected because native rotation is irreversible.
 ephemeral "paperclip_routine_webhook_secret" "initial" {
   routine_id = paperclip_routine.daily.id
@@ -40,4 +41,4 @@ ephemeral "paperclip_routine_webhook_secret" "initial" {
 ### Read-Only
 
 - `secret` (String, Sensitive) One-time secret for a write-only consumer; null when already delivered. Never persisted.
-- `trigger_id` (String) Producing trigger identity; bind the consumer write to this ID.
+- `trigger_id` (String) Ephemeral producing trigger identity. Use the managed trigger resource's persistent id for persistent consumer attributes.

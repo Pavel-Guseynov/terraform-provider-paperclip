@@ -22,15 +22,16 @@ import (
 )
 
 type routineFixture struct {
-	server    *httptest.Server
-	routine   map[string]interface{}
-	triggers  []map[string]interface{}
-	writes    []map[string]interface{}
-	methods   []string
-	fail      int
-	conflict  bool
-	missing   bool
-	failWrite int
+	server      *httptest.Server
+	routine     map[string]interface{}
+	triggers    []map[string]interface{}
+	writes      []map[string]interface{}
+	methods     []string
+	fail        int
+	conflict    bool
+	missing     bool
+	failWrite   int
+	ignoreSetup bool
 }
 
 func newRoutineFixture(t *testing.T) *routineFixture {
@@ -44,6 +45,11 @@ func newRoutineFixture(t *testing.T) *routineFixture {
 			return
 		}
 		if req.Method == "GET" {
+			if req.URL.Path == "/api/companies/missing" {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = fmt.Fprint(w, `{"error":"Company not found"}`)
+				return
+			}
 			if f.missing {
 				w.WriteHeader(404)
 				_, _ = fmt.Fprintf(w, `{"error":"Routine not found"}`)
@@ -115,6 +121,9 @@ func newRoutineFixture(t *testing.T) *routineFixture {
 				return
 			}
 			for key, value := range input {
+				if key == "setupPending" && f.ignoreSetup {
+					continue
+				}
 				f.triggers[0][key] = value
 			}
 			_ = json.NewEncoder(w).Encode(f.triggers[0])
@@ -138,7 +147,13 @@ func assertRoutineOK(t *testing.T, d diag.Diagnostics) {
 	}
 }
 func baseRoutineModel() PaperclipRoutineModel {
-	return PaperclipRoutineModel{CompanyID: types.StringValue("company"), Title: types.StringValue("Daily"), Status: types.StringValue("paused"), Priority: types.StringValue("medium"), ConcurrencyPolicy: types.StringValue("coalesce_if_active"), CatchUpPolicy: types.StringValue("skip_missed"), ActivityGatePolicy: types.StringValue("always"), ActivityGateScope: types.StringValue("company")}
+	return PaperclipRoutineModel{CompanyID: types.StringValue("company"), Title: types.StringValue("Daily"), Status: types.StringValue("paused"), Priority: types.StringValue("medium"), ConcurrencyPolicy: types.StringValue("coalesce_if_active"), CatchUpPolicy: types.StringValue("skip_missed"), ActivityGatePolicy: types.StringValue("always"), ActivityGateScope: types.StringValue("company"), Env: types.MapNull(routineEnvType())}
+}
+func routineEnvValue(t *testing.T, bindings map[string]EnvBindingModel) types.Map {
+	t.Helper()
+	value, d := types.MapValueFrom(context.Background(), routineEnvType(), bindings)
+	assertRoutineOK(t, d)
+	return value
 }
 
 func TestRoutineFieldsClearAndArchive(t *testing.T) {
@@ -160,7 +175,7 @@ func TestRoutineFieldsClearAndArchive(t *testing.T) {
 	m.ActivityGatePolicy = types.StringValue("require_external_activity")
 	m.ActivityGateScope = types.StringValue("project")
 	m.Variables = types.StringValue(`[{"name":"name","defaultValue":"World"}]`)
-	m.Env = map[string]EnvBindingModel{"MODE": {Type: types.StringValue("plain"), Value: types.StringValue("report")}}
+	m.Env = routineEnvValue(t, map[string]EnvBindingModel{"MODE": {Type: types.StringValue("plain"), Value: types.StringValue("report")}})
 	p := routinePlan(t, s, &m)
 	created := resource.CreateResponse{State: tfsdk.State{Schema: s}}
 	r.Create(ctx, resource.CreateRequest{Plan: p}, &created)
@@ -179,7 +194,7 @@ func TestRoutineFieldsClearAndArchive(t *testing.T) {
 	}
 	cleared := baseRoutineModel()
 	cleared.ID = got.ID
-	cleared.Env = map[string]EnvBindingModel{}
+	cleared.Env = routineEnvValue(t, map[string]EnvBindingModel{})
 	p = routinePlan(t, s, &cleared)
 	updated := resource.UpdateResponse{State: read.State}
 	r.Update(ctx, resource.UpdateRequest{Plan: p, State: read.State}, &updated)
@@ -243,10 +258,12 @@ func TestRoutineReferencesFailBeforeMutation(t *testing.T) {
 	ctx := context.Background()
 	r := NewPaperclipRoutineResource().(*PaperclipRoutineResource)
 	s := configureTestResource(t, f.server.URL, r)
-	for _, field := range []string{"project", "goal", "parent", "agent", "secret"} {
+	for _, field := range []string{"company", "project", "goal", "parent", "agent", "secret"} {
 		t.Run(field, func(t *testing.T) {
 			m := baseRoutineModel()
 			switch field {
+			case "company":
+				m.CompanyID = types.StringValue("missing")
 			case "project":
 				m.ProjectID = types.StringValue("foreign")
 			case "goal":
@@ -256,7 +273,7 @@ func TestRoutineReferencesFailBeforeMutation(t *testing.T) {
 			case "agent":
 				m.AssigneeAgentID = types.StringValue("foreign")
 			case "secret":
-				m.Env = map[string]EnvBindingModel{"TOKEN": {Type: types.StringValue("secret_ref"), SecretID: types.StringValue("foreign")}}
+				m.Env = routineEnvValue(t, map[string]EnvBindingModel{"TOKEN": {Type: types.StringValue("secret_ref"), SecretID: types.StringValue("foreign")}})
 			}
 			p := routinePlan(t, s, &m)
 			planned := resource.ModifyPlanResponse{Plan: p}
@@ -433,7 +450,7 @@ func TestRoutinePlanAndConfigValidation(t *testing.T) {
 	if d := unconfigured.references(ctx, baseRoutineModel()); d.HasError() {
 		t.Fatal(d)
 	}
-	p := routinePlan(t, s, &PaperclipRoutineModel{})
+	p := routinePlan(t, s, &PaperclipRoutineModel{Env: types.MapNull(routineEnvType())})
 	nullPlan := tfsdk.Plan{Schema: s, Raw: tftypes.NewValue(p.Raw.Type(), nil)}
 	resp := resource.ModifyPlanResponse{}
 	r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: nullPlan}, &resp)
@@ -555,7 +572,7 @@ func TestRoutineReadsAndImportPreserveIdentity(t *testing.T) {
 		}
 		imported := resource.ImportStateResponse{State: tfsdk.State{Schema: s}}
 		if _, ok := res.(*PaperclipRoutineResource); ok {
-			assertRoutineOK(t, imported.State.Set(ctx, &PaperclipRoutineModel{}))
+			assertRoutineOK(t, imported.State.Set(ctx, &PaperclipRoutineModel{Env: types.MapNull(routineEnvType())}))
 		} else {
 			assertRoutineOK(t, imported.State.Set(ctx, &PaperclipRoutineTriggerModel{}))
 		}
@@ -600,7 +617,7 @@ func TestRoutineReadsAndImportPreserveIdentity(t *testing.T) {
 func TestRoutineInvalidStateDoesNotCallAPI(t *testing.T) {
 	ctx := context.Background()
 	bad := tftypes.NewValue(tftypes.String, "invalid")
-	for _, res := range []resource.Resource{NewPaperclipRoutineResource(), NewPaperclipRoutineTriggerResource()} {
+	for _, res := range []resource.Resource{NewPaperclipRoutineResource(), NewPaperclipRoutineTriggerResource(), NewPaperclipRoutineWebhookDeliveryResource()} {
 		var s resource.SchemaResponse
 		res.Schema(ctx, resource.SchemaRequest{}, &s)
 		var meta resource.MetadataResponse
@@ -633,7 +650,8 @@ func TestRoutineInvalidStateDoesNotCallAPI(t *testing.T) {
 		}
 		del := resource.DeleteResponse{}
 		res.Delete(ctx, resource.DeleteRequest{State: tfsdk.State{Schema: s.Schema, Raw: bad}}, &del)
-		if !del.Diagnostics.HasError() {
+		_, receipt := res.(*PaperclipRoutineWebhookDeliveryResource)
+		if !del.Diagnostics.HasError() && !receipt {
 			t.Fatal("bad delete state accepted")
 		}
 		plan := resource.ModifyPlanResponse{}
@@ -645,6 +663,32 @@ func TestRoutineInvalidStateDoesNotCallAPI(t *testing.T) {
 		res.(resource.ResourceWithValidateConfig).ValidateConfig(ctx, resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: s.Schema, Raw: bad}}, &config)
 		if !config.Diagnostics.HasError() {
 			t.Fatal("bad config accepted")
+		}
+	}
+}
+
+func TestRoutineUnknownEnvironmentDefersValidationBeforeApply(t *testing.T) {
+	f := newRoutineFixture(t)
+	ctx := context.Background()
+	r := NewPaperclipRoutineResource().(*PaperclipRoutineResource)
+	s := configureTestResource(t, f.server.URL, r)
+	unknownEntry, d := types.MapValueFrom(ctx, routineEnvType(), map[string]types.Object{"TOKEN": types.ObjectUnknown(routineEnvType().AttrTypes)})
+	assertRoutineOK(t, d)
+	for _, env := range []types.Map{types.MapUnknown(routineEnvType()), unknownEntry} {
+		m := baseRoutineModel()
+		m.Env = env
+		p := routinePlan(t, s, &m)
+		config := resource.ValidateConfigResponse{}
+		r.ValidateConfig(ctx, resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: s, Raw: p.Raw}}, &config)
+		assertRoutineOK(t, config.Diagnostics)
+		plan := resource.ModifyPlanResponse{Plan: p}
+		r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: p}, &plan)
+		assertRoutineOK(t, plan.Diagnostics)
+		create := resource.CreateResponse{State: tfsdk.State{Schema: s}}
+		r.Create(ctx, resource.CreateRequest{Plan: p}, &create)
+		assertDiagContains(t, create.Diagnostics, "Unknown routine environment", "no mutation was sent")
+		if len(f.writes) != 0 {
+			t.Fatal("unknown environment mutated")
 		}
 	}
 }

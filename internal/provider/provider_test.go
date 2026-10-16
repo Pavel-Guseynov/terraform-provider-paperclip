@@ -1034,8 +1034,8 @@ func TestProviderStructure(t *testing.T) {
 	}
 
 	res := p.Resources(ctx)
-	if len(res) != 39 {
-		t.Fatalf("expected exactly 39 resources, got %d", len(res))
+	if len(res) != 40 {
+		t.Fatalf("expected exactly 40 resources, got %d", len(res))
 	}
 	for _, rFn := range res {
 		r := rFn()

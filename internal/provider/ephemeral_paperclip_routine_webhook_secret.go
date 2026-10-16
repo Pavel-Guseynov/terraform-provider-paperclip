@@ -32,14 +32,14 @@ func (r *PaperclipRoutineWebhookSecretEphemeralResource) Metadata(_ context.Cont
 	resp.TypeName = req.ProviderTypeName + "_routine_webhook_secret"
 }
 func (r *PaperclipRoutineWebhookSecretEphemeralResource) Schema(_ context.Context, _ ephemeral.SchemaRequest, resp *ephemeral.SchemaResponse) {
-	resp.Schema = schema.Schema{Description: "Produces generation 1 of a pending native webhook only during apply. Deliver secret to a write-only consumer before the managed trigger acknowledges setup. Unconfirmed triggers are deleted on Close and graceful exit. Rotation is rejected before mutation.", Attributes: map[string]schema.Attribute{
+	resp.Schema = schema.Schema{Description: "Produces generation 1 of a pending native webhook only during apply. The trigger resource first records its non-secret identity; bind the write-only consumer to that ID, then acknowledge through paperclip_routine_webhook_delivery. Unconfirmed triggers are deleted on Close and graceful exit. Rotation is rejected.", Attributes: map[string]schema.Attribute{
 		"routine_id":        schema.StringAttribute{Required: true, Description: "Owning routine identity."},
 		"name":              schema.StringAttribute{Required: true, Description: "Stable delivery identity, matching webhook_delivery_name on the managed trigger in the same provider configuration."},
 		"generation":        schema.Int64Attribute{Required: true, Description: "Generation 1 only. Native rotation cannot preserve the previous credential until acknowledgement."},
 		"applying":          schema.BoolAttribute{Required: true, Description: "Use tofu.applying; false defers all minting during plan."},
 		"signing_mode":      schema.StringAttribute{Required: true, Description: "bearer, hmac_sha256, github_hmac, or none; match managed trigger configuration."},
 		"replay_window_sec": schema.Int64Attribute{Required: true, Description: "Native replay window, 30–86400 seconds."},
-		"trigger_id":        schema.StringAttribute{Computed: true, Description: "Producing trigger identity; bind the consumer write to this ID."},
+		"trigger_id":        schema.StringAttribute{Computed: true, Description: "Ephemeral producing trigger identity. Use the managed trigger resource's persistent id for persistent consumer attributes."},
 		"secret":            schema.StringAttribute{Computed: true, Sensitive: true, Description: "One-time secret for a write-only consumer; null when already delivered. Never persisted."},
 	}}
 }
@@ -152,5 +152,9 @@ func (r *PaperclipRoutineWebhookSecretEphemeralResource) Close(ctx context.Conte
 	if resp.Diagnostics.HasError() || id == "" {
 		return
 	}
+	unconfirmed := !r.client.IsKeyDeliveryAcknowledged(id)
 	r.release(ctx, id, &resp.Diagnostics)
+	if unconfirmed && !resp.Diagnostics.HasError() {
+		resp.Diagnostics.AddError("Webhook delivery unconfirmed", "Deleted pending setup because no successful write-only consumer delivery was acknowledged by paperclip_routine_webhook_delivery.")
+	}
 }

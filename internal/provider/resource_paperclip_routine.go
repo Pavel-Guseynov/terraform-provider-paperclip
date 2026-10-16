@@ -18,27 +18,28 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 )
 
 type PaperclipRoutineResource struct{ client *client.Client }
 type PaperclipRoutineModel struct {
-	ID                 types.String               `tfsdk:"id"`
-	CompanyID          types.String               `tfsdk:"company_id"`
-	ProjectID          types.String               `tfsdk:"project_id"`
-	GoalID             types.String               `tfsdk:"goal_id"`
-	ParentIssueID      types.String               `tfsdk:"parent_issue_id"`
-	Title              types.String               `tfsdk:"title"`
-	Description        types.String               `tfsdk:"description"`
-	AssigneeAgentID    types.String               `tfsdk:"assignee_agent_id"`
-	Priority           types.String               `tfsdk:"priority"`
-	Status             types.String               `tfsdk:"status"`
-	ConcurrencyPolicy  types.String               `tfsdk:"concurrency_policy"`
-	CatchUpPolicy      types.String               `tfsdk:"catch_up_policy"`
-	ActivityGatePolicy types.String               `tfsdk:"activity_gate_policy"`
-	ActivityGateScope  types.String               `tfsdk:"activity_gate_scope"`
-	Variables          types.String               `tfsdk:"variables"`
-	Env                map[string]EnvBindingModel `tfsdk:"env"`
-	RevisionID         types.String               `tfsdk:"revision_id"`
+	ID                 types.String `tfsdk:"id"`
+	CompanyID          types.String `tfsdk:"company_id"`
+	ProjectID          types.String `tfsdk:"project_id"`
+	GoalID             types.String `tfsdk:"goal_id"`
+	ParentIssueID      types.String `tfsdk:"parent_issue_id"`
+	Title              types.String `tfsdk:"title"`
+	Description        types.String `tfsdk:"description"`
+	AssigneeAgentID    types.String `tfsdk:"assignee_agent_id"`
+	Priority           types.String `tfsdk:"priority"`
+	Status             types.String `tfsdk:"status"`
+	ConcurrencyPolicy  types.String `tfsdk:"concurrency_policy"`
+	CatchUpPolicy      types.String `tfsdk:"catch_up_policy"`
+	ActivityGatePolicy types.String `tfsdk:"activity_gate_policy"`
+	ActivityGateScope  types.String `tfsdk:"activity_gate_scope"`
+	Variables          types.String `tfsdk:"variables"`
+	Env                types.Map    `tfsdk:"env"`
+	RevisionID         types.String `tfsdk:"revision_id"`
 }
 
 func NewPaperclipRoutineResource() resource.Resource { return &PaperclipRoutineResource{} }
@@ -143,7 +144,28 @@ func routineVariables(raw, title, description string) ([]map[string]interface{},
 	return variables, nil
 }
 
-func validateRoutine(model PaperclipRoutineModel) diag.Diagnostics {
+func routineEnvType() types.ObjectType {
+	return EnvBindingMapAttribute("").GetType().(types.MapType).ElemType.(types.ObjectType)
+}
+
+func routineEnvBindings(ctx context.Context, value types.Map) (map[string]EnvBindingModel, diag.Diagnostics) {
+	var d diag.Diagnostics
+	if value.IsNull() || value.IsUnknown() {
+		return nil, d
+	}
+	bindings := map[string]EnvBindingModel{}
+	for key, item := range value.Elements() {
+		if item.IsUnknown() {
+			continue
+		}
+		var binding EnvBindingModel
+		d.Append(item.(types.Object).As(ctx, &binding, basetypes.ObjectAsOptions{})...)
+		bindings[key] = binding
+	}
+	return bindings, d
+}
+
+func validateRoutine(ctx context.Context, model PaperclipRoutineModel) diag.Diagnostics {
 	var d diag.Diagnostics
 	if !model.Title.IsUnknown() && (strings.TrimSpace(model.Title.ValueString()) != model.Title.ValueString() || len([]rune(model.Title.ValueString())) < 1 || len([]rune(model.Title.ValueString())) > 200) {
 		d.AddAttributeError(path.Root("title"), "Invalid routine title", "Use 1–200 characters without surrounding whitespace.")
@@ -156,14 +178,16 @@ func validateRoutine(model PaperclipRoutineModel) diag.Diagnostics {
 			d.AddAttributeError(path.Root("variables"), "Invalid routine variables", err.Error())
 		}
 	}
-	d.Append(ValidateEnvBindingsMapPlan(path.Root("env"), model.Env, "routine")...)
+	bindings, envDiags := routineEnvBindings(ctx, model.Env)
+	d.Append(envDiags...)
+	d.Append(ValidateEnvBindingsMapPlan(path.Root("env"), bindings, "routine")...)
 	return d
 }
 func (r *PaperclipRoutineResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
 	var m PaperclipRoutineModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &m)...)
 	if !resp.Diagnostics.HasError() {
-		resp.Diagnostics.Append(validateRoutine(m)...)
+		resp.Diagnostics.Append(validateRoutine(ctx, m)...)
 	}
 }
 
@@ -173,6 +197,10 @@ func (r *PaperclipRoutineResource) references(ctx context.Context, m PaperclipRo
 		return d
 	}
 	cid := m.CompanyID.ValueString()
+	if _, err := r.client.GetCompany(ctx, cid); err != nil {
+		d.AddAttributeError(path.Root("company_id"), "Invalid routine reference", err.Error())
+		return d
+	}
 	for key, value := range map[string]types.String{"project_id": m.ProjectID, "goal_id": m.GoalID, "parent_issue_id": m.ParentIssueID, "assignee_agent_id": m.AssigneeAgentID} {
 		if value.IsNull() || value.IsUnknown() {
 			continue
@@ -211,7 +239,9 @@ func (r *PaperclipRoutineResource) references(ctx context.Context, m PaperclipRo
 			d.AddAttributeError(path.Root(key), "Invalid routine reference", err.Error())
 		}
 	}
-	d.Append(ValidateEnvBindingsApply(ctx, r.client, cid, m.Env)...)
+	bindings, envDiags := routineEnvBindings(ctx, m.Env)
+	d.Append(envDiags...)
+	d.Append(ValidateEnvBindingsApply(ctx, r.client, cid, bindings)...)
 	return d
 }
 func (r *PaperclipRoutineResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
@@ -230,14 +260,14 @@ func (r *PaperclipRoutineResource) ModifyPlan(ctx context.Context, req resource.
 			resp.Diagnostics.AddAttributeError(path.Root("company_id"), "Unsupported routine transition", "The native API cannot move a routine between companies; retain company_id without replacing its identity.")
 		}
 	}
-	resp.Diagnostics.Append(validateRoutine(m)...)
+	resp.Diagnostics.Append(validateRoutine(ctx, m)...)
 	resp.Diagnostics.Append(r.references(ctx, m)...)
 }
-func routineInput(m PaperclipRoutineModel) map[string]interface{} {
+func routineInput(m PaperclipRoutineModel, bindings map[string]EnvBindingModel) map[string]interface{} {
 	variables, _ := routineVariables(m.Variables.ValueString(), m.Title.ValueString(), m.Description.ValueString())
-	return map[string]interface{}{"title": m.Title.ValueString(), "description": m.Description.ValueStringPointer(), "projectId": m.ProjectID.ValueStringPointer(), "goalId": m.GoalID.ValueStringPointer(), "parentIssueId": m.ParentIssueID.ValueStringPointer(), "assigneeAgentId": m.AssigneeAgentID.ValueStringPointer(), "priority": m.Priority.ValueString(), "status": m.Status.ValueString(), "concurrencyPolicy": m.ConcurrencyPolicy.ValueString(), "catchUpPolicy": m.CatchUpPolicy.ValueString(), "activityGatePolicy": m.ActivityGatePolicy.ValueString(), "activityGateScope": m.ActivityGateScope.ValueString(), "variables": variables, "env": EnvBindingsMapToAPI(m.Env)}
+	return map[string]interface{}{"title": m.Title.ValueString(), "description": m.Description.ValueStringPointer(), "projectId": m.ProjectID.ValueStringPointer(), "goalId": m.GoalID.ValueStringPointer(), "parentIssueId": m.ParentIssueID.ValueStringPointer(), "assigneeAgentId": m.AssigneeAgentID.ValueStringPointer(), "priority": m.Priority.ValueString(), "status": m.Status.ValueString(), "concurrencyPolicy": m.ConcurrencyPolicy.ValueString(), "catchUpPolicy": m.CatchUpPolicy.ValueString(), "activityGatePolicy": m.ActivityGatePolicy.ValueString(), "activityGateScope": m.ActivityGateScope.ValueString(), "variables": variables, "env": EnvBindingsMapToAPI(bindings)}
 }
-func refreshRoutine(m *PaperclipRoutineModel, remote *client.PaperclipRoutine) {
+func refreshRoutine(ctx context.Context, m *PaperclipRoutineModel, remote *client.PaperclipRoutine) {
 	m.ID = types.StringValue(remote.ID)
 	m.CompanyID = types.StringValue(remote.CompanyID)
 	m.RevisionID = types.StringValue(remote.LatestRevisionID)
@@ -257,15 +287,27 @@ func refreshRoutine(m *PaperclipRoutineModel, remote *client.PaperclipRoutine) {
 	if err != nil || !semanticJSONEqual(marshalEnvironmentJSON(variables), marshalEnvironmentJSON(remote.Variables)) {
 		m.Variables = types.StringValue(marshalEnvironmentJSON(remote.Variables))
 	}
-	m.Env = refreshEnvBindings(m.Env, remote.Env)
+	bindings, _ := routineEnvBindings(ctx, m.Env)
+	m.Env, _ = types.MapValueFrom(ctx, routineEnvType(), refreshEnvBindings(bindings, remote.Env))
 }
 func (r *PaperclipRoutineResource) save(ctx context.Context, m *PaperclipRoutineModel, revision string, d *diag.Diagnostics) {
-	d.Append(validateRoutine(*m)...)
+	d.Append(validateRoutine(ctx, *m)...)
 	d.Append(r.references(ctx, *m)...)
 	if d.HasError() {
 		return
 	}
-	input := routineInput(*m)
+	if m.Env.IsUnknown() {
+		d.AddError("Unknown routine environment", "Resolve env before applying; no mutation was sent.")
+		return
+	}
+	for _, value := range m.Env.Elements() {
+		if value.IsUnknown() {
+			d.AddError("Unknown routine environment binding", "Resolve every env binding before applying; no mutation was sent.")
+			return
+		}
+	}
+	bindings, _ := routineEnvBindings(ctx, m.Env)
+	input := routineInput(*m, bindings)
 	var remote *client.PaperclipRoutine
 	var err error
 	if m.ID.ValueString() == "" {
@@ -278,7 +320,7 @@ func (r *PaperclipRoutineResource) save(ctx context.Context, m *PaperclipRoutine
 		d.AddError("Error saving Paperclip routine", err.Error())
 		return
 	}
-	refreshRoutine(m, remote)
+	refreshRoutine(ctx, m, remote)
 }
 func (r *PaperclipRoutineResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var m PaperclipRoutineModel
@@ -323,7 +365,7 @@ func (r *PaperclipRoutineResource) Read(ctx context.Context, req resource.ReadRe
 		resp.Diagnostics.AddError("Error reading Paperclip routine", err.Error())
 		return
 	}
-	refreshRoutine(&m, remote)
+	refreshRoutine(ctx, &m, remote)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
 func (r *PaperclipRoutineResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {

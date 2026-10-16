@@ -22,7 +22,7 @@ ephemeral "paperclip_routine_webhook_secret" "initial" {
   replay_window_sec = 300
 }
 resource "testconsumer_secret" "delivery" {
-  name          = ephemeral.paperclip_routine_webhook_secret.initial.trigger_id
+  name          = paperclip_routine_trigger.webhook.id
   value_wo      = ephemeral.paperclip_routine_webhook_secret.initial.secret
   endpoint      = "${var.endpoint}/api/test/routines/delivery"
   rotation      = tostring(var.generation)
@@ -35,5 +35,11 @@ resource "paperclip_routine_trigger" "webhook" {
   webhook_generation    = var.generation
   signing_mode          = "hmac_sha256"
   replay_window_sec     = 300
-  depends_on            = [testconsumer_secret.delivery]
+  depends_on            = [ephemeral.paperclip_routine_webhook_secret.initial]
+}
+resource "paperclip_routine_webhook_delivery" "confirmed" {
+  routine_id = var.routine_id
+  trigger_id = paperclip_routine_trigger.webhook.id
+  generation = var.generation
+  depends_on = [testconsumer_secret.delivery]
 }

@@ -13,6 +13,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
@@ -127,6 +128,7 @@ func (r *TestConsumerSecretResource) Schema(ctx context.Context, req resource.Sc
 func (r *TestConsumerSecretResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan TestConsumerSecretResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("value_wo"), &plan.ValueWO)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -137,6 +139,7 @@ func (r *TestConsumerSecretResource) Create(ctx context.Context, req resource.Cr
 	}
 
 	plan.ID = types.StringValue("tc-" + plan.Name.ValueString())
+	plan.ValueWO = types.StringNull()
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -156,6 +159,7 @@ func (r *TestConsumerSecretResource) Read(ctx context.Context, req resource.Read
 func (r *TestConsumerSecretResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan TestConsumerSecretResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("value_wo"), &plan.ValueWO)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -166,6 +170,7 @@ func (r *TestConsumerSecretResource) Update(ctx context.Context, req resource.Up
 	}
 
 	plan.ID = types.StringValue("tc-" + plan.Name.ValueString())
+	plan.ValueWO = types.StringNull()
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 

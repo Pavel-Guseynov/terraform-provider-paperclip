@@ -91,11 +91,17 @@ the owning routine detail, which is the native trigger inventory authority.
 
 `ephemeral.paperclip_routine_webhook_secret` creates native pending setup for
 generation 1 only during apply. Configure routine_id, name, generation = 1,
-applying = tofu.applying, signing_mode and replay_window_sec. Bind the Lock
-write-only consumer to the returned trigger_id and generation. The managed
-webhook must use that name as webhook_delivery_name, webhook_generation = 1,
-matching signing settings and depends_on the successful consumer. Its creation
-then clears setupPending and acknowledges delivery. Failed delivery or private
+applying = tofu.applying, signing_mode and replay_window_sec. The managed
+trigger uses matching webhook_delivery_name, webhook_generation = 1 and signing
+settings, and depends_on the ephemeral producer. It records pending setup's
+non-secret native ID before consumption. Bind the Lock write-only consumer to
+that persistent trigger resource's id and generation, never an ephemeral ID in
+a persistent attribute. `paperclip_routine_webhook_delivery` then takes
+routine_id, that trigger_id and generation = 1, and depends_on the successful
+consumer. Only this receipt clears setupPending and acknowledges delivery.
+It has no independent native object; destroy relinquishes acknowledgement,
+while the managed trigger's native deletion owns revocation. Unconfirmed Close
+fails after cleanup so undelivered setup cannot claim convergence. Failed delivery or private
 state writes cause native trigger deletion; graceful exit uses the same
 credential cleanup registry as keys. An unchanged generation returns its
 existing ID and null secret, without rewriting the consumer. An import without

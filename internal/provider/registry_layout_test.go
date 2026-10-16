@@ -27,6 +27,16 @@ type registryManifest struct {
 }
 
 var resourceExamples = map[string]string{
+	"paperclip_routine_webhook_delivery": `# This receipt must depend on the successful write-only Lock consumer.
+# Bind that consumer to paperclip_routine_trigger.webhook.id, and deliver
+# ephemeral.paperclip_routine_webhook_secret.initial.secret to its write-only input.
+resource "paperclip_routine_webhook_delivery" "confirmed" {
+  routine_id = paperclip_routine.daily.id
+  trigger_id = paperclip_routine_trigger.webhook.id
+  generation = 1
+  # depends_on = [your_write_only_consumer.resource_name]
+}
+`,
 	"paperclip_routine": `resource "paperclip_routine" "daily" {
   company_id        = paperclip_company.acme.id
   title             = "Daily status {{date}}"
@@ -416,8 +426,9 @@ var dataSourceExamples = map[string]string{
 }
 
 var ephemeralExamples = map[string]string{
-	"paperclip_routine_webhook_secret": `# Deliver secret to a write-only consumer bound to trigger_id. The managed
-# webhook must depend on that consumer before acknowledging pending setup.
+	"paperclip_routine_webhook_secret": `# First adopt pending setup with a trigger resource depending on this producer.
+# Bind the write-only consumer to that persistent trigger ID, then create
+# paperclip_routine_webhook_delivery depending on the successful consumer.
 # Generation changes are rejected because native rotation is irreversible.
 ephemeral "paperclip_routine_webhook_secret" "initial" {
   routine_id = paperclip_routine.daily.id
