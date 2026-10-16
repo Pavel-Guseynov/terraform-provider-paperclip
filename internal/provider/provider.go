@@ -425,6 +425,7 @@ func (p *PaperclipProvider) EphemeralResources(ctx context.Context) []func() eph
 		NewPaperclipBoardKeyEphemeralResource,
 		NewPaperclipAgentKeyEphemeralResource,
 		NewPaperclipRoutineWebhookSecretEphemeralResource,
+		NewPaperclipMCPGatewayTokenEphemeralResource,
 	}
 }
 
@@ -446,6 +447,8 @@ func (p *PaperclipProvider) Resources(ctx context.Context) []func() resource.Res
 		NewPaperclipPolicyResource,
 		NewPaperclipToolProfileResource,
 		NewPaperclipToolProfileBindingResource,
+		NewPaperclipMCPGatewayResource,
+		NewPaperclipMCPGatewayTokenResource,
 		NewPaperclipStdioTemplateResource,
 		NewPaperclipConnectionInstallResource,
 		NewPaperclipConnectionGrantsResource,

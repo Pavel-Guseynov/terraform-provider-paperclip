@@ -816,6 +816,7 @@ func (c *Client) paperclipRequestWithToken(ctx context.Context, method, path str
 
 var sensitiveKeyPattern = regexp.MustCompile(`(?i)^(value|token|secret|password|boardapitoken|board_token|apikey|api_key|credential|credentials|authorization|privatekey|private_key)$`)
 var sensitiveRegexPattern = regexp.MustCompile(`(?i)(bearer\s+)[A-Za-z0-9\-_\.]+|((?:token|secret|password|key|value)\s*[:=]\s*["']?)[^"'\s,;]+(["']?)`)
+var gatewayBearerPattern = regexp.MustCompile(`\bpcgw_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
 
 func isSensitiveKey(key string) bool {
 	if sensitiveKeyPattern.MatchString(key) {
@@ -891,6 +892,9 @@ func sanitizeResponseBody(body []byte, extraSecrets ...string) string {
 		result = string(body)
 	}
 
+	// Redact complete native credentials before a short public tokenPrefix in
+	// request metadata can replace their prefix and leave the secret suffix.
+	result = gatewayBearerPattern.ReplaceAllString(result, "[REDACTED]")
 	result = sensitiveRegexPattern.ReplaceAllStringFunc(result, func(m string) string {
 		lower := strings.ToLower(m)
 		if strings.HasPrefix(lower, "bearer ") {
@@ -1372,7 +1376,9 @@ func (c *Client) CleanupUnconfirmedKeys(ctx context.Context) error {
 	var errs []error
 	for _, rec := range unconfirmed {
 		var err error
-		if rec.isBoard {
+		if rec.gatewayID != "" {
+			err = c.RevokeGatewayToken(ctx, rec.companyID, rec.keyID)
+		} else if rec.isBoard {
 			err = c.RevokeBoardKey(ctx, rec.keyID)
 		} else if rec.routineID != "" {
 			err = c.DeleteRoutineTrigger(ctx, rec.keyID)
@@ -1422,20 +1428,12 @@ func (c *Client) ClearMintedToken(keyID string) {
 			c.mintedKeys[keyID] = rec
 			return
 		}
-		owner := rec.agentID
-		if rec.routineID != "" {
-			owner = routineWebhookOwner(rec.routineID)
-		}
-		lk := lookupKey(rec.name, rec.isBoard, owner)
+		lk := rec.lookupKey()
 		delete(c.mintedKeys, keyID)
 		if c.mintedKeysByName[lk] == keyID {
 			delete(c.mintedKeysByName, lk)
 			for otherID, otherRec := range c.mintedKeys {
-				otherOwner := otherRec.agentID
-				if otherRec.routineID != "" {
-					otherOwner = routineWebhookOwner(otherRec.routineID)
-				}
-				if lookupKey(otherRec.name, otherRec.isBoard, otherOwner) == lk {
+				if otherRec.lookupKey() == lk {
 					c.mintedKeysByName[lk] = otherID
 					break
 				}
