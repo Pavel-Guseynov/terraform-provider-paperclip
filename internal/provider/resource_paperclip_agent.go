@@ -155,7 +155,7 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 				Computed:    true,
 			},
 			"runtime_config": schema.StringAttribute{
-				Description: "Optional JSON runtime object. Declared heartbeat settings are type-checked; native defaults and undeclared runtime fields are preserved. The native API cannot clear an existing aiConnection binding: retain it or declare a replacement.",
+				Description: "Optional JSON runtime object. Declared heartbeat settings are type-checked, including sessionCompaction: an object with optional boolean enabled and non-negative integer maxSessionRuns, maxRawInputTokens, and maxSessionAgeHours (zero disables that threshold). Omitted policy fields use native adapter defaults; unknown heartbeat and sessionCompaction keys are rejected. Native defaults and undeclared runtime fields are preserved. The native API cannot clear an existing aiConnection binding: retain it or declare a replacement.",
 				Optional:    true,
 				Validators: []validator.String{
 					JSONAttributeValidator(),

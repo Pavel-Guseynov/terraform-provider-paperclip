@@ -118,6 +118,14 @@ and consumer/backend selection are outside provider delivery.
 
 ## Integration contract
 
+`paperclip_agent.runtime_config.heartbeat.sessionCompaction` accepts the native
+policy object. Its optional fields are boolean `enabled` and nonnegative integer
+`maxSessionRuns`, `maxRawInputTokens`, and `maxSessionAgeHours`. Zero disables a
+threshold; omitted fields use native adapter defaults. Unknown heartbeat or
+policy keys, non-object policies, null fields, wrong types, and negative or
+fractional thresholds fail validation before mutation with field-naming
+diagnostics. See the [agent resource reference](docs/resources/agent.md).
+
 `paperclip_instance_settings` owns only declared instance keys. Its optional
 `default_environment_id` accepts an active environment UUID; empty string clears
 the default and omission releases ownership. `general` is a partial JSON object

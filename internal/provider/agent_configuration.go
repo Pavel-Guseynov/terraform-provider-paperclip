@@ -100,6 +100,10 @@ func validateHeartbeat(value interface{}) error {
 	for _, key := range keys {
 		value := heartbeat[key]
 		switch key {
+		case "sessionCompaction":
+			if err := validateSessionCompaction(value); err != nil {
+				return err
+			}
 		case "enabled", "wakeOnDemand", "wakeOnAssignment", "wakeOnOnDemand", "wakeOnAutomation", "skipTimerWhenNoActionableWork", "requireActionableTimerWork", "issueOnlyTimer":
 			if _, ok := value.(bool); !ok {
 				return fmt.Errorf("heartbeat.%s must be a boolean", key)
@@ -121,6 +125,34 @@ func validateHeartbeat(value interface{}) error {
 			}
 		default:
 			return fmt.Errorf("heartbeat.%s is not a supported native heartbeat setting", key)
+		}
+	}
+	return nil
+}
+
+func validateSessionCompaction(value interface{}) error {
+	policy, ok := value.(map[string]interface{})
+	if !ok {
+		return fmt.Errorf("heartbeat.sessionCompaction must be an object")
+	}
+	keys := make([]string, 0, len(policy))
+	for key := range policy {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		value := policy[key]
+		switch key {
+		case "enabled":
+			if _, ok := value.(bool); !ok {
+				return fmt.Errorf("heartbeat.sessionCompaction.%s must be a boolean", key)
+			}
+		case "maxSessionRuns", "maxRawInputTokens", "maxSessionAgeHours":
+			if n, ok := value.(float64); !ok || n < 0 || n != math.Trunc(n) {
+				return fmt.Errorf("heartbeat.sessionCompaction.%s must be a non-negative integer", key)
+			}
+		default:
+			return fmt.Errorf("heartbeat.sessionCompaction.%s is not a supported native session compaction setting", key)
 		}
 	}
 	return nil

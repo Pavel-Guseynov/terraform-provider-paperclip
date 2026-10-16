@@ -51,7 +51,7 @@ resource "paperclip_agent" "engineer" {
 - `reports_to` (String) Optional manager agent ID within the same company.
 - `retirement` (String) Administrative retirement strategy on destroy ('delete' for hard deletion, 'terminate' for key revocation and termination). Defaults to 'delete'.
 - `role` (String) Agent role (e.g. engineer, committer, reviewer).
-- `runtime_config` (String) Optional JSON runtime object. Declared heartbeat settings are type-checked; native defaults and undeclared runtime fields are preserved. The native API cannot clear an existing aiConnection binding: retain it or declare a replacement.
+- `runtime_config` (String) Optional JSON runtime object. Declared heartbeat settings are type-checked, including sessionCompaction: an object with optional boolean enabled and non-negative integer maxSessionRuns, maxRawInputTokens, and maxSessionAgeHours (zero disables that threshold). Omitted policy fields use native adapter defaults; unknown heartbeat and sessionCompaction keys are rejected. Native defaults and undeclared runtime fields are preserved. The native API cannot clear an existing aiConnection binding: retain it or declare a replacement.
 - `title` (String) Optional human-readable title.
 - `trust_preset` (String) Optional trust policy preset ('standard' or 'low_trust_review').
 

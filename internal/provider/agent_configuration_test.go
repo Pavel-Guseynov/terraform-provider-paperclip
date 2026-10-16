@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -82,6 +84,72 @@ func TestAgentHeartbeatTypes(t *testing.T) {
 				}
 			} else if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("want %q got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestAgentSessionCompactionPlan(t *testing.T) {
+	type testCase struct{ name, heartbeat, diagnostic string }
+	cases := []testCase{
+		{"native thresholds", `{"maxConcurrentRuns":1,"sessionCompaction":{"enabled":true,"maxSessionRuns":30,"maxRawInputTokens":15000000,"maxSessionAgeHours":24}}`, ""},
+		{"adapter defaults", `{"sessionCompaction":{}}`, ""},
+		{"disabled thresholds", `{"sessionCompaction":{"enabled":false,"maxSessionRuns":0,"maxRawInputTokens":0,"maxSessionAgeHours":0}}`, ""},
+		{"partial override", `{"sessionCompaction":{"maxSessionRuns":30}}`, ""},
+		{"unknown heartbeat key", `{"sessionCompaction":{},"typo":true}`, "heartbeat.typo is not a supported native heartbeat setting"},
+		{"unknown compaction key", `{"sessionCompaction":{"typo":1}}`, "heartbeat.sessionCompaction.typo is not a supported native session compaction setting"},
+	}
+	for _, value := range []string{`null`, `false`, `1`, `"policy"`, `[]`} {
+		cases = append(cases, testCase{
+			"non-object policy " + value, `{"sessionCompaction":` + value + `}`, "heartbeat.sessionCompaction must be an object",
+		})
+	}
+	for _, field := range []string{"enabled", "maxSessionRuns", "maxRawInputTokens", "maxSessionAgeHours"} {
+		invalid := []string{`null`, `"1"`, `{}`, `[]`}
+		wantType := "a boolean"
+		if field == "enabled" {
+			invalid = append(invalid, `1`)
+		} else {
+			invalid = append(invalid, `true`, `-1`, `0.5`)
+			wantType = "a non-negative integer"
+		}
+		for _, value := range invalid {
+			cases = append(cases, testCase{
+				field + " rejects " + value,
+				fmt.Sprintf(`{"sessionCompaction":{%q:%s}}`, field, value),
+				fmt.Sprintf("heartbeat.sessionCompaction.%s must be %s", field, wantType),
+			})
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			r := NewPaperclipAgentResource().(*PaperclipAgentResource)
+			var sr resource.SchemaResponse
+			r.Schema(ctx, resource.SchemaRequest{}, &sr)
+			runtime := types.StringValue(`{"heartbeat":` + tc.heartbeat + `}`)
+			plan := tfsdk.Plan{Schema: sr.Schema}
+			if d := plan.Set(ctx, &PaperclipAgentResourceModel{AdapterType: types.StringValue("codex_local"), RuntimeConfig: runtime}); d.HasError() {
+				t.Fatal(d)
+			}
+			resp := resource.ModifyPlanResponse{Plan: plan}
+			r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: plan, State: tfsdk.State{Schema: sr.Schema, Raw: tftypes.NewValue(sr.Schema.Type().TerraformType(ctx), nil)}}, &resp)
+			if tc.diagnostic != "" {
+				want := diag.Diagnostics{diag.NewAttributeErrorDiagnostic(path.Root("runtime_config"), "Invalid heartbeat configuration", tc.diagnostic)}
+				if !reflect.DeepEqual(resp.Diagnostics, want) {
+					t.Fatalf("want %v, got %v", want, resp.Diagnostics)
+				}
+				return
+			}
+			if resp.Diagnostics.HasError() {
+				t.Fatal(resp.Diagnostics)
+			}
+			var planned types.String
+			if d := resp.Plan.GetAttribute(ctx, path.Root("runtime_config"), &planned); d.HasError() {
+				t.Fatal(d)
+			}
+			if !planned.Equal(runtime) {
+				t.Fatalf("runtime config changed: want %s, got %s", runtime, planned)
 			}
 		})
 	}
