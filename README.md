@@ -28,10 +28,19 @@ provider "paperclip" {
 
 | Attribute | Type | Required | Default / Environment Fallback | Description |
 |---|---|---|---|---|
-| `endpoint` | String | Optional | `PAPERCLIP_API_URL` -> `PAPERCLIP_ENDPOINT` -> `PAPERCLIP_URL` -> `"http://127.0.0.1:3100"` | HTTP base URL of the Paperclip board API. |
-| `token` | String (Sensitive) | Optional | `PAPERCLIP_API_KEY` -> `PAPERCLIP_BOARD_TOKEN` -> `PAPERCLIP_TOKEN` | Bearer token or API key for authenticating with Paperclip. |
-| `paperclip_endpoint` | String | Optional | Alias for `endpoint` | Backward-compatible alias for `endpoint`. |
-| `paperclip_token` | String (Sensitive) | Optional | Alias for `token` | Backward-compatible alias for `token`. |
+| `endpoint` | String | Optional | `PAPERCLIP_API_URL`, then `"http://127.0.0.1:3100"` | Absolute HTTP(S) base URL of the Paperclip board API, without URL credentials, query or fragment. |
+| `token` | String (Sensitive) | Optional | `PAPERCLIP_API_KEY`, then unauthenticated native access | Bearer token for authenticating with Paperclip. |
+
+Explicit values take precedence over environment variables. Only omitted or null
+attributes consult the environment. An explicitly empty token disables bearer
+authentication; an explicitly empty endpoint is invalid. Unknown values produce
+attribute errors rather than selecting another endpoint or identity. URL errors
+never reproduce endpoint credentials or token values.
+
+The provider has no compatibility configuration/environment aliases. Update old
+provider blocks to `endpoint` and `token` and use only `PAPERCLIP_API_URL` and
+`PAPERCLIP_API_KEY` for environment configuration. Terraform's native provider
+`alias` meta-argument still selects multiple independent provider configurations.
 
 ### Filesystem Mirror Configuration (`.tofurc`)
 

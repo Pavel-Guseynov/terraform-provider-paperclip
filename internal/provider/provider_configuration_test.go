@@ -137,6 +137,17 @@ func TestProviderConfigurationRejectsExplicitEmptyEndpoint(t *testing.T) {
 	}
 }
 
+func TestProviderConfigurationRejectsInvalidEndpointWithoutDisclosingInput(t *testing.T) {
+	resp := configureProviderForTest(t, PaperclipProviderModel{Endpoint: types.StringValue("http://user:fixture-secret@example.invalid/\n"), Token: types.StringValue("fixture-token")})
+	if resp.Diagnostics.ErrorsCount() != 1 || resp.ResourceData != nil || resp.DataSourceData != nil || resp.EphemeralResourceData != nil {
+		t.Fatal("invalid provider endpoint selected a client")
+	}
+	diagnostic := resp.Diagnostics[0]
+	if diagnostic.Summary() != "Invalid Paperclip Client Configuration" || !strings.Contains(diagnostic.Detail(), "absolute HTTP(S) URL") || strings.Contains(diagnostic.Detail(), "fixture-secret") || strings.Contains(diagnostic.Detail(), "fixture-token") {
+		t.Fatal("invalid endpoint diagnostic is not actionable and secret-safe")
+	}
+}
+
 func TestProviderConfigurationRejectsMalformedValue(t *testing.T) {
 	p := New("test")()
 	var schema provider.SchemaResponse

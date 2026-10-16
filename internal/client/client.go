@@ -84,9 +84,12 @@ func NewClient(endpoint, token string) (*Client, error) {
 		endpoint = "http://127.0.0.1:3100"
 	}
 	endpoint = strings.TrimRight(endpoint, "/")
-	if _, err := url.ParseRequestURI(endpoint); err != nil {
-		return nil, fmt.Errorf("invalid endpoint URL: %w", err)
+	parsed, err := url.ParseRequestURI(endpoint)
+	if err != nil || (!strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https")) || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || strings.Contains(endpoint, "#") {
+		return nil, errors.New("endpoint must be an absolute HTTP(S) URL with a host and without user information, a query, or a fragment")
 	}
+	parsed.Scheme = strings.ToLower(parsed.Scheme)
+	endpoint = parsed.String()
 	c := &Client{
 		Endpoint: endpoint,
 		Token:    token,

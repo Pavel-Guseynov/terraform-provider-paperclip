@@ -1032,12 +1032,6 @@ func TestProviderStructure(t *testing.T) {
 	if _, ok := schemaResp.Schema.Attributes["token"]; !ok {
 		t.Fatalf("missing token attribute in schema")
 	}
-	if _, ok := schemaResp.Schema.Attributes["paperclip_endpoint"]; !ok {
-		t.Fatalf("missing paperclip_endpoint attribute in schema")
-	}
-	if _, ok := schemaResp.Schema.Attributes["paperclip_token"]; !ok {
-		t.Fatalf("missing paperclip_token attribute in schema")
-	}
 
 	res := p.Resources(ctx)
 	if len(res) != 37 {

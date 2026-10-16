@@ -68,10 +68,8 @@ type PaperclipProvider struct {
 }
 
 type PaperclipProviderModel struct {
-	Endpoint          types.String `tfsdk:"endpoint"`
-	Token             types.String `tfsdk:"token"`
-	PaperclipEndpoint types.String `tfsdk:"paperclip_endpoint"`
-	PaperclipToken    types.String `tfsdk:"paperclip_token"`
+	Endpoint types.String `tfsdk:"endpoint"`
+	Token    types.String `tfsdk:"token"`
 }
 
 // stringOrNull resolves an API string into a known attribute value: empty API
@@ -122,20 +120,11 @@ func (p *PaperclipProvider) Schema(ctx context.Context, req provider.SchemaReque
 		Description: "OpenTofu and Terraform provider for Paperclip desired-state reconciliation.",
 		Attributes: map[string]schema.Attribute{
 			"endpoint": schema.StringAttribute{
-				Description: "The HTTP endpoint of the Paperclip board API (defaults to http://127.0.0.1:3100, or PAPERCLIP_API_URL / PAPERCLIP_ENDPOINT env var).",
+				Description: "Absolute HTTP(S) base URL of the Paperclip board API, without credentials, query or fragment. When omitted, uses PAPERCLIP_API_URL or defaults to http://127.0.0.1:3100. An explicitly empty or unknown value is invalid.",
 				Optional:    true,
 			},
 			"token": schema.StringAttribute{
-				Description: "The API bearer token for Paperclip (or PAPERCLIP_API_KEY / PAPERCLIP_BOARD_TOKEN env var).",
-				Optional:    true,
-				Sensitive:   true,
-			},
-			"paperclip_endpoint": schema.StringAttribute{
-				Description: "Optional alias for endpoint for backward compatibility with the legacy mixed provider configuration.",
-				Optional:    true,
-			},
-			"paperclip_token": schema.StringAttribute{
-				Description: "Optional alias for token for backward compatibility with the legacy mixed provider configuration.",
+				Description: "Sensitive Paperclip bearer token. When omitted, uses PAPERCLIP_API_KEY. An explicitly empty value selects unauthenticated native access; an unknown value is invalid.",
 				Optional:    true,
 				Sensitive:   true,
 			},
@@ -151,34 +140,26 @@ func (p *PaperclipProvider) Configure(ctx context.Context, req provider.Configur
 		return
 	}
 
-	endpoint := os.Getenv("PAPERCLIP_API_URL")
-	if endpoint == "" {
-		endpoint = os.Getenv("PAPERCLIP_ENDPOINT")
+	if data.Endpoint.IsUnknown() {
+		resp.Diagnostics.AddAttributeError(path.Root("endpoint"), "Unknown Paperclip Endpoint", "Set endpoint to a known HTTP(S) URL, or omit it to use PAPERCLIP_API_URL or the documented local default.")
 	}
-	if endpoint == "" {
-		endpoint = os.Getenv("PAPERCLIP_URL")
+	if data.Token.IsUnknown() {
+		resp.Diagnostics.AddAttributeError(path.Root("token"), "Unknown Paperclip Token", "Set token to a known value, or omit it to use PAPERCLIP_API_KEY or native unauthenticated access.")
 	}
-	if !data.PaperclipEndpoint.IsNull() && !data.PaperclipEndpoint.IsUnknown() {
-		endpoint = data.PaperclipEndpoint.ValueString()
-	}
-	if !data.Endpoint.IsNull() && !data.Endpoint.IsUnknown() {
-		endpoint = data.Endpoint.ValueString()
-	}
-	if endpoint == "" {
-		endpoint = "http://127.0.0.1:3100"
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
+	endpoint := os.Getenv("PAPERCLIP_API_URL")
+	if !data.Endpoint.IsNull() {
+		endpoint = data.Endpoint.ValueString()
+		if endpoint == "" {
+			resp.Diagnostics.AddAttributeError(path.Root("endpoint"), "Empty Paperclip Endpoint", "Set endpoint to an HTTP(S) URL, or omit it to use PAPERCLIP_API_URL or the documented local default.")
+			return
+		}
+	}
 	token := os.Getenv("PAPERCLIP_API_KEY")
-	if token == "" {
-		token = os.Getenv("PAPERCLIP_BOARD_TOKEN")
-	}
-	if token == "" {
-		token = os.Getenv("PAPERCLIP_TOKEN")
-	}
-	if !data.PaperclipToken.IsNull() && !data.PaperclipToken.IsUnknown() {
-		token = data.PaperclipToken.ValueString()
-	}
-	if !data.Token.IsNull() && !data.Token.IsUnknown() {
+	if !data.Token.IsNull() {
 		token = data.Token.ValueString()
 	}
 
