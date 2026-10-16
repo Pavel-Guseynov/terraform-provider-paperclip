@@ -60,6 +60,36 @@ provider_installation {
 
 ## Integration contract
 
+`paperclip_instance_settings` owns only declared instance keys. Its optional
+`default_environment_id` accepts an active environment UUID; empty string clears
+the default and omission releases ownership. `general` is a partial JSON object
+of `censorUsernameInLogs`, `keyboardShortcuts`, `feedbackDataSharingPreference`
+(`allowed`, `not_allowed`, `prompt`), complete `backupRetention` (`dailyDays`
+3/7/14, `weeklyWeeks` 1/2/4, `monthlyMonths` 1/3/6), and `executionMode`
+(`any`, `kubernetes`). `experimental` is a partial JSON object of supported
+boolean flags listed in the [resource reference](docs/resources/instance_settings.md).
+No undeclared defaults are written. Removing keys or sections releases ownership;
+it does not reset settings. Backup enablement, schedule and directory remain
+deployment-owned.
+
+Planning reads native settings and health metadata to reject hidden keys,
+the hidden Experimental page, `managedKeys` (naming `managedBy`) and
+cloud-managed execution mode, even for equal values. Environment references are
+validated read-only at plan when known and again before apply mutations. Unknown,
+deprecated and bookkeeping flags are rejected locally because native PATCH
+silently strips unknown fields. Writes require instance-admin access. Refresh
+exposes declared drift and plans reject changed deployment ownership; apply errors
+on non-convergent readback. The API has no conditional write or owner lock:
+coordinate one settings owner per instance externally, including concurrent
+deployment changes.
+
+Import `instance` to adopt the current default and all writable, unowned keys;
+configure the imported values for a zero-change plan. Destroy forgets management
+without a remote write. Root, general and experimental PATCHes are independent;
+partial failures retain the singleton binding and observed state and require a
+fresh reconciliation plan. No rollback or API extension is attempted. Transport
+and authorization failures preserve state and surface sanitized native errors.
+
 `paperclip_tool_profile` is the sole aggregate writer of one profile's complete
 `entries` JSON array (maximum 250). Entries use native camelCase fields:
 `selectorType` (`application`, `connection`, `catalog_entry`, `tool_name` or

@@ -74,7 +74,12 @@ type Client struct {
 }
 
 type HealthResponse struct {
-	Status             string `json:"status"`
+	Status         string   `json:"status"`
+	HiddenSettings []string `json:"hiddenSettings,omitempty"`
+	Cloud          *struct {
+		Managed   bool   `json:"managed"`
+		ManagedBy string `json:"managedBy"`
+	} `json:"cloud,omitempty"`
 	DeploymentMode     string `json:"deploymentMode,omitempty"`
 	DeploymentExposure string `json:"deploymentExposure,omitempty"`
 }
