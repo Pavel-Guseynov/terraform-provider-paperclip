@@ -275,7 +275,7 @@ func refreshConnectionFields(ctx context.Context, state *PaperclipConnectionReso
 	state.CredentialSecretRefs, _ = types.MapValueFrom(ctx, secretRefType(), refs)
 }
 
-func (r *PaperclipConnectionResource) validateConnection(ctx context.Context, plan, state PaperclipConnectionResourceModel) diag.Diagnostics {
+func (r *PaperclipConnectionResource) validateConnection(ctx context.Context, plan, state PaperclipConnectionResourceModel, allowPlannedTemplates bool) diag.Diagnostics {
 	var diags diag.Diagnostics
 	if err := rejectDeclaredArchive(plan.Status); err != nil {
 		diags.AddError("Archive via resource destruction", err.Error())
@@ -311,8 +311,10 @@ func (r *PaperclipConnectionResource) validateConnection(ctx context.Context, pl
 			var config map[string]interface{}
 			json.Unmarshal([]byte(plan.Config.ValueString()), &config)
 			if id, ok := config["templateId"].(string); ok {
-				if _, err := r.client.GetStdioTemplate(ctx, plan.CompanyID.ValueString(), id); err != nil {
-					diags.AddError("Invalid approved stdio template", err.Error())
+				if !allowPlannedTemplates || !r.client.HasPlannedStdioTemplate(plan.CompanyID.ValueString(), id) {
+					if _, err := r.client.GetStdioTemplate(ctx, plan.CompanyID.ValueString(), id); err != nil {
+						diags.AddError("Invalid approved stdio template", err.Error())
+					}
 				}
 			}
 		}

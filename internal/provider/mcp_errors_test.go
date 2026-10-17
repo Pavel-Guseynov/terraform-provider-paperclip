@@ -139,7 +139,7 @@ func TestConnectionRejectsInvalidApplicationAndTemplateReferencesBeforeMutation(
 			case "configuration":
 				model.Config = types.StringValue(`{"headers":{"Authorization":"must-not-echo"}}`)
 			}
-			d := r.validateConnection(context.Background(), model, PaperclipConnectionResourceModel{})
+			d := r.validateConnection(context.Background(), model, PaperclipConnectionResourceModel{}, false)
 			if !d.HasError() || len(f.mutations) != 0 {
 				t.Fatalf("invalid %s reference was accepted: %v", kind, d)
 			}
@@ -907,7 +907,7 @@ func TestArchiveIsAnExplicitRetirementOperation(t *testing.T) {
 		t.Fatal("archived application update reported convergence")
 	}
 	connection := &PaperclipConnectionResource{client: c}
-	if d := connection.validateConnection(ctx, PaperclipConnectionResourceModel{Status: types.StringValue("archived"), CredentialSecretRefs: types.MapNull(secretRefType())}, PaperclipConnectionResourceModel{}); !d.HasError() {
+	if d := connection.validateConnection(ctx, PaperclipConnectionResourceModel{Status: types.StringValue("archived"), CredentialSecretRefs: types.MapNull(secretRefType())}, PaperclipConnectionResourceModel{}, false); !d.HasError() {
 		t.Fatal("archived connection creation reported convergence")
 	}
 }
@@ -939,7 +939,7 @@ func TestLocalStdioActivationUsesNativeTrustPolicyInsteadOfBlanketRejection(t *t
 	_, c := newMCPFixture(t)
 	r := &PaperclipConnectionResource{client: c}
 	model := PaperclipConnectionResourceModel{CompanyID: types.StringValue("company-1"), Transport: types.StringValue("local_stdio"), Config: types.StringValue(`{"templateId":"approved-template"}`), Enabled: types.BoolValue(true), CredentialSecretRefs: types.MapNull(secretRefType())}
-	if d := r.validateConnection(context.Background(), model, PaperclipConnectionResourceModel{}); d.HasError() {
+	if d := r.validateConnection(context.Background(), model, PaperclipConnectionResourceModel{}, false); d.HasError() {
 		t.Fatal("provider rejected a supported native activation before target trust policy could evaluate it", d)
 	}
 }

@@ -21,6 +21,7 @@ var (
 	_ resource.Resource                = &PaperclipStdioTemplateResource{}
 	_ resource.ResourceWithConfigure   = &PaperclipStdioTemplateResource{}
 	_ resource.ResourceWithImportState = &PaperclipStdioTemplateResource{}
+	_ resource.ResourceWithModifyPlan  = &PaperclipStdioTemplateResource{}
 )
 
 // stdioTemplateImmutable explains the one lifecycle Paperclip offers approved
@@ -76,7 +77,7 @@ func (r *PaperclipStdioTemplateResource) Metadata(ctx context.Context, req resou
 
 func (r *PaperclipStdioTemplateResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a Paperclip native stdio tool template. Paperclip templates are immutable: every attribute forces replacement, removal disables the template, and a disabled template reads back as absent.",
+		Description: "Manages a Paperclip native stdio tool template. Paperclip templates are immutable: every attribute forces replacement, removal disables the template, and a disabled template reads back as absent. A local_stdio connection in the same company and provider configuration can reference this resource's template_id before the template exists; planning defers its live approval check until apply, and the reference orders template creation first.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed: true,
@@ -142,6 +143,20 @@ func (r *PaperclipStdioTemplateResource) Configure(ctx context.Context, req reso
 		return
 	}
 	r.client = c
+}
+
+func (r *PaperclipStdioTemplateResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || r.client == nil {
+		return
+	}
+	var plan PaperclipStdioTemplateResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if plan.CompanyID.ValueString() != "" && plan.TemplateID.ValueString() != "" {
+		r.client.RecordPlannedStdioTemplate(plan.CompanyID.ValueString(), plan.TemplateID.ValueString())
+	}
 }
 
 func (r *PaperclipStdioTemplateResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

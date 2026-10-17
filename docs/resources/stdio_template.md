@@ -2,12 +2,12 @@
 page_title: "paperclip_stdio_template Resource - terraform-provider-paperclip"
 subcategory: ""
 description: |-
-  Manages a Paperclip native stdio tool template. Paperclip templates are immutable: every attribute forces replacement, removal disables the template, and a disabled template reads back as absent.
+  Manages a Paperclip native stdio tool template. Paperclip templates are immutable: every attribute forces replacement, removal disables the template, and a disabled template reads back as absent. A local_stdio connection in the same company and provider configuration can reference this resource's template_id before the template exists; planning defers its live approval check until apply, and the reference orders template creation first.
 ---
 
 # paperclip_stdio_template (Resource)
 
-Manages a Paperclip native stdio tool template. Paperclip templates are immutable: every attribute forces replacement, removal disables the template, and a disabled template reads back as absent.
+Manages a Paperclip native stdio tool template. Paperclip templates are immutable: every attribute forces replacement, removal disables the template, and a disabled template reads back as absent. A local_stdio connection in the same company and provider configuration can reference this resource's template_id before the template exists; planning defers its live approval check until apply, and the reference orders template creation first.
 
 ## Example Usage
 

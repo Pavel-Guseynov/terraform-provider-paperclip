@@ -62,7 +62,7 @@ func (r *PaperclipConnectionResource) Metadata(ctx context.Context, req resource
 func (r *PaperclipConnectionResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Version:     1,
-		Description: "Manages a Paperclip-native tool connection.",
+		Description: "Manages a Paperclip-native tool connection. For local_stdio, reference paperclip_stdio_template.<name>.template_id in config.templateId to plan a new template and connection together in the same provider configuration and company. The dependency orders template creation before the connection; apply verifies live approval before writing the connection. An ID with neither a live approved template nor a preceding template declaration in the plan fails at plan with Invalid approved stdio template.",
 		Attributes: map[string]schema.Attribute{
 			"credential_grant_ready": schema.BoolAttribute{Computed: true, Description: "Whether the native default execution grant has the declared protected credential references."},
 			"id": schema.StringAttribute{
@@ -157,7 +157,7 @@ func (r *PaperclipConnectionResource) ModifyPlan(ctx context.Context, req resour
 		if resp.Diagnostics.HasError() {
 			return
 		}
-		resp.Diagnostics.Append(r.validateConnection(ctx, plan, state)...)
+		resp.Diagnostics.Append(r.validateConnection(ctx, plan, state, true)...)
 		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("credential_grant_ready"), true)...)
 	}
 }
@@ -221,7 +221,7 @@ func (r *PaperclipConnectionResource) Create(ctx context.Context, req resource.C
 		CredentialRefs:   credentialRefs,
 		CredentialPolicy: plan.CredentialPolicy.ValueString(),
 	}
-	resp.Diagnostics.Append(r.validateConnection(ctx, plan, PaperclipConnectionResourceModel{})...)
+	resp.Diagnostics.Append(r.validateConnection(ctx, plan, PaperclipConnectionResourceModel{}, false)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -388,7 +388,7 @@ func (r *PaperclipConnectionResource) Update(ctx context.Context, req resource.U
 			return
 		}
 	}
-	resp.Diagnostics.Append(r.validateConnection(ctx, plan, state)...)
+	resp.Diagnostics.Append(r.validateConnection(ctx, plan, state, false)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}

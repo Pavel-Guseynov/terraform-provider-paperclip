@@ -619,7 +619,7 @@ func TestUnsupportedNativeConnectionCreationDoesNotWrite(t *testing.T) {
 			case "missing template":
 				plan.Transport = types.StringValue("local_stdio")
 			}
-			if d := r.validateConnection(context.Background(), plan, PaperclipConnectionResourceModel{}); !d.HasError() || len(f.mutations) != 0 {
+			if d := r.validateConnection(context.Background(), plan, PaperclipConnectionResourceModel{}, false); !d.HasError() || len(f.mutations) != 0 {
 				t.Fatalf("unsupported native creation was accepted: %v", d)
 			}
 		})

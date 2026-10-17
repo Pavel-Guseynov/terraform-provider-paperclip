@@ -62,10 +62,11 @@ type mintedKeyRecord struct {
 }
 
 type Client struct {
-	Endpoint      string
-	Token         string
-	HTTPClient    *http.Client
-	managedOwners map[string]string
+	Endpoint              string
+	Token                 string
+	HTTPClient            *http.Client
+	managedOwners         map[string]string
+	plannedStdioTemplates map[[2]string]bool
 
 	credMu                 sync.RWMutex
 	mintedTokens           map[string]string // keyID -> token

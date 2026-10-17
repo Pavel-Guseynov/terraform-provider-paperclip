@@ -118,6 +118,16 @@ and consumer/backend selection are outside provider delivery.
 
 ## Integration contract
 
+For `paperclip_connection` with `transport = "local_stdio"`, reference
+`paperclip_stdio_template.<name>.template_id` in `config.templateId` to create
+both resources in the same apply. The template must belong to the same company
+and provider configuration. Its plan declaration permits planning before it
+exists, and the reference orders its creation before the connection. Apply
+checks live approval before each connection write. Missing IDs without a live
+approved template or a preceding template declaration still fail at plan with
+`Invalid approved stdio template`; independent provider configurations do not
+share declarations. See the [connection resource reference](docs/resources/connection.md).
+
 `paperclip_agent.runtime_config.heartbeat.sessionCompaction` accepts the native
 policy object. Its optional fields are boolean `enabled` and nonnegative integer
 `maxSessionRuns`, `maxRawInputTokens`, and `maxSessionAgeHours`. Zero disables a

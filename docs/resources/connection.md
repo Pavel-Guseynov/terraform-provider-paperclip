@@ -2,12 +2,12 @@
 page_title: "paperclip_connection Resource - terraform-provider-paperclip"
 subcategory: ""
 description: |-
-  Manages a Paperclip-native tool connection.
+  Manages a Paperclip-native tool connection. For local_stdio, reference paperclip_stdio_template.<name>.template_id in config.templateId to plan a new template and connection together in the same provider configuration and company. The dependency orders template creation before the connection; apply verifies live approval before writing the connection. An ID with neither a live approved template nor a preceding template declaration in the plan fails at plan with Invalid approved stdio template.
 ---
 
 # paperclip_connection (Resource)
 
-Manages a Paperclip-native tool connection.
+Manages a Paperclip-native tool connection. For local_stdio, reference paperclip_stdio_template.<name>.template_id in config.templateId to plan a new template and connection together in the same provider configuration and company. The dependency orders template creation before the connection; apply verifies live approval before writing the connection. An ID with neither a live approved template nor a preceding template declaration in the plan fails at plan with Invalid approved stdio template.
 
 ## Example Usage
 
