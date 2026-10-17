@@ -1,0 +1,23 @@
+[
+  {"name":"unpinned string","request":{"mode":"replace","desiredSkills":["paperclip"]},"valid":true},
+  {"name":"pinned object","request":{"mode":"add","desiredSkills":[{"key":"paperclip","versionId":"11111111-1111-4111-8111-111111111111"}]},"valid":true},
+  {"name":"explicit null pin","request":{"mode":"remove","desiredSkills":[{"key":"paperclip","versionId":null}]},"valid":true},
+  {"name":"empty array","request":{"mode":"replace","desiredSkills":[]},"valid":true},
+  {"name":"whitespace key accepted before normalization","request":{"mode":"replace","desiredSkills":[" paperclip "]},"valid":true},
+  {"name":"missing versionId","request":{"mode":"replace","desiredSkills":[{"key":"paperclip"}]},"valid":false},
+  {"name":"empty versionId","request":{"mode":"replace","desiredSkills":[{"key":"paperclip","versionId":""}]},"valid":false},
+  {"name":"non GUID pin","request":{"mode":"replace","desiredSkills":[{"key":"paperclip","versionId":"ver-1"}]},"valid":false},
+  {"name":"numeric pin","request":{"mode":"replace","desiredSkills":[{"key":"paperclip","versionId":1}]},"valid":false},
+  {"name":"empty key string","request":{"mode":"replace","desiredSkills":[""]},"valid":false},
+  {"name":"empty object key","request":{"mode":"replace","desiredSkills":[{"key":"","versionId":null}]},"valid":false},
+  {"name":"numeric key","request":{"mode":"replace","desiredSkills":[{"key":1,"versionId":null}]},"valid":false},
+  {"name":"numeric selection","request":{"mode":"replace","desiredSkills":[1]},"valid":false},
+  {"name":"null selection","request":{"mode":"replace","desiredSkills":[null]},"valid":false},
+  {"name":"array selection","request":{"mode":"replace","desiredSkills":[[]]},"valid":false},
+  {"name":"missing mode","request":{"desiredSkills":[]},"valid":false},
+  {"name":"invalid mode","request":{"mode":"invalid","desiredSkills":[]},"valid":false},
+  {"name":"numeric mode","request":{"mode":1,"desiredSkills":[]},"valid":false},
+  {"name":"missing desiredSkills","request":{"mode":"replace"},"valid":false},
+  {"name":"null desiredSkills","request":{"mode":"replace","desiredSkills":null},"valid":false},
+  {"name":"object desiredSkills","request":{"mode":"replace","desiredSkills":{}},"valid":false}
+]

@@ -1,12 +1,18 @@
 package client
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"strings"
 	"testing"
+
+	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/fixtures"
 )
 
 func TestSkillsAndPoliciesClientMethods(t *testing.T) {
@@ -98,23 +104,21 @@ func TestSkillsAndPoliciesClientMethods(t *testing.T) {
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/agents/agent-1/skills":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"adapterType": "antigravity_local",
-				"supported":   true,
-				"mode":        "replace",
+				"adapterType":   "antigravity_local",
+				"supported":     true,
+				"mode":          "replace",
 				"desiredSkills": []string{"skill-1"},
 				"desiredSkillEntries": []map[string]interface{}{
 					{"key": "skill-1", "versionId": "ver-1"},
 				},
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/agents/agent-1/skills/sync":
-			var body map[string]interface{}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"adapterType":         "antigravity_local",
-				"supported":           true,
-				"mode":                body["mode"],
-				"desiredSkillEntries": body["desiredSkills"],
-			})
+			snapshot, err := fixtures.SkillSyncSnapshot(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(snapshot)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/skill-policy":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
 				"schemaVersion": 1,
@@ -280,10 +284,106 @@ func TestSkillsAndPoliciesClientMethods(t *testing.T) {
 	}
 }
 
+func TestSyncAgentSkillsSerializesServerSelections(t *testing.T) {
+	empty := ""
+	version := "11111111-1111-4111-8111-111111111111"
+	for _, tc := range []struct {
+		name        string
+		mode        string
+		entries     []PaperclipDesiredSkillEntry
+		wire        string
+		wantEntries []PaperclipDesiredSkillEntry
+	}{
+		{name: "nil pin", mode: "replace", entries: []PaperclipDesiredSkillEntry{{Key: "paperclip"}}, wire: `["paperclip"]`, wantEntries: []PaperclipDesiredSkillEntry{{Key: "paperclip"}}},
+		{name: "empty pin", mode: "replace", entries: []PaperclipDesiredSkillEntry{{Key: "paperclip", VersionID: &empty}}, wire: `["paperclip"]`, wantEntries: []PaperclipDesiredSkillEntry{{Key: "paperclip"}}},
+		{name: "mixed pins", mode: "add", entries: []PaperclipDesiredSkillEntry{{Key: "paperclip"}, {Key: "pinned", VersionID: &version}}, wire: `["paperclip",{"key":"pinned","versionId":"11111111-1111-4111-8111-111111111111"}]`, wantEntries: []PaperclipDesiredSkillEntry{{Key: "paperclip"}, {Key: "pinned", VersionID: &version}}},
+		{name: "nil list and default mode", wire: `[]`, wantEntries: []PaperclipDesiredSkillEntry{}},
+		{name: "empty list", mode: "remove", entries: []PaperclipDesiredSkillEntry{}, wire: `[]`, wantEntries: []PaperclipDesiredSkillEntry{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var received map[string]interface{}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPost || r.URL.Path != "/api/agents/agent-1/skills/sync" {
+					http.NotFound(w, r)
+					return
+				}
+				body, err := io.ReadAll(r.Body)
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				if err := json.Unmarshal(body, &received); err != nil {
+					t.Error(err)
+				}
+				snapshot, err := fixtures.SkillSyncSnapshot(bytes.NewReader(body))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(snapshot)
+			}))
+			defer server.Close()
+			cli, err := NewClient(server.URL, "test-token")
+			if err != nil {
+				t.Fatal(err)
+			}
+			snapshot, err := cli.SyncAgentSkills(context.Background(), "agent-1", tc.mode, tc.entries)
+			if err != nil {
+				t.Fatalf("server rejected desiredSkills: %v; request=%#v", err, received)
+			}
+			var wantWire interface{}
+			if err := json.Unmarshal([]byte(tc.wire), &wantWire); err != nil {
+				t.Fatal(err)
+			}
+			mode := tc.mode
+			if mode == "" {
+				mode = "replace"
+			}
+			if !reflect.DeepEqual(received, map[string]interface{}{"mode": mode, "desiredSkills": wantWire}) {
+				t.Fatalf("request=%#v; want mode=%s desiredSkills=%s", received, mode, tc.wire)
+			}
+			keys := make([]string, len(tc.wantEntries))
+			for i, entry := range tc.wantEntries {
+				keys[i] = entry.Key
+			}
+			if !reflect.DeepEqual(snapshot.DesiredSkills, keys) || !reflect.DeepEqual(snapshot.DesiredSkillEntries, tc.wantEntries) || snapshot.Mode != mode {
+				t.Fatalf("unexpected response snapshot: %+v", snapshot)
+			}
+		})
+	}
+}
+
+func TestSkillSyncHTTPRejectsObjectWithoutVersionID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := fixtures.SkillSyncSnapshot(r.Body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	cli, err := NewClient(server.URL, "test-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = cli.paperclipRequest(context.Background(), http.MethodPost, "/api/agents/agent-1/skills/sync", map[string]interface{}{
+		"mode": "replace", "desiredSkills": []interface{}{map[string]interface{}{"key": "paperclip"}},
+	}, nil)
+	if err == nil || !strings.Contains(err.Error(), "400") || !strings.Contains(err.Error(), "versionId is required") {
+		t.Fatalf("expected HTTP 400 for missing versionId, got %v", err)
+	}
+}
+
 func TestSkillsAndPoliciesClientErrors(t *testing.T) {
 	ctx := context.Background()
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/skills/sync") {
+			if _, err := fixtures.SkillSyncSnapshot(r.Body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 	}))
 	defer server.Close()

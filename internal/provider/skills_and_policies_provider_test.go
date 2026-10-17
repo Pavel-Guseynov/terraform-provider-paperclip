@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
+	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/fixtures"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -376,32 +378,25 @@ func TestPaperclipSkillAssignmentResourceLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	var deleteCalled bool
+	current := map[string]interface{}{
+		"desiredSkills": []string{}, "desiredSkillEntries": []map[string]interface{}{},
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/agents/agent-1/skills":
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"adapterType": "antigravity_local",
-				"supported":   true,
-				"mode":        "replace",
-				"desiredSkillEntries": []map[string]interface{}{
-					{"key": "skill-1", "versionId": "ver-1"},
-					{"key": "skill-2"},
-				},
-			})
+			_ = json.NewEncoder(w).Encode(current)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/agents/agent-1/skills/sync":
-			var body map[string]interface{}
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			desired, _ := body["desiredSkills"].([]interface{})
-			if len(desired) == 0 {
+			snapshot, err := fixtures.SkillSyncSnapshot(r.Body)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			current = snapshot
+			if len(snapshot["desiredSkills"].([]string)) == 0 {
 				deleteCalled = true
 			}
-			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"adapterType":         "antigravity_local",
-				"supported":           true,
-				"mode":                body["mode"],
-				"desiredSkillEntries": desired,
-			})
+			_ = json.NewEncoder(w).Encode(snapshot)
 		default:
 			http.NotFound(w, r)
 		}
@@ -424,13 +419,24 @@ func TestPaperclipSkillAssignmentResourceLifecycle(t *testing.T) {
 	}
 
 	resSchema := configureTestResource(t, server.URL, r)
+	assertSkills := func(state tfsdk.State, want []PaperclipDesiredSkillModel) {
+		t.Helper()
+		var model PaperclipSkillAssignmentResourceModel
+		if diags := state.Get(ctx, &model); diags.HasError() {
+			t.Fatal(diags)
+		}
+		if model.ID.ValueString() != "agent-1" || model.AgentID.ValueString() != "agent-1" || !reflect.DeepEqual(model.Skills, want) {
+			t.Fatalf("unexpected assignment state: %+v; want skills %+v", model, want)
+		}
+	}
+	version := types.StringValue("11111111-1111-4111-8111-111111111111")
 
 	// Create
 	planModel := PaperclipSkillAssignmentResourceModel{
 		AgentID: types.StringValue("agent-1"),
 		Skills: []PaperclipDesiredSkillModel{
-			{Key: types.StringValue("skill-1"), VersionID: types.StringValue("ver-1")},
-			{Key: types.StringValue("skill-2")},
+			{Key: types.StringValue("skill-1"), VersionID: types.StringNull()},
+			{Key: types.StringValue("skill-2"), VersionID: version},
 		},
 	}
 	plan := tfsdk.Plan{Schema: resSchema}
@@ -443,11 +449,7 @@ func TestPaperclipSkillAssignmentResourceLifecycle(t *testing.T) {
 		t.Fatalf("create failed: %v", createResp.Diagnostics)
 	}
 
-	var state PaperclipSkillAssignmentResourceModel
-	_ = createResp.State.Get(ctx, &state)
-	if state.ID.ValueString() != "agent-1" || len(state.Skills) != 2 {
-		t.Fatalf("unexpected state after create: %+v", state)
-	}
+	assertSkills(createResp.State, planModel.Skills)
 
 	// Read
 	var readResp resource.ReadResponse
@@ -456,11 +458,10 @@ func TestPaperclipSkillAssignmentResourceLifecycle(t *testing.T) {
 	if readResp.Diagnostics.HasError() {
 		t.Fatalf("read failed: %v", readResp.Diagnostics)
 	}
+	assertSkills(readResp.State, planModel.Skills)
 
-	// Update
-	planModel.Skills = []PaperclipDesiredSkillModel{
-		{Key: types.StringValue("skill-1")},
-	}
+	// Pin one skill while preserving the other skill's existing pin.
+	planModel.Skills[0].VersionID = version
 	_ = plan.Set(ctx, &planModel)
 	var updateResp resource.UpdateResponse
 	updateResp.State = createResp.State
@@ -468,16 +469,19 @@ func TestPaperclipSkillAssignmentResourceLifecycle(t *testing.T) {
 	if updateResp.Diagnostics.HasError() {
 		t.Fatalf("update failed: %v", updateResp.Diagnostics)
 	}
+	assertSkills(updateResp.State, planModel.Skills)
 
-	// Delete
-	var delResp resource.DeleteResponse
-	r.Delete(ctx, resource.DeleteRequest{State: updateResp.State}, &delResp)
-	if delResp.Diagnostics.HasError() {
-		t.Fatalf("delete failed: %v", delResp.Diagnostics)
+	// Unpin and add another unpinned skill without losing the remaining pin.
+	planModel.Skills[0].VersionID = types.StringNull()
+	planModel.Skills = append(planModel.Skills, PaperclipDesiredSkillModel{Key: types.StringValue("skill-3"), VersionID: types.StringNull()})
+	_ = plan.Set(ctx, &planModel)
+	var unpinResp resource.UpdateResponse
+	unpinResp.State = updateResp.State
+	r.Update(ctx, resource.UpdateRequest{Plan: plan, State: updateResp.State}, &unpinResp)
+	if unpinResp.Diagnostics.HasError() {
+		t.Fatalf("unpin failed: %v", unpinResp.Diagnostics)
 	}
-	if !deleteCalled {
-		t.Fatal("expected sync with empty desired skills on delete")
-	}
+	assertSkills(unpinResp.State, planModel.Skills)
 
 	// ImportState
 	var impResp resource.ImportStateResponse
@@ -494,6 +498,43 @@ func TestPaperclipSkillAssignmentResourceLifecycle(t *testing.T) {
 	r.ImportState(ctx, resource.ImportStateRequest{ID: "agent-1"}, &impRespGood)
 	if impRespGood.Diagnostics.HasError() {
 		t.Fatalf("import failed: %v", impRespGood.Diagnostics)
+	}
+	var importRead resource.ReadResponse
+	importRead.State = impRespGood.State
+	r.Read(ctx, resource.ReadRequest{State: impRespGood.State}, &importRead)
+	if importRead.Diagnostics.HasError() {
+		t.Fatalf("import read failed: %v", importRead.Diagnostics)
+	}
+	assertSkills(importRead.State, planModel.Skills)
+
+	// Simulate an out-of-band removal; refresh must expose it, then update repairs it.
+	current["desiredSkills"] = []string{"skill-2", "skill-3"}
+	current["desiredSkillEntries"] = []map[string]interface{}{
+		{"key": "skill-2", "versionId": version.ValueString()},
+		{"key": "skill-3", "versionId": nil},
+	}
+	var driftRead resource.ReadResponse
+	driftRead.State = unpinResp.State
+	r.Read(ctx, resource.ReadRequest{State: unpinResp.State}, &driftRead)
+	if driftRead.Diagnostics.HasError() {
+		t.Fatalf("drift read failed: %v", driftRead.Diagnostics)
+	}
+	assertSkills(driftRead.State, planModel.Skills[1:])
+	var repairResp resource.UpdateResponse
+	repairResp.State = driftRead.State
+	r.Update(ctx, resource.UpdateRequest{Plan: plan, State: driftRead.State}, &repairResp)
+	if repairResp.Diagnostics.HasError() {
+		t.Fatalf("drift repair failed: %v", repairResp.Diagnostics)
+	}
+	assertSkills(repairResp.State, planModel.Skills)
+
+	var delResp resource.DeleteResponse
+	r.Delete(ctx, resource.DeleteRequest{State: repairResp.State}, &delResp)
+	if delResp.Diagnostics.HasError() {
+		t.Fatalf("delete failed: %v", delResp.Diagnostics)
+	}
+	if !deleteCalled || len(current["desiredSkills"].([]string)) != 0 || len(current["desiredSkillEntries"].([]map[string]interface{})) != 0 {
+		t.Fatal("expected sync with empty desired skills on delete")
 	}
 }
 
@@ -668,26 +709,26 @@ func TestPaperclipSkillDataSourceFull(t *testing.T) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/skills/skill-1":
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"id":               "skill-1",
-				"companyId":        "comp-1",
-				"name":             "Full Skill",
-				"slug":             "full-skill",
-				"description":      "full skill desc",
-				"content":          "# Full Content",
-				"schemaVersion":    1,
-				"iconUrl":          "https://example.com/icon.png",
-				"color":            "#ff0000",
-				"tagline":          "Best skill",
-				"authorName":       "Author",
-				"homepageUrl":      "https://example.com",
-				"categories":       []string{"cat1"},
-				"sharingScope":     "company",
-				"currentVersionId": "ver-1",
-				"sourceType":       "catalog",
-				"sourceLocator":    "loc-1",
-				"folderId":         "folder-1",
+				"id":                "skill-1",
+				"companyId":         "comp-1",
+				"name":              "Full Skill",
+				"slug":              "full-skill",
+				"description":       "full skill desc",
+				"content":           "# Full Content",
+				"schemaVersion":     1,
+				"iconUrl":           "https://example.com/icon.png",
+				"color":             "#ff0000",
+				"tagline":           "Best skill",
+				"authorName":        "Author",
+				"homepageUrl":       "https://example.com",
+				"categories":        []string{"cat1"},
+				"sharingScope":      "company",
+				"currentVersionId":  "ver-1",
+				"sourceType":        "catalog",
+				"sourceLocator":     "loc-1",
+				"folderId":          "folder-1",
 				"forkedFromSkillId": "fork-1",
-				"metadata":         map[string]interface{}{"k": "v"},
+				"metadata":          map[string]interface{}{"k": "v"},
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/companies/comp-1/skills":
 			_ = json.NewEncoder(w).Encode([]map[string]interface{}{

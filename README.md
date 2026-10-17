@@ -118,6 +118,18 @@ and consumer/backend selection are outside provider delivery.
 
 ## Integration contract
 
+`paperclip_skill_assignment` owns the complete desired skill list for one agent.
+It sends `POST /api/agents/:id/skills/sync` in replace mode, with plain key
+strings for unpinned skills (null or empty `version_id`) and
+`{"key": "<key>", "versionId": "<versionId>"}` objects for pinned skills.
+An object containing only `key` fails the server validator, which requires an
+explicit nullable GUID `versionId` on objects. Empty assignments send `[]`.
+Read and sync responses expose `desiredSkills` as key strings and
+`desiredSkillEntries` as objects with nullable version IDs. Import and refresh
+preserve pins and expose remote drift; destroy clears the agent's assignments.
+Client and lifecycle tests enforce the request schema, and the parent
+`provider-opentofu-test` gate uses the packaged server's native validator.
+
 For `paperclip_connection` with `transport = "local_stdio"`, reference
 `paperclip_stdio_template.<name>.template_id` in `config.templateId` to create
 both resources in the same apply. The template must belong to the same company

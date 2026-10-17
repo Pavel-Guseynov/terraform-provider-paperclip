@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
+	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/fixtures"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -305,14 +306,20 @@ func TestSkillAssignmentHelpersAndAllBranches(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
+		case req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/skills/sync"):
+			if _, err := fixtures.SkillSyncSnapshot(req.Body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if req.URL.Path == "/api/agents/ag-404/skills/sync" {
+				http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+			} else {
+				http.Error(w, `{"error":"server error"}`, http.StatusInternalServerError)
+			}
 		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/ag-404/skills":
 			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/ag-err/skills":
 			http.Error(w, `{"error":"server error"}`, http.StatusInternalServerError)
-		case req.Method == http.MethodPost && req.URL.Path == "/api/agents/ag-err/skills/sync":
-			http.Error(w, `{"error":"server error"}`, http.StatusInternalServerError)
-		case req.Method == http.MethodPost && req.URL.Path == "/api/agents/ag-404/skills/sync":
-			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 		default:
 			http.NotFound(w, req)
 		}

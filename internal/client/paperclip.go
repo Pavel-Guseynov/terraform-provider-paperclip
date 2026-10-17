@@ -2156,12 +2156,20 @@ func (c *Client) SyncAgentSkills(ctx context.Context, agentID, mode string, desi
 	if agentID == "" {
 		return nil, ErrNotFound
 	}
-	if desiredSkills == nil {
-		desiredSkills = []PaperclipDesiredSkillEntry{}
+	if mode == "" {
+		mode = "replace"
+	}
+	selections := make([]interface{}, 0, len(desiredSkills))
+	for _, entry := range desiredSkills {
+		if entry.VersionID == nil || *entry.VersionID == "" {
+			selections = append(selections, entry.Key)
+		} else {
+			selections = append(selections, entry)
+		}
 	}
 	payload := map[string]interface{}{
 		"mode":          mode,
-		"desiredSkills": desiredSkills,
+		"desiredSkills": selections,
 	}
 	var resp PaperclipAgentSkillSnapshot
 	if err := c.paperclipRequest(ctx, http.MethodPost, fmt.Sprintf("/api/agents/%s/skills/sync", url.PathEscape(agentID)), payload, &resp); err != nil {
