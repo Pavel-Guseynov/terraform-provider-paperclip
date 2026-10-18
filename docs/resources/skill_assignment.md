@@ -2,12 +2,12 @@
 page_title: "paperclip_skill_assignment Resource - terraform-provider-paperclip"
 subcategory: ""
 description: |-
-  Manages desired skill assignments and version pins for a Paperclip agent as the sole writer of adapterConfig.paperclipSkillSync. POST /api/agents/:id/skills/sync sends unpinned skills as plain key strings and version-pinned skills as objects with key and versionId; an empty list clears assignments.
+  Manages desired skill assignments and version pins for a Paperclip agent as the sole writer of adapterConfig.paperclipSkillSync. POST /api/agents/:id/skills/sync sends unpinned skills as plain key strings and version-pinned skills as objects with key and versionId; an empty list clears assignments. Server-required skills such as paperclipai/paperclip/paperclip and read-only snapshot skills are excluded from resource state unless explicitly declared; synchronization and destroy leave server-managed skills intact.
 ---
 
 # paperclip_skill_assignment (Resource)
 
-Manages desired skill assignments and version pins for a Paperclip agent as the sole writer of adapterConfig.paperclipSkillSync. POST /api/agents/:id/skills/sync sends unpinned skills as plain key strings and version-pinned skills as objects with key and versionId; an empty list clears assignments.
+Manages desired skill assignments and version pins for a Paperclip agent as the sole writer of adapterConfig.paperclipSkillSync. POST /api/agents/:id/skills/sync sends unpinned skills as plain key strings and version-pinned skills as objects with key and versionId; an empty list clears assignments. Server-required skills such as paperclipai/paperclip/paperclip and read-only snapshot skills are excluded from resource state unless explicitly declared; synchronization and destroy leave server-managed skills intact.
 
 ## Example Usage
 

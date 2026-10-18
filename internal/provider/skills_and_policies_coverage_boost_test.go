@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -241,6 +242,68 @@ func TestSkillPolicyResourceAllBranches(t *testing.T) {
 	r.ImportState(ctx, resource.ImportStateRequest{ID: ""}, &impResp)
 	if !impResp.Diagnostics.HasError() {
 		t.Fatal("expected error on empty import ID")
+	}
+}
+
+func TestSkillSnapshotExcludesOnlyUndeclaredServerInjectedSkills(t *testing.T) {
+	version := "11111111-1111-4111-8111-111111111111"
+	emptyVersion := ""
+	operational := " PAPERCLIPAI/PAPERCLIP/PAPERCLIP "
+	connector := "paperclipai/paperclip/agentmail"
+	model := func(key string, version types.String) PaperclipDesiredSkillModel {
+		return PaperclipDesiredSkillModel{Key: types.StringValue(key), VersionID: version}
+	}
+	for _, tc := range []struct {
+		name    string
+		planned []PaperclipDesiredSkillModel
+		entries []client.PaperclipDesiredSkillEntry
+		want    []PaperclipDesiredSkillModel
+	}{
+		{
+			name:    "import filters injected skills and preserves snapshot order and pins",
+			entries: []client.PaperclipDesiredSkillEntry{{Key: operational}, {Key: connector}, {Key: "company/new", VersionID: &version}, {Key: "company/empty-pin", VersionID: &emptyVersion}, {Key: "company/unpinned"}},
+			want:    []PaperclipDesiredSkillModel{model("company/new", types.StringValue(version)), model("company/empty-pin", types.StringNull()), model("company/unpinned", types.StringNull())},
+		},
+		{
+			name:    "explicit declarations retain injected skills with remote pins",
+			planned: []PaperclipDesiredSkillModel{model("paperclipai/paperclip/paperclip", types.StringNull()), model(" PAPERCLIPAI/PAPERCLIP/AGENTMAIL ", types.StringNull())},
+			entries: []client.PaperclipDesiredSkillEntry{{Key: connector, VersionID: &version}, {Key: operational}},
+			want:    []PaperclipDesiredSkillModel{model(connector, types.StringValue(version)), model(operational, types.StringNull())},
+		},
+		{
+			name:    "injected-only snapshot yields non-nil empty state",
+			entries: []client.PaperclipDesiredSkillEntry{{Key: operational}, {Key: connector}},
+			want:    []PaperclipDesiredSkillModel{},
+		},
+	} {
+		for _, projection := range []string{"desiredSkillEntries", "desiredSkills"} {
+			t.Run(tc.name+"/"+projection, func(t *testing.T) {
+				snapshot := &client.PaperclipAgentSkillSnapshot{
+					Entries: []map[string]interface{}{
+						{"key": " PAPERCLIPAI/PAPERCLIP/AGENTMAIL ", "readOnly": true},
+						{"key": "company/new", "readOnly": false},
+						{"key": "company/empty-pin", "readOnly": "true"},
+						{"readOnly": true},
+					},
+				}
+				want := append([]PaperclipDesiredSkillModel{}, tc.want...)
+				if projection == "desiredSkillEntries" {
+					snapshot.DesiredSkillEntries = tc.entries
+					// The structured projection is authoritative, even when all its entries are filtered.
+					snapshot.DesiredSkills = []string{"must-not-leak"}
+				} else {
+					for _, entry := range tc.entries {
+						snapshot.DesiredSkills = append(snapshot.DesiredSkills, entry.Key)
+					}
+					for i := range want {
+						want[i].VersionID = types.StringNull()
+					}
+				}
+				if got := snapshotToModelSkills(tc.planned, snapshot); !reflect.DeepEqual(got, want) {
+					t.Fatalf("state=%+v; want %+v", got, want)
+				}
+			})
+		}
 	}
 }
 

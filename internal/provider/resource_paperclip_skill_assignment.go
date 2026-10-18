@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -45,7 +46,7 @@ func (r *PaperclipSkillAssignmentResource) Metadata(ctx context.Context, req res
 
 func (r *PaperclipSkillAssignmentResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages desired skill assignments and version pins for a Paperclip agent as the sole writer of adapterConfig.paperclipSkillSync. POST /api/agents/:id/skills/sync sends unpinned skills as plain key strings and version-pinned skills as objects with key and versionId; an empty list clears assignments.",
+		Description: "Manages desired skill assignments and version pins for a Paperclip agent as the sole writer of adapterConfig.paperclipSkillSync. POST /api/agents/:id/skills/sync sends unpinned skills as plain key strings and version-pinned skills as objects with key and versionId; an empty list clears assignments. Server-required skills such as paperclipai/paperclip/paperclip and read-only snapshot skills are excluded from resource state unless explicitly declared; synchronization and destroy leave server-managed skills intact.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Description: "Unique identifier for the assignment (matches agent_id).",
@@ -119,35 +120,37 @@ func snapshotToModelSkills(planned []PaperclipDesiredSkillModel, snapshot *clien
 		return []PaperclipDesiredSkillModel{}
 	}
 
-	if len(snapshot.DesiredSkillEntries) > 0 {
-		models := make([]PaperclipDesiredSkillModel, len(snapshot.DesiredSkillEntries))
-		for i, entry := range snapshot.DesiredSkillEntries {
-			m := PaperclipDesiredSkillModel{
-				Key: types.StringValue(entry.Key),
-			}
-			if entry.VersionID != nil && *entry.VersionID != "" {
-				m.VersionID = types.StringValue(*entry.VersionID)
-			} else {
-				// If plan had explicit null or empty, keep types.StringNull
-				m.VersionID = types.StringNull()
-			}
-			models[i] = m
-		}
-		return models
+	normalize := func(key string) string { return strings.ToLower(strings.TrimSpace(key)) }
+	explicit := make(map[string]bool, len(planned))
+	for _, skill := range planned {
+		explicit[normalize(skill.Key.ValueString())] = true
 	}
-
-	if len(snapshot.DesiredSkills) > 0 {
-		models := make([]PaperclipDesiredSkillModel, len(snapshot.DesiredSkills))
-		for i, key := range snapshot.DesiredSkills {
-			models[i] = PaperclipDesiredSkillModel{
-				Key:       types.StringValue(key),
-				VersionID: types.StringNull(),
-			}
+	serverManaged := map[string]bool{"paperclipai/paperclip/paperclip": true}
+	for _, entry := range snapshot.Entries {
+		if readOnly, _ := entry["readOnly"].(bool); readOnly {
+			key, _ := entry["key"].(string)
+			serverManaged[normalize(key)] = true
 		}
-		return models
 	}
-
-	return []PaperclipDesiredSkillModel{}
+	entries := snapshot.DesiredSkillEntries
+	if len(entries) == 0 {
+		for _, key := range snapshot.DesiredSkills {
+			entries = append(entries, client.PaperclipDesiredSkillEntry{Key: key})
+		}
+	}
+	models := make([]PaperclipDesiredSkillModel, 0, len(entries))
+	for _, entry := range entries {
+		key := normalize(entry.Key)
+		if serverManaged[key] && !explicit[key] {
+			continue
+		}
+		model := PaperclipDesiredSkillModel{Key: types.StringValue(entry.Key), VersionID: types.StringNull()}
+		if entry.VersionID != nil && *entry.VersionID != "" {
+			model.VersionID = types.StringValue(*entry.VersionID)
+		}
+		models = append(models, model)
+	}
+	return models
 }
 
 func (r *PaperclipSkillAssignmentResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

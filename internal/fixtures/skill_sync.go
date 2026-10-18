@@ -25,8 +25,8 @@ func SkillSyncSnapshot(body io.Reader) (map[string]interface{}, error) {
 	if !ok {
 		return nil, fmt.Errorf("desiredSkills must be an array")
 	}
-	keys := make([]string, 0, len(selections))
-	entries := make([]map[string]interface{}, 0, len(selections))
+	keys := []string{"paperclipai/paperclip/paperclip"}
+	entries := []map[string]interface{}{{"key": "paperclipai/paperclip/paperclip", "versionId": nil}}
 	for _, selection := range selections {
 		key, isString := selection.(string)
 		var version interface{}
@@ -52,6 +52,9 @@ func SkillSyncSnapshot(body io.Reader) (map[string]interface{}, error) {
 			return nil, fmt.Errorf("skill key must be a non-empty string")
 		}
 		key = strings.TrimSpace(key)
+		if strings.EqualFold(key, keys[0]) {
+			continue
+		}
 		keys = append(keys, key)
 		entries = append(entries, map[string]interface{}{"key": key, "versionId": version})
 	}

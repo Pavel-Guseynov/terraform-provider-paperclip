@@ -42,8 +42,9 @@ func TestSkillSyncNormalizesBothSnapshotProjections(t *testing.T) {
 	snapshot, err := SkillSyncSnapshot(strings.NewReader(`{"mode":"replace","desiredSkills":[" paperclip ",{"key":" pinned ","versionId":"11111111-1111-4111-8111-111111111111"},{"key":"null-pin","versionId":null}]}`))
 	want := map[string]interface{}{
 		"adapterType": "antigravity_local", "supported": true, "mode": "replace",
-		"desiredSkills": []string{"paperclip", "pinned", "null-pin"},
+		"desiredSkills": []string{"paperclipai/paperclip/paperclip", "paperclip", "pinned", "null-pin"},
 		"desiredSkillEntries": []map[string]interface{}{
+			{"key": "paperclipai/paperclip/paperclip", "versionId": nil},
 			{"key": "paperclip", "versionId": nil},
 			{"key": "pinned", "versionId": "11111111-1111-4111-8111-111111111111"},
 			{"key": "null-pin", "versionId": nil},
@@ -51,5 +52,20 @@ func TestSkillSyncNormalizesBothSnapshotProjections(t *testing.T) {
 	}
 	if err != nil || !reflect.DeepEqual(snapshot, want) {
 		t.Fatalf("snapshot=%#v, error=%v; want %#v", snapshot, err, want)
+	}
+}
+
+func TestSkillSyncRetainsOnlyRequiredSkillForEmptyOrExplicitRequiredSelections(t *testing.T) {
+	for _, desired := range []string{`[]`, `[" PAPERCLIPAI/PAPERCLIP/PAPERCLIP "]`, `[{"key":"paperclipai/paperclip/paperclip","versionId":null},"paperclipai/paperclip/paperclip"]`} {
+		t.Run(desired, func(t *testing.T) {
+			snapshot, err := SkillSyncSnapshot(strings.NewReader(`{"mode":"replace","desiredSkills":` + desired + `}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(snapshot["desiredSkills"], []string{"paperclipai/paperclip/paperclip"}) ||
+				!reflect.DeepEqual(snapshot["desiredSkillEntries"], []map[string]interface{}{{"key": "paperclipai/paperclip/paperclip", "versionId": nil}}) {
+				t.Fatalf("unexpected required skill snapshot: %#v", snapshot)
+			}
+		})
 	}
 }

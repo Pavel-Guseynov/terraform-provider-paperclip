@@ -127,6 +127,11 @@ explicit nullable GUID `versionId` on objects. Empty assignments send `[]`.
 Read and sync responses expose `desiredSkills` as key strings and
 `desiredSkillEntries` as objects with nullable version IDs. Import and refresh
 preserve pins and expose remote drift; destroy clears the agent's assignments.
+Server-required skills such as `paperclipai/paperclip/paperclip` and snapshot
+entries marked `readOnly: true` are excluded from state unless explicitly
+declared in the planned or prior `skills` list. Import omits injected skills;
+sync and destroy leave server-managed skills intact. Company-skill additions,
+removals, reordering, and pin changes still appear as drift in snapshot order.
 Client and lifecycle tests enforce the request schema, and the parent
 `provider-opentofu-test` gate uses the packaged server's native validator.
 

@@ -1,11 +1,14 @@
 package provider
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/fixtures"
@@ -379,7 +382,8 @@ func TestPaperclipSkillAssignmentResourceLifecycle(t *testing.T) {
 
 	var deleteCalled bool
 	current := map[string]interface{}{
-		"desiredSkills": []string{}, "desiredSkillEntries": []map[string]interface{}{},
+		"desiredSkills":       []string{"paperclipai/paperclip/paperclip"},
+		"desiredSkillEntries": []map[string]interface{}{{"key": "paperclipai/paperclip/paperclip", "versionId": nil}},
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -387,15 +391,29 @@ func TestPaperclipSkillAssignmentResourceLifecycle(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/agents/agent-1/skills":
 			_ = json.NewEncoder(w).Encode(current)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/agents/agent-1/skills/sync":
-			snapshot, err := fixtures.SkillSyncSnapshot(r.Body)
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			var request struct {
+				Mode          string        `json:"mode"`
+				DesiredSkills []interface{} `json:"desiredSkills"`
+			}
+			if err := json.Unmarshal(body, &request); err != nil {
+				t.Error(err)
+				return
+			}
+			if request.Mode != "replace" || strings.Contains(string(body), "paperclipai/paperclip/paperclip") {
+				t.Errorf("unexpected assignment request: %s", body)
+			}
+			deleteCalled = request.DesiredSkills != nil && len(request.DesiredSkills) == 0
+			snapshot, err := fixtures.SkillSyncSnapshot(bytes.NewReader(body))
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
 			current = snapshot
-			if len(snapshot["desiredSkills"].([]string)) == 0 {
-				deleteCalled = true
-			}
 			_ = json.NewEncoder(w).Encode(snapshot)
 		default:
 			http.NotFound(w, r)
@@ -507,34 +525,71 @@ func TestPaperclipSkillAssignmentResourceLifecycle(t *testing.T) {
 	}
 	assertSkills(importRead.State, planModel.Skills)
 
-	// Simulate an out-of-band removal; refresh must expose it, then update repairs it.
-	current["desiredSkills"] = []string{"skill-2", "skill-3"}
-	current["desiredSkillEntries"] = []map[string]interface{}{
-		{"key": "skill-2", "versionId": version.ValueString()},
-		{"key": "skill-3", "versionId": nil},
+	repairedState := unpinResp.State
+	for _, tc := range []struct {
+		name    string
+		desired string
+		want    []PaperclipDesiredSkillModel
+	}{
+		{
+			name:    "removal",
+			desired: `[{"key":"skill-2","versionId":"11111111-1111-4111-8111-111111111111"},"skill-3"]`,
+			want:    planModel.Skills[1:],
+		},
+		{
+			name:    "addition",
+			desired: `["skill-1",{"key":"skill-2","versionId":"11111111-1111-4111-8111-111111111111"},"skill-3","company/extra"]`,
+			want:    append(append([]PaperclipDesiredSkillModel{}, planModel.Skills...), PaperclipDesiredSkillModel{Key: types.StringValue("company/extra"), VersionID: types.StringNull()}),
+		},
+		{
+			name:    "reordering",
+			desired: `["skill-3",{"key":"skill-2","versionId":"11111111-1111-4111-8111-111111111111"},"skill-1"]`,
+			want:    []PaperclipDesiredSkillModel{planModel.Skills[2], planModel.Skills[1], planModel.Skills[0]},
+		},
+		{
+			name:    "pin change",
+			desired: `["skill-1",{"key":"skill-2","versionId":"22222222-2222-4222-8222-222222222222"},"skill-3"]`,
+			want:    []PaperclipDesiredSkillModel{planModel.Skills[0], {Key: types.StringValue("skill-2"), VersionID: types.StringValue("22222222-2222-4222-8222-222222222222")}, planModel.Skills[2]},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var err error
+			current, err = fixtures.SkillSyncSnapshot(strings.NewReader(`{"mode":"replace","desiredSkills":` + tc.desired + `}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var driftRead resource.ReadResponse
+			driftRead.State = repairedState
+			r.Read(ctx, resource.ReadRequest{State: repairedState}, &driftRead)
+			if driftRead.Diagnostics.HasError() {
+				t.Fatalf("drift read failed: %v", driftRead.Diagnostics)
+			}
+			assertSkills(driftRead.State, tc.want)
+			var repairResp resource.UpdateResponse
+			repairResp.State = driftRead.State
+			r.Update(ctx, resource.UpdateRequest{Plan: plan, State: driftRead.State}, &repairResp)
+			if repairResp.Diagnostics.HasError() {
+				t.Fatalf("drift repair failed: %v", repairResp.Diagnostics)
+			}
+			assertSkills(repairResp.State, planModel.Skills)
+			var converged resource.ReadResponse
+			converged.State = repairResp.State
+			r.Read(ctx, resource.ReadRequest{State: repairResp.State}, &converged)
+			if converged.Diagnostics.HasError() {
+				t.Fatalf("convergence read failed: %v", converged.Diagnostics)
+			}
+			assertSkills(converged.State, planModel.Skills)
+			repairedState = converged.State
+		})
 	}
-	var driftRead resource.ReadResponse
-	driftRead.State = unpinResp.State
-	r.Read(ctx, resource.ReadRequest{State: unpinResp.State}, &driftRead)
-	if driftRead.Diagnostics.HasError() {
-		t.Fatalf("drift read failed: %v", driftRead.Diagnostics)
-	}
-	assertSkills(driftRead.State, planModel.Skills[1:])
-	var repairResp resource.UpdateResponse
-	repairResp.State = driftRead.State
-	r.Update(ctx, resource.UpdateRequest{Plan: plan, State: driftRead.State}, &repairResp)
-	if repairResp.Diagnostics.HasError() {
-		t.Fatalf("drift repair failed: %v", repairResp.Diagnostics)
-	}
-	assertSkills(repairResp.State, planModel.Skills)
 
 	var delResp resource.DeleteResponse
-	r.Delete(ctx, resource.DeleteRequest{State: repairResp.State}, &delResp)
+	r.Delete(ctx, resource.DeleteRequest{State: repairedState}, &delResp)
 	if delResp.Diagnostics.HasError() {
 		t.Fatalf("delete failed: %v", delResp.Diagnostics)
 	}
-	if !deleteCalled || len(current["desiredSkills"].([]string)) != 0 || len(current["desiredSkillEntries"].([]map[string]interface{})) != 0 {
-		t.Fatal("expected sync with empty desired skills on delete")
+	if !deleteCalled || !reflect.DeepEqual(current["desiredSkills"], []string{"paperclipai/paperclip/paperclip"}) || !reflect.DeepEqual(current["desiredSkillEntries"], []map[string]interface{}{{"key": "paperclipai/paperclip/paperclip", "versionId": nil}}) {
+		t.Fatal("expected sync with empty desired skills on delete while the required skill remains mounted")
 	}
 }
 

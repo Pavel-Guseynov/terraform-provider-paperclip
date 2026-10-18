@@ -342,11 +342,12 @@ func TestSyncAgentSkillsSerializesServerSelections(t *testing.T) {
 			if !reflect.DeepEqual(received, map[string]interface{}{"mode": mode, "desiredSkills": wantWire}) {
 				t.Fatalf("request=%#v; want mode=%s desiredSkills=%s", received, mode, tc.wire)
 			}
-			keys := make([]string, len(tc.wantEntries))
-			for i, entry := range tc.wantEntries {
+			wantEntries := append([]PaperclipDesiredSkillEntry{{Key: "paperclipai/paperclip/paperclip"}}, tc.wantEntries...)
+			keys := make([]string, len(wantEntries))
+			for i, entry := range wantEntries {
 				keys[i] = entry.Key
 			}
-			if !reflect.DeepEqual(snapshot.DesiredSkills, keys) || !reflect.DeepEqual(snapshot.DesiredSkillEntries, tc.wantEntries) || snapshot.Mode != mode {
+			if !reflect.DeepEqual(snapshot.DesiredSkills, keys) || !reflect.DeepEqual(snapshot.DesiredSkillEntries, wantEntries) || snapshot.Mode != mode {
 				t.Fatalf("unexpected response snapshot: %+v", snapshot)
 			}
 		})
