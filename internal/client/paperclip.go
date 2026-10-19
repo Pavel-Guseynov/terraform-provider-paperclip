@@ -3622,14 +3622,15 @@ func (c *Client) DisablePlugin(ctx context.Context, pluginID, reason string) (*P
 	return &res, nil
 }
 
-func (c *Client) UpgradePlugin(ctx context.Context, pluginID, version string) (*PaperclipPlugin, error) {
+type PaperclipPluginUpgradeInput struct {
+	Version     string `json:"version,omitempty"`
+	PackagePath string `json:"packagePath,omitempty"`
+}
+
+func (c *Client) UpgradePlugin(ctx context.Context, pluginID string, input PaperclipPluginUpgradeInput) (*PaperclipPlugin, error) {
 	var res PaperclipPlugin
 	path := fmt.Sprintf("/api/plugins/%s/upgrade", url.PathEscape(pluginID))
-	body := map[string]interface{}{}
-	if version != "" {
-		body["version"] = version
-	}
-	if err := c.paperclipRequest(ctx, http.MethodPost, path, body, &res); err != nil {
+	if err := c.paperclipRequest(ctx, http.MethodPost, path, input, &res); err != nil {
 		return nil, err
 	}
 	return &res, nil

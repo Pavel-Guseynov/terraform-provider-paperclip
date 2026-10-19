@@ -193,15 +193,15 @@ func TestClientPlugins(t *testing.T) {
 	}
 
 	// 5. UpgradePlugin (with version and without)
-	upgraded, err := cli.UpgradePlugin(ctx, "plug-1", "1.1.0")
+	upgraded, err := cli.UpgradePlugin(ctx, "plug-1", PaperclipPluginUpgradeInput{Version: "1.1.0"})
 	if err != nil || upgraded.Version != "1.1.0" {
 		t.Fatalf("unexpected result from UpgradePlugin: %v, err: %v", upgraded, err)
 	}
-	upgradedPending, err := cli.UpgradePlugin(ctx, "plug-1", "2.0.0")
+	upgradedPending, err := cli.UpgradePlugin(ctx, "plug-1", PaperclipPluginUpgradeInput{Version: "2.0.0"})
 	if err != nil || upgradedPending.Status != "upgrade_pending" {
 		t.Fatalf("unexpected result from UpgradePlugin upgrade_pending: %v, err: %v", upgradedPending, err)
 	}
-	upgradedLatest, err := cli.UpgradePlugin(ctx, "plug-1", "")
+	upgradedLatest, err := cli.UpgradePlugin(ctx, "plug-1", PaperclipPluginUpgradeInput{})
 	if err != nil {
 		t.Fatalf("unexpected result from UpgradePlugin without version: %v", err)
 	}
@@ -220,7 +220,7 @@ func TestClientPlugins(t *testing.T) {
 	if _, err := cli.DisablePlugin(ctx, "plug-err", "test"); err == nil {
 		t.Fatal("expected error from DisablePlugin")
 	}
-	if _, err := cli.UpgradePlugin(ctx, "plug-err", "1.0.0"); err == nil {
+	if _, err := cli.UpgradePlugin(ctx, "plug-err", PaperclipPluginUpgradeInput{Version: "1.0.0"}); err == nil {
 		t.Fatal("expected error from UpgradePlugin")
 	}
 	if _, err := cli.UninstallPlugin(ctx, "plug-err", true); err == nil {

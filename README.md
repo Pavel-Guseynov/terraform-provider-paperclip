@@ -122,11 +122,16 @@ and consumer/backend selection are outside provider delivery.
 create, refresh and in-place updates retain the configured local path, including
 a stable system profile link, even when the API returns a canonical npm name
 and a resolved `packagePath`. UUID import restores the API's `packagePath`.
-The API does not retain the original source alias, so import cannot recover a
-stable link from a generation-specific resolved path. Do not copy that resolved
-path into persistent configuration; source-alias recovery needs a native
-source-identity contract. Reconcile state written by a previous provider that
-stored the npm name as a local source before applying any proposed replacement.
+With the native source-recovery correction, changing a local source uses
+`POST /api/plugins/:id/upgrade` with `packagePath`, retaining the plugin UUID,
+company configuration and secret bindings. It can recover a prior canonical npm
+name or an unavailable old generation into the current stable profile source.
+The native host checks package identity, capabilities and canonical-path
+permissions before runtime shutdown. Review an update-only OpenTofu plan before
+applying; the correction requires the coordinated native host revision. Import
+from an older host can still return its generation-specific path; configure the
+stable alias and let the native upgrade reconcile it, never copy the generation
+path into persistent settings.
 
 `paperclip_skill_assignment` owns the complete desired skill list for one agent.
 It sends `POST /api/agents/:id/skills/sync` in replace mode, with plain key
