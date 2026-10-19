@@ -32,6 +32,7 @@ func TestPluginLocalInstallSource(t *testing.T) {
 		{"recovery upgrades the existing registration source", "recover", true, "/run/current-system/sw/lib/node_modules/@paperclipai/plugin-ci-wake", []string{"POST /api/plugins/plug-local/upgrade", "GET /api/plugins/plug-local"}, false},
 		{"ignored recovery preserves prior state", "ignored", true, "@paperclipai/plugin-ci-wake", []string{"POST /api/plugins/plug-local/upgrade", "GET /api/plugins/plug-local"}, true},
 		{"missing recovery path preserves prior state", "missing", true, "@paperclipai/plugin-ci-wake", []string{"POST /api/plugins/plug-local/upgrade", "GET /api/plugins/plug-local"}, true},
+		{"empty source preserves prior state without an API mutation", "empty", true, "@paperclipai/plugin-ci-wake", nil, true},
 		{"import restores installed path", "import", true, "/resolved/plugins/ci-wake", []string{"GET /api/plugins/plug-local"}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -102,6 +103,9 @@ func TestPluginLocalInstallSource(t *testing.T) {
 				}
 			}
 			model.PurgeOnDestroy = types.BoolValue(true)
+			if tc.operation == "empty" {
+				model.PackageName = types.StringValue("")
+			}
 			if d := plan.Set(ctx, &model); d.HasError() {
 				t.Fatal(d)
 			}
@@ -121,13 +125,17 @@ func TestPluginLocalInstallSource(t *testing.T) {
 					t.Fatal(resp.Diagnostics)
 				}
 				state = resp.State
-			case "update", "recover", "ignored", "missing":
+			case "update", "recover", "ignored", "missing", "empty":
 				resp := resource.UpdateResponse{State: state}
 				r.Update(ctx, resource.UpdateRequest{Plan: plan, State: state}, &resp)
 				if resp.Diagnostics.HasError() != tc.wantError {
-					t.Fatal(resp.Diagnostics)
+					t.Fatalf("unexpected source recovery diagnostics: %v; API requests: %v", resp.Diagnostics, requests)
 				}
-				if tc.wantError && resp.Diagnostics[0].Summary() != "Native plugin source recovery was not retained" {
+				wantSummary := "Native plugin source recovery was not retained"
+				if tc.operation == "empty" {
+					wantSummary = "Invalid local plugin source"
+				}
+				if tc.wantError && resp.Diagnostics[0].Summary() != wantSummary {
 					t.Fatal(resp.Diagnostics)
 				}
 				state = resp.State

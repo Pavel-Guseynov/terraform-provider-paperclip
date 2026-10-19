@@ -247,6 +247,10 @@ func (r *PaperclipPluginResource) Update(ctx context.Context, req resource.Updat
 	pluginID := state.ID.ValueString()
 	upgrade := client.PaperclipPluginUpgradeInput{}
 	if plan.IsLocalPath.ValueBool() && !plan.PackageName.Equal(state.PackageName) {
+		if plan.PackageName.ValueString() == "" {
+			resp.Diagnostics.AddError("Invalid local plugin source", "Local package_name must not be empty; the prior provider state is preserved.")
+			return
+		}
 		upgrade.PackagePath = plan.PackageName.ValueString()
 	}
 
