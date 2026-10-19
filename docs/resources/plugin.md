@@ -25,7 +25,7 @@ resource "paperclip_plugin" "linear" {
 
 ### Required
 
-- `package_name` (String) npm package name (e.g. @paperclip/plugin-linear) or local filesystem path.
+- `package_name` (String) Install source: npm package name (e.g. @paperclip/plugin-linear) or local filesystem path. Local sources retain their configured path; importing a local plugin restores the API's installed packagePath.
 
 ### Optional
 

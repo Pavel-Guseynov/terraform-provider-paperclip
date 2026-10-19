@@ -78,7 +78,7 @@ func (r *PaperclipPluginResource) Schema(ctx context.Context, req resource.Schem
 				},
 			},
 			"package_name": schema.StringAttribute{
-				Description: "npm package name (e.g. @paperclip/plugin-linear) or local filesystem path.",
+				Description: "Install source: npm package name (e.g. @paperclip/plugin-linear) or local filesystem path. Local sources retain their configured path; importing a local plugin restores the API's installed packagePath.",
 				Required:    true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
@@ -178,7 +178,6 @@ func (r *PaperclipPluginResource) Create(ctx context.Context, req resource.Creat
 
 	plan.ID = types.StringValue(created.ID)
 	plan.PluginKey = types.StringValue(created.PluginKey)
-	plan.PackageName = types.StringValue(created.PackageName)
 	plan.Version = types.StringValue(created.Version)
 	plan.IsLocalPath = types.BoolValue(plan.IsLocalPath.ValueBool())
 	plan.Enabled = types.BoolValue(created.Status != "disabled")
@@ -212,9 +211,15 @@ func (r *PaperclipPluginResource) Read(ctx context.Context, req resource.ReadReq
 
 	state.ID = types.StringValue(plugin.ID)
 	state.PluginKey = types.StringValue(plugin.PluginKey)
-	state.PackageName = types.StringValue(plugin.PackageName)
 	state.Version = types.StringValue(plugin.Version)
 	state.IsLocalPath = types.BoolValue(plugin.PackagePath != nil && *plugin.PackagePath != "")
+	if state.IsLocalPath.ValueBool() {
+		if state.PackageName.IsNull() {
+			state.PackageName = types.StringValue(*plugin.PackagePath)
+		}
+	} else {
+		state.PackageName = types.StringValue(plugin.PackageName)
+	}
 	state.Enabled = types.BoolValue(plugin.Status != "disabled")
 	state.Status = types.StringValue(plugin.Status)
 	state.UpgradePending = types.BoolValue(plugin.Status == "upgrade_pending")
@@ -268,7 +273,6 @@ func (r *PaperclipPluginResource) Update(ctx context.Context, req resource.Updat
 
 	plan.ID = types.StringValue(current.ID)
 	plan.PluginKey = types.StringValue(current.PluginKey)
-	plan.PackageName = types.StringValue(current.PackageName)
 	plan.Version = types.StringValue(current.Version)
 	plan.IsLocalPath = types.BoolValue(plan.IsLocalPath.ValueBool())
 	plan.Enabled = types.BoolValue(current.Status != "disabled")

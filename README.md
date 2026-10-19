@@ -118,6 +118,16 @@ and consumer/backend selection are outside provider delivery.
 
 ## Integration contract
 
+`paperclip_plugin.package_name` is the install source. With `is_local_path = true`,
+create, refresh and in-place updates retain the configured local path, including
+a stable system profile link, even when the API returns a canonical npm name
+and a resolved `packagePath`. UUID import restores the API's `packagePath`.
+The API does not retain the original source alias, so import cannot recover a
+stable link from a generation-specific resolved path. Do not copy that resolved
+path into persistent configuration; source-alias recovery needs a native
+source-identity contract. Reconcile state written by a previous provider that
+stored the npm name as a local source before applying any proposed replacement.
+
 `paperclip_skill_assignment` owns the complete desired skill list for one agent.
 It sends `POST /api/agents/:id/skills/sync` in replace mode, with plain key
 strings for unpinned skills (null or empty `version_id`) and
