@@ -792,8 +792,9 @@ func TestPaperclipClientCRUD(t *testing.T) {
 			})
 		case r.URL.Path == "/api/agents/agent-123/instructions-bundle/file" && r.Method == http.MethodGet:
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"path":    "AGENTS.md",
-				"content": "# Instructions",
+				"path":     "AGENTS.md",
+				"content":  "# Instructions",
+				"revision": map[string]string{"id": "11111111-1111-4111-8111-111111111111"},
 			})
 		case r.URL.Path == "/api/agents/agent-123/instructions-bundle/file" && r.Method == http.MethodPut:
 			w.WriteHeader(http.StatusOK)

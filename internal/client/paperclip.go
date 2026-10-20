@@ -2739,16 +2739,29 @@ func (c *Client) UpdateAgentInstructionsBundle(ctx context.Context, agentID stri
 	return &resp, nil
 }
 
-func (c *Client) GetAgentInstructionsFile(ctx context.Context, agentID, filePath string) (string, error) {
-	var resp map[string]interface{}
+type agentInstructionsFile struct {
+	Content     string  `json:"content"`
+	ContentHash *string `json:"contentHash"`
+	Revision    *struct {
+		ID string `json:"id"`
+	} `json:"revision"`
+}
+
+func (c *Client) getAgentInstructionsFile(ctx context.Context, agentID, filePath string) (*agentInstructionsFile, error) {
+	var resp agentInstructionsFile
 	reqPath := fmt.Sprintf("/api/agents/%s/instructions-bundle/file?path=%s", url.PathEscape(agentID), url.QueryEscape(filePath))
 	if err := c.paperclipRequest(ctx, http.MethodGet, reqPath, nil, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *Client) GetAgentInstructionsFile(ctx context.Context, agentID, filePath string) (string, error) {
+	file, err := c.getAgentInstructionsFile(ctx, agentID, filePath)
+	if err != nil {
 		return "", err
 	}
-	if content, ok := resp["content"].(string); ok {
-		return content, nil
-	}
-	return "", nil
+	return file.Content, nil
 }
 
 func (c *Client) UpdateAgentInstructionsFile(ctx context.Context, agentID, filePath, content string) error {
@@ -2756,9 +2769,26 @@ func (c *Client) UpdateAgentInstructionsFile(ctx context.Context, agentID, fileP
 }
 
 func (c *Client) UpdateAgentInstructionsFileWithClear(ctx context.Context, agentID, filePath, content string, clearLegacyPromptTemplate bool) error {
+	current, err := c.getAgentInstructionsFile(ctx, agentID, filePath)
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		return err
+	}
 	payload := map[string]interface{}{
-		"path":    filePath,
-		"content": content,
+		"path":           filePath,
+		"content":        content,
+		"baseRevisionId": nil,
+	}
+	if current == nil {
+		payload["baseHash"] = nil
+	} else if current.Revision != nil {
+		if current.Revision.ID == "" {
+			return fmt.Errorf("native instruction file %q returned an empty revision; refusing to overwrite it", filePath)
+		}
+		payload["baseRevisionId"] = current.Revision.ID
+	} else if current.ContentHash != nil && *current.ContentHash != "" {
+		payload["baseHash"] = *current.ContentHash
+	} else {
+		return fmt.Errorf("native instruction file %q returned no revision or content hash; refusing to overwrite it", filePath)
 	}
 	if clearLegacyPromptTemplate {
 		payload["clearLegacyPromptTemplate"] = true
@@ -2776,7 +2806,17 @@ func (c *Client) DeleteAgentInstructionsFile(ctx context.Context, agentID, fileP
 	if filePath == "" {
 		return errors.New("file path is required")
 	}
-	reqPath := fmt.Sprintf("/api/agents/%s/instructions-bundle/file?path=%s", url.PathEscape(agentID), url.QueryEscape(filePath))
+	current, err := c.getAgentInstructionsFile(ctx, agentID, filePath)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if current.ContentHash == nil || *current.ContentHash == "" {
+		return fmt.Errorf("native instruction file %q returned no content hash; refusing to delete it", filePath)
+	}
+	reqPath := fmt.Sprintf("/api/agents/%s/instructions-bundle/file?path=%s&baseHash=%s", url.PathEscape(agentID), url.QueryEscape(filePath), url.QueryEscape(*current.ContentHash))
 	return c.paperclipRequest(ctx, http.MethodDelete, reqPath, nil, nil)
 }
 
