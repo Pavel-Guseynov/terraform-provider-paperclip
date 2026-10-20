@@ -118,6 +118,18 @@ and consumer/backend selection are outside provider delivery.
 
 ## Integration contract
 
+Instruction bundle writes use the native concurrency contract in upstream
+stable `v2026.1012.0`. Before each file mutation, the provider reads that file.
+For a versioned entry it sends `revision.id` as `baseRevisionId`; for other
+managed files it sends the returned `contentHash` as `baseHash`. New files send
+explicit null base tokens. Deletion sends the observed `baseHash` and treats an
+already absent file as deleted. Missing concurrency metadata or a failed read
+prevents mutation. A concurrent edit between the read and mutation returns the
+native conflict, including HTTP status, error code and correlation ID, without
+an automatic retry. Reconcile the concurrent edit and run a fresh plan before
+applying again. Mutations are guarded per file; the native API does not offer
+an atomic multi-file bundle transaction.
+
 `paperclip_plugin.package_name` is the install source. With `is_local_path = true`,
 create, refresh and in-place updates retain the configured local path, including
 a stable system profile link, even when the API returns a canonical npm name

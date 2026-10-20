@@ -2,7 +2,9 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,6 +16,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
+
+func instructionFileFixture(content string) map[string]interface{} {
+	return map[string]interface{}{"content": content, "contentHash": fmt.Sprintf("%x", sha256.Sum256([]byte(content)))}
+}
 
 func TestPaperclipAgentUpgradeStateV1ToV2(t *testing.T) {
 	ctx := context.Background()
@@ -231,11 +237,11 @@ func TestPaperclipAgentInstructionBundleResourceLifecycle(t *testing.T) {
 		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/ag-1/instructions-bundle/file":
 			p := req.URL.Query().Get("path")
 			if c, ok := state.files[p]; ok {
-				_ = json.NewEncoder(w).Encode(map[string]interface{}{"content": c})
+				_ = json.NewEncoder(w).Encode(instructionFileFixture(c))
 				return
 			}
 			if c, ok := state.virtuals[p]; ok {
-				_ = json.NewEncoder(w).Encode(map[string]interface{}{"content": c})
+				_ = json.NewEncoder(w).Encode(instructionFileFixture(c))
 				return
 			}
 			http.NotFound(w, req)
@@ -1343,7 +1349,7 @@ func TestPaperclipAgentInstructionBundleOmittedFilesPreservation(t *testing.T) {
 		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/ag-pres/instructions-bundle/file":
 			p := req.URL.Query().Get("path")
 			if c, ok := serverFiles[p]; ok {
-				_ = json.NewEncoder(w).Encode(map[string]interface{}{"content": c})
+				_ = json.NewEncoder(w).Encode(instructionFileFixture(c))
 				return
 			}
 			http.NotFound(w, req)
@@ -1544,6 +1550,8 @@ func TestPaperclipAgentInstructionBundleDeleteErrorHandling(t *testing.T) {
 				return
 			}
 			w.WriteHeader(http.StatusOK)
+		case req.Method == http.MethodGet && req.URL.Path == "/api/agents/ag-err/instructions-bundle/file":
+			_ = json.NewEncoder(w).Encode(instructionFileFixture("existing file"))
 		case req.Method == http.MethodPut && req.URL.Path == "/api/agents/ag-err/instructions-bundle/file":
 			if failClearEntry {
 				http.Error(w, "disk failure on clear entry file", http.StatusInternalServerError)

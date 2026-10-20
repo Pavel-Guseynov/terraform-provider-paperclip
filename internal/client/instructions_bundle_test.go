@@ -49,6 +49,8 @@ func TestAgentInstructionsBundleClientMethods(t *testing.T) {
 			})
 		case r.Method == http.MethodPatch && r.URL.Path == "/api/agents/agent-err/instructions-bundle":
 			http.Error(w, `{"error":"patch error"}`, http.StatusInternalServerError)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/agents/agent-1/instructions-bundle/file":
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"content": "hello", "contentHash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"})
 		case r.Method == http.MethodPut && r.URL.Path == "/api/agents/agent-1/instructions-bundle/file":
 			var body map[string]interface{}
 			_ = json.NewDecoder(r.Body).Decode(&body)
