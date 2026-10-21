@@ -1,0 +1,22 @@
+{
+  "terraform": {
+    "required_providers": {
+      "paperclip": { "source": "guseynov/paperclip", "version": "0.1.0" }
+    }
+  },
+  "variable": { "endpoint": { "type": "string" } },
+  "provider": {
+    "paperclip": { "endpoint": "${var.endpoint}", "token": "paperclip-operator-token" }
+  },
+  "resource": {
+    "paperclip_plugin": {
+      "ci_wake": {
+        "package_name": "/run/current-system/sw/lib/node_modules/@paperclipai/plugin-ci-wake",
+        "version": "1.0.0",
+        "is_local_path": true,
+        "enabled": true,
+        "purge_on_destroy": false
+      }
+    }
+  }
+}
