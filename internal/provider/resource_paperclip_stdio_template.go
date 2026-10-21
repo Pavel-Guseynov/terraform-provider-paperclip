@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -47,6 +48,7 @@ type PaperclipStdioTemplateResourceModel struct {
 	Command     types.String `tfsdk:"command"`
 	Args        types.List   `tfsdk:"args"`
 	EnvKeys     types.List   `tfsdk:"env_keys"`
+	Tools       types.String `tfsdk:"tools"`
 }
 
 func templateStrings(ctx context.Context, list types.List) ([]string, diag.Diagnostics) {
@@ -129,6 +131,17 @@ func (r *PaperclipStdioTemplateResource) Schema(ctx context.Context, req resourc
 					listplanmodifier.RequiresReplace(),
 				},
 			},
+			"tools": schema.StringAttribute{
+				Description: "JSON array of producer-supplied native tool descriptors: name, title, description, inputSchema and annotations. Local stdio catalog refresh reads these approved descriptors; it does not discover tools from the command. Omission retains imported descriptors and defaults to an empty native catalog on creation. Descriptor changes require a new template identity. Schemas and annotations must come from the producing MCP server, never fabricated approval hints.",
+				Optional:    true,
+				Computed:    true,
+				Validators:  []validator.String{stdioTemplateToolsValidator{}},
+				PlanModifiers: []planmodifier.String{
+					semanticJSONPlanModifier{normalize: normalizeStdioTemplateTools},
+					stringplanmodifier.UseStateForUnknown(),
+					stringplanmodifier.RequiresReplace(),
+				},
+			},
 		},
 	}
 }
@@ -170,6 +183,10 @@ func (r *PaperclipStdioTemplateResource) Create(ctx context.Context, req resourc
 	resp.Diagnostics.Append(diags...)
 	envKeys, diags := templateStrings(ctx, plan.EnvKeys)
 	resp.Diagnostics.Append(diags...)
+	tools, err := parseStdioTemplateTools(plan.Tools)
+	if err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("tools"), "Invalid native tool descriptors", err.Error())
+	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -182,6 +199,7 @@ func (r *PaperclipStdioTemplateResource) Create(ctx context.Context, req resourc
 		Command:     plan.Command.ValueString(),
 		Args:        args,
 		EnvKeys:     envKeys,
+		Tools:       tools,
 	}
 
 	created, err := r.client.CreateStdioTemplate(ctx, plan.CompanyID.ValueString(), tpl)
@@ -201,6 +219,11 @@ func (r *PaperclipStdioTemplateResource) Create(ctx context.Context, req resourc
 	plan.Command = types.StringValue(created.Command)
 	plan.Args = templateListState(ctx, plan.Args, created.Args)
 	plan.EnvKeys = templateListState(ctx, plan.EnvKeys, created.EnvKeys)
+	plannedTools := plan.Tools
+	plan.Tools = refreshSemanticJSONNormalized(plan.Tools, created.Tools, normalizeStdioTemplateTools)
+	if !plannedTools.IsNull() && !plannedTools.IsUnknown() && !plan.Tools.Equal(plannedTools) {
+		resp.Diagnostics.AddError("Native tool descriptors were not preserved", "Paperclip returned tool descriptors that differ from the configured producer data. The created template identity is retained; do not grant access until its descriptors are verified.")
+	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
@@ -242,6 +265,7 @@ func (r *PaperclipStdioTemplateResource) Read(ctx context.Context, req resource.
 	state.Command = types.StringValue(tpl.Command)
 	state.Args = templateListState(ctx, state.Args, tpl.Args)
 	state.EnvKeys = templateListState(ctx, state.EnvKeys, tpl.EnvKeys)
+	state.Tools = refreshSemanticJSONNormalized(state.Tools, tpl.Tools, normalizeStdioTemplateTools)
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }

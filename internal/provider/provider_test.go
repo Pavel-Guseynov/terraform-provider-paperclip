@@ -2928,7 +2928,7 @@ func TestPaperclipStdioTemplateIsImmutable(t *testing.T) {
 	if _, present := tplSchema.Attributes["env"]; present {
 		t.Fatal("template schema still carries environment values Paperclip never stores")
 	}
-	for _, name := range []string{"name", "description", "command", "args", "env_keys"} {
+	for _, name := range []string{"name", "description", "command", "args", "env_keys", "tools"} {
 		var modifiers []string
 		switch attribute := tplSchema.Attributes[name].(type) {
 		case schema.StringAttribute:

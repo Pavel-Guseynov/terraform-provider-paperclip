@@ -261,6 +261,7 @@ resource "paperclip_mcp_gateway_token" "automation" {
   command     = "gitea-mcp"
   args        = ["serve"]
   env_keys    = ["GITEA_TOKEN"]
+  tools       = file(var.producer_tools_path)
 }
 `,
 	"paperclip_connection_install": `resource "paperclip_connection_install" "gitea_install" {

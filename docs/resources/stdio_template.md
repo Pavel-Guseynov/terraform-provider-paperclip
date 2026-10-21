@@ -20,6 +20,7 @@ resource "paperclip_stdio_template" "gitea_stdio" {
   command     = "gitea-mcp"
   args        = ["serve"]
   env_keys    = ["GITEA_TOKEN"]
+  tools       = file(var.producer_tools_path)
 }
 ```
 
@@ -38,6 +39,7 @@ resource "paperclip_stdio_template" "gitea_stdio" {
 - `args` (List of String)
 - `description` (String)
 - `env_keys` (List of String)
+- `tools` (String) JSON array of producer-supplied native tool descriptors: name, title, description, inputSchema and annotations. Local stdio catalog refresh reads these approved descriptors; it does not discover tools from the command. Omission retains imported descriptors and defaults to an empty native catalog on creation. Descriptor changes require a new template identity. Schemas and annotations must come from the producing MCP server, never fabricated approval hints.
 
 ### Read-Only
 

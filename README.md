@@ -157,6 +157,30 @@ approved template or a preceding template declaration still fail at plan with
 `Invalid approved stdio template`; independent provider configurations do not
 share declarations. See the [connection resource reference](docs/resources/connection.md).
 
+`paperclip_stdio_template.tools` accepts a JSON array of native descriptors
+from the locked MCP executable's declared `initialize` / `tools/list` protocol:
+`name`, optional `title` and `description`, `inputSchema`, and `annotations`.
+Supply the actual descriptors with `jsonencode(...)` or `file(...)`; no separate
+producer export file is required. Schemas, nested annotation
+values and explicit false hints are preserved. The provider rejects malformed
+descriptors, duplicate names and fields the native template cannot retain.
+It compares only the server's documented optional-field defaults; it never
+invents read-only or approval hints. Omission retains imported descriptors;
+custom creation without descriptors produces an empty catalog. Local stdio
+catalog refresh copies the approved template's descriptors rather than running
+the MCP command to discover them.
+
+Templates are immutable. When producer descriptors change, declare a new
+`template_id` incorporating both the locked executable identity and descriptor
+content, together with the launch arguments and environment-key allowlist. Update the
+existing connection through its template resource reference. Omitted connection
+`status` and `enabled` retain native draft/disabled values; declare `"active"`
+and `true` to own activation, subject to the native deployment and trusted
+runtime guards. `paperclip_app_permission` refreshes an empty catalog before
+applying its selected access through the native finish API. That operation
+preserves native catalog review and approval policy; an empty approved template
+cannot become a usable catalog through activation alone.
+
 `paperclip_agent.runtime_config.heartbeat.sessionCompaction` accepts the native
 policy object. Its optional fields are boolean `enabled` and nonnegative integer
 `maxSessionRuns`, `maxRawInputTokens`, and `maxSessionAgeHours`. Zero disables a

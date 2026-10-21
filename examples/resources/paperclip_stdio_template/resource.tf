@@ -6,4 +6,5 @@ resource "paperclip_stdio_template" "gitea_stdio" {
   command     = "gitea-mcp"
   args        = ["serve"]
   env_keys    = ["GITEA_TOKEN"]
+  tools       = file(var.producer_tools_path)
 }
