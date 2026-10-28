@@ -38,13 +38,13 @@ resource "paperclip_agent" "engineer" {
 
 ### Optional
 
-- `adapter_config` (String) Optional JSON adapter object validated against published native field metadata at plan and before writes. UI omissions do not close the map; only an explicit additional-properties policy does. Instruction and paperclipSkillSync keys belong to separate resources and are rejected here. Requires board access to adapter schema metadata. Clear a nonempty declaration with jsonencode({}) before omitting it; null/omission cannot silently clear this optional/computed attribute. Remove adapter-agnostic keys with the original adapter_type before changing adapter_type.
+- `adapter_config` (String) Optional JSON adapter object validated against published native field metadata at plan and before writes. UI omissions do not close the map; only an explicit additional-properties policy does. Undeclared env secret_ref and user_secret_ref bindings appear as drift and are cleared on apply; credential values are never read. Instruction and paperclipSkillSync keys belong to separate resources and are rejected here. Requires board access to adapter schema metadata. Clear a nonempty declaration with jsonencode({}) before omitting it; null/omission cannot silently clear this optional/computed attribute. Remove adapter-agnostic keys with the original adapter_type before changing adapter_type.
 - `adapter_type` (String) Execution adapter type (e.g. antigravity_local).
 - `authorization_policy` (String) Optional JSON authorization policy for the agent. Recognised top-level keys: agentVisibility, assignmentPolicy, protectedAgent, managedBy.
 - `can_create_skills` (Boolean) Whether the agent may create skills. Defaults to true.
 - `capabilities` (String) Optional capabilities description or comma-separated list.
 - `default_environment_id` (String) Optional execution environment ID for the agent.
-- `env` (Map of Objects, see [below for nested schema](#nestedatt--env)) Optional environment bindings for the agent (merged into adapter_config.env).
+- `env` (Map of Objects, see [below for nested schema](#nestedatt--env)) Optional environment bindings for the agent (merged into adapter_config.env). When configured, including an empty map, undeclared remote bindings appear as drift and are cleared on apply, including secret_ref and user_secret_ref. Keys declared in adapter_config.env retain that owner; no credential value is read.
 - `icon` (String) Optional icon identifier for the agent.
 - `metadata` (String) Optional JSON metadata object for the agent.
 - `paused` (Boolean) Whether the agent is declaratively paused. Setting true pauses the agent; setting false resumes it.

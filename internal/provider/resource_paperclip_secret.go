@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
@@ -95,7 +96,7 @@ func (r *PaperclipSecretResource) Metadata(ctx context.Context, req resource.Met
 func (r *PaperclipSecretResource) Schema(ctx context.Context, req resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Version:     1,
-		Description: "Manages a Paperclip secret in a company.",
+		Description: "Manages a Paperclip secret in a company. Before deletion, lists company agents and refuses to delete a secret referenced by any non-terminated agent's adapterConfig.env secret_ref binding, naming the agents. A failed agent lookup also prevents deletion. Remove agent bindings before destroying the secret; credential values are never read.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Description: "Unique identifier for the secret.",
@@ -643,6 +644,31 @@ func (r *PaperclipSecretResource) Delete(ctx context.Context, req resource.Delet
 	var state PaperclipSecretResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	agents, err := r.client.ListAgents(ctx, state.CompanyID.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Error checking Paperclip secret references", err.Error())
+		return
+	}
+	var referencingAgents []string
+	for _, agent := range agents {
+		if agent.Status == "terminated" {
+			continue
+		}
+		env, _ := agent.AdapterConfig["env"].(map[string]interface{})
+		for _, value := range env {
+			binding, ok := value.(map[string]interface{})
+			if ok && binding["type"] == "secret_ref" && binding["secretId"] == state.ID.ValueString() {
+				referencingAgents = append(referencingAgents, fmt.Sprintf("%s (%s)", agent.Name, agent.ID))
+				break
+			}
+		}
+	}
+	if len(referencingAgents) > 0 {
+		sort.Strings(referencingAgents)
+		resp.Diagnostics.AddError("Paperclip secret is still referenced", fmt.Sprintf("Cannot delete secret %q: live agents reference it in adapterConfig.env: %s. Remove these bindings before deleting the secret.", state.ID.ValueString(), strings.Join(referencingAgents, ", ")))
 		return
 	}
 

@@ -339,12 +339,12 @@ func TestAgentConfigurationLifecyclePreservesOtherOwners(t *testing.T) {
 	if second.Diagnostics.HasError() {
 		t.Fatal(second.Diagnostics)
 	}
-	env := live.AdapterConfig["env"].(map[string]interface{})
-	if env["OWNED"] != nil || env["PLAIN"] != nil || env["INJECTED"] == nil || writes != 2 {
+	env, _ := live.AdapterConfig["env"].(map[string]interface{})
+	if len(env) != 0 || writes != 2 {
 		t.Fatalf("env pruning failed: %v writes=%d", env, writes)
 	}
 	// The same shared binding can be managed through adapter_config.env, with
-	// removal affecting only the previously declared reference.
+	// removal clearing all undeclared references.
 	model.Env = nil
 	model.AdapterConfig = types.StringValue(`{"engine":"cli","env":{"OWNED":{"type":"secret_ref","secretId":"secret"}}}`)
 	plan.Set(ctx, &model)
@@ -360,10 +360,11 @@ func TestAgentConfigurationLifecyclePreservesOtherOwners(t *testing.T) {
 	if fourth.Diagnostics.HasError() {
 		t.Fatal(fourth.Diagnostics)
 	}
-	env = live.AdapterConfig["env"].(map[string]interface{})
-	if env["OWNED"] != nil || env["INJECTED"] == nil {
+	env, _ = live.AdapterConfig["env"].(map[string]interface{})
+	if len(env) != 0 {
 		t.Fatalf("nested env pruning: %v", env)
 	}
+	live.AdapterConfig["env"] = map[string]interface{}{"INJECTED": map[string]interface{}{"type": "secret_ref", "secretId": "injected"}}
 	importState := tfsdk.State{Schema: s}
 	importState.Set(ctx, &PaperclipAgentResourceModel{ID: types.StringValue("same-agent")})
 	imported := resource.ReadResponse{State: importState}

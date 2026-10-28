@@ -138,7 +138,7 @@ func TestRegressionGUS407UndeclaredAdapterConfigDriftAndPruning(t *testing.T) {
 
 	// 2. Read should detect drift: the live agent has undeclared keys "sandbox" and "printTimeoutSec".
 	// The refreshed state MUST reflect the undeclared keys so a plan shows the drift/update,
-	// while Paperclip-managed keys (instructions bundle, secret refs) are excluded from state.
+	// while Paperclip-managed instructions keys are excluded from state.
 	readResp := resource.ReadResponse{State: state}
 	r.Read(ctx, resource.ReadRequest{State: state}, &readResp)
 	if readResp.Diagnostics.HasError() {
@@ -157,8 +157,8 @@ func TestRegressionGUS407UndeclaredAdapterConfigDriftAndPruning(t *testing.T) {
 	if strings.Contains(refreshedJSON, "instructionsFilePath") || strings.Contains(refreshedJSON, "instructionsBundleMode") {
 		t.Fatalf("expected Read to exclude Paperclip-managed instructions keys from state, got: %s", refreshedJSON)
 	}
-	if strings.Contains(refreshedJSON, "FOO_SECRET") {
-		t.Fatalf("expected Read to exclude Paperclip-managed env secret references from state, got: %s", refreshedJSON)
+	if !strings.Contains(refreshedJSON, "FOO_SECRET") {
+		t.Fatalf("expected Read to surface undeclared env secret references as drift, got: %s", refreshedJSON)
 	}
 
 	// 3. Plan an update to reconcile back to declared configuration (without sandbox/printTimeoutSec).
@@ -182,7 +182,7 @@ func TestRegressionGUS407UndeclaredAdapterConfigDriftAndPruning(t *testing.T) {
 	// Verify live agent on the server:
 	// - Undeclared keys ("sandbox", "printTimeoutSec") MUST be pruned.
 	// - Declared keys ("confinement", "dangerouslySkipPermissions") MUST be present.
-	// - Paperclip-managed keys ("instructionsFilePath", "instructionsRootPath", "instructionsEntryFile", "instructionsBundleMode", env secret refs) MUST survive.
+	// - Paperclip-managed instructions keys MUST survive.
 	if _, ok := liveAdapterConfig["sandbox"]; ok {
 		t.Fatalf("expected undeclared key 'sandbox' to be pruned from live adapterConfig after apply, but it was retained: %+v", liveAdapterConfig)
 	}
@@ -199,8 +199,8 @@ func TestRegressionGUS407UndeclaredAdapterConfigDriftAndPruning(t *testing.T) {
 		t.Fatalf("expected Paperclip-managed instructions bundle keys to survive apply, got: %+v", liveAdapterConfig)
 	}
 	envMap, ok := liveAdapterConfig["env"].(map[string]interface{})
-	if !ok || envMap["FOO_SECRET"] == nil {
-		t.Fatalf("expected Paperclip-managed env secret reference to survive apply, got: %+v", liveAdapterConfig)
+	if ok && envMap["FOO_SECRET"] != nil {
+		t.Fatalf("expected undeclared env secret reference to be removed by apply, got: %+v", liveAdapterConfig)
 	}
 
 	// 5. Subsequent Read should read back cleanly matching the declared configuration without drift.
@@ -221,26 +221,6 @@ func TestRegressionGUS407UndeclaredAdapterConfigDriftAndPruning(t *testing.T) {
 }
 
 func TestAdapterConfigHelperBranches(t *testing.T) {
-	// 1. isSecretRefBinding branches
-	if isSecretRefBinding("not-a-map") {
-		t.Fatal("expected non-map to return false")
-	}
-	if isSecretRefBinding(map[string]interface{}{}) {
-		t.Fatal("expected map without type to return false")
-	}
-	if isSecretRefBinding(map[string]interface{}{"type": 123}) {
-		t.Fatal("expected non-string type to return false")
-	}
-	if isSecretRefBinding(map[string]interface{}{"type": "plain"}) {
-		t.Fatal("expected plain binding to return false")
-	}
-	if !isSecretRefBinding(map[string]interface{}{"type": "secret_ref"}) {
-		t.Fatal("expected secret_ref to return true")
-	}
-	if !isSecretRefBinding(map[string]interface{}{"type": "user_secret_ref"}) {
-		t.Fatal("expected user_secret_ref to return true")
-	}
-
 	// 2. filterPaperclipManagedAdapterConfig branches
 	if filterPaperclipManagedAdapterConfig(nil, nil) != nil {
 		t.Fatal("expected nil remote to return nil")
@@ -286,8 +266,8 @@ func TestAdapterConfigHelperBranches(t *testing.T) {
 		},
 	})
 	envMap := filteredEnvManaged["env"].(map[string]interface{})
-	if envMap["DECLARED"] != "val1" || envMap["UNDECLARED"] != "val2" || envMap["SECRET"] != nil {
-		t.Fatalf("expected declared and undeclared plain env to be kept, secret ref dropped: %+v", envMap)
+	if envMap["DECLARED"] != "val1" || envMap["UNDECLARED"] != "val2" || envMap["SECRET"] == nil {
+		t.Fatalf("expected declared and undeclared env to be kept, including secret references: %+v", envMap)
 	}
 
 	// remote env where managedHasEnv is true and all keys in remote were secret refs
@@ -324,9 +304,8 @@ func TestAdapterConfigHelperBranches(t *testing.T) {
 			"PLAIN": "ignore",
 		},
 	}, targetNoEnv)
-	targetEnv := targetNoEnv["env"].(map[string]interface{})
-	if targetEnv["SEC"] == nil || targetEnv["PLAIN"] != nil {
-		t.Fatalf("expected secret ref copied and plain ignored: %+v", targetEnv)
+	if _, exists := targetNoEnv["env"]; exists {
+		t.Fatalf("expected undeclared env to remain absent: %+v", targetNoEnv)
 	}
 
 	// existing has secret ref already declared in target env

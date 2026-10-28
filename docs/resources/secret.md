@@ -2,12 +2,12 @@
 page_title: "paperclip_secret Resource - terraform-provider-paperclip"
 subcategory: ""
 description: |-
-  Manages a Paperclip secret in a company.
+  Manages a Paperclip secret in a company. Before deletion, lists company agents and refuses to delete a secret referenced by any non-terminated agent's adapterConfig.env secret_ref binding, naming the agents. A failed agent lookup also prevents deletion. Remove agent bindings before destroying the secret; credential values are never read.
 ---
 
 # paperclip_secret (Resource)
 
-Manages a Paperclip secret in a company.
+Manages a Paperclip secret in a company. Before deletion, lists company agents and refuses to delete a secret referenced by any non-terminated agent's adapterConfig.env secret_ref binding, naming the agents. A failed agent lookup also prevents deletion. Remove agent bindings before destroying the secret; credential values are never read.
 
 ## Example Usage
 

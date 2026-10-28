@@ -789,7 +789,7 @@ func TestSharedEnvRefreshConvergesDefaultsAndShowsPinnedVersionDrift(t *testing.
 		"REGION": {Type: types.StringValue("plain"), Value: types.StringValue("ci"), Version: types.StringUnknown(), ProjectionClass: types.StringUnknown()},
 		"TOKEN":  {Type: types.StringValue("secret_ref"), SecretID: types.StringValue("secret"), Version: types.StringValue("1")},
 	}
-	got := refreshAgentEnvBindings(declared, map[string]interface{}{"env": map[string]interface{}{"REGION": map[string]interface{}{"type": "plain", "value": "ci"}, "TOKEN": map[string]interface{}{"type": "secret_ref", "secretId": "secret", "version": float64(2), "projectionClass": "unclassified"}}})
+	got := refreshAgentEnvBindings(declared, map[string]interface{}{"env": map[string]interface{}{"REGION": map[string]interface{}{"type": "plain", "value": "ci"}, "TOKEN": map[string]interface{}{"type": "secret_ref", "secretId": "secret", "version": float64(2), "projectionClass": "unclassified"}}}, types.StringNull())
 	if got["REGION"].Version.IsUnknown() || got["REGION"].ProjectionClass.IsUnknown() || got["TOKEN"].Version.ValueString() != "2" {
 		t.Fatalf("shared env defaults or version drift hidden: %+v", got)
 	}

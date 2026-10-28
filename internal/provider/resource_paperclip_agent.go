@@ -165,7 +165,7 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 				},
 			},
 			"adapter_config": schema.StringAttribute{
-				Description: "Optional JSON adapter object validated against published native field metadata at plan and before writes. UI omissions do not close the map; only an explicit additional-properties policy does. Instruction and paperclipSkillSync keys belong to separate resources and are rejected here. Requires board access to adapter schema metadata. Clear a nonempty declaration with jsonencode({}) before omitting it; null/omission cannot silently clear this optional/computed attribute. Remove adapter-agnostic keys with the original adapter_type before changing adapter_type.",
+				Description: "Optional JSON adapter object validated against published native field metadata at plan and before writes. UI omissions do not close the map; only an explicit additional-properties policy does. Undeclared env secret_ref and user_secret_ref bindings appear as drift and are cleared on apply; credential values are never read. Instruction and paperclipSkillSync keys belong to separate resources and are rejected here. Requires board access to adapter schema metadata. Clear a nonempty declaration with jsonencode({}) before omitting it; null/omission cannot silently clear this optional/computed attribute. Remove adapter-agnostic keys with the original adapter_type before changing adapter_type.",
 				Optional:    true,
 				Computed:    true,
 				Validators: []validator.String{
@@ -232,7 +232,7 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 					stringOneOfValidator{allowed: []string{"terminate", "delete"}},
 				},
 			},
-			"env": EnvBindingMapAttribute("Optional environment bindings for the agent (merged into adapter_config.env)."),
+			"env": EnvBindingMapAttribute("Optional environment bindings for the agent (merged into adapter_config.env). When configured, including an empty map, undeclared remote bindings appear as drift and are cleared on apply, including secret_ref and user_secret_ref. Keys declared in adapter_config.env retain that owner; no credential value is read."),
 		},
 	}
 }
@@ -851,7 +851,7 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 	}
 
 	if plan.Env != nil {
-		plan.Env = refreshAgentEnvBindings(plan.Env, created.AdapterConfig)
+		plan.Env = refreshAgentEnvBindings(plan.Env, created.AdapterConfig, plan.AdapterConfig)
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -909,6 +909,9 @@ func (r *PaperclipAgentResource) Read(ctx context.Context, req resource.ReadRequ
 		}
 	}
 	state.RuntimeConfig = refreshAgentRuntimeConfig(state.RuntimeConfig, agent.RuntimeConfig)
+	if state.Env != nil {
+		state.Env = refreshAgentEnvBindings(state.Env, agent.AdapterConfig, state.AdapterConfig)
+	}
 	state.AdapterConfig = refreshAgentAdapterState(state.AdapterConfig, agent.AdapterConfig, state.Env)
 	state.Metadata = refreshManagedJSONState(state.Metadata, agent.Metadata)
 	state.CanAssignTasks, state.CanCreateAgents, state.CanCreateSkills = permissionState(agent.Permissions)
@@ -929,10 +932,6 @@ func (r *PaperclipAgentResource) Read(ctx context.Context, req resource.ReadRequ
 		state.Retirement = types.StringValue("delete")
 	}
 
-	if state.Env != nil {
-		state.Env = refreshAgentEnvBindings(state.Env, agent.AdapterConfig)
-	}
-
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -943,15 +942,6 @@ var paperclipManagedAdapterConfigKeys = []string{
 	"instructionsBundleMode",
 	"agentsMdPath",
 	"paperclipSkillSync",
-}
-
-func isSecretRefBinding(val interface{}) bool {
-	m, ok := val.(map[string]interface{})
-	if !ok {
-		return false
-	}
-	t, ok := m["type"].(string)
-	return ok && (t == "secret_ref" || t == "user_secret_ref")
 }
 
 func filterPaperclipManagedAdapterConfig(remote map[string]interface{}, managed map[string]interface{}) map[string]interface{} {
@@ -971,36 +961,6 @@ func filterPaperclipManagedAdapterConfig(remote map[string]interface{}, managed 
 		}
 	}
 
-	if remoteEnv, ok := filtered["env"].(map[string]interface{}); ok {
-		var managedEnv map[string]interface{}
-		managedHasEnv := false
-		if managed != nil {
-			managedEnv, managedHasEnv = managed["env"].(map[string]interface{})
-		}
-
-		filteredEnv := make(map[string]interface{}, len(remoteEnv))
-		for k, v := range remoteEnv {
-			if managedHasEnv {
-				if _, declared := managedEnv[k]; declared {
-					filteredEnv[k] = v
-					continue
-				}
-			}
-			if isSecretRefBinding(v) {
-				continue
-			}
-			filteredEnv[k] = v
-		}
-
-		if len(filteredEnv) > 0 {
-			filtered["env"] = filteredEnv
-		} else if !managedHasEnv {
-			delete(filtered, "env")
-		} else {
-			filtered["env"] = filteredEnv
-		}
-	}
-
 	return filtered
 }
 
@@ -1013,22 +973,6 @@ func preservePaperclipManagedAdapterConfig(existing, target map[string]interface
 			if _, declared := target[key]; !declared {
 				target[key] = val
 			}
-		}
-	}
-	if existingEnv, ok := existing["env"].(map[string]interface{}); ok {
-		targetEnv, ok := target["env"].(map[string]interface{})
-		if !ok {
-			targetEnv = make(map[string]interface{})
-		}
-		for k, v := range existingEnv {
-			if isSecretRefBinding(v) {
-				if _, declared := targetEnv[k]; !declared {
-					targetEnv[k] = v
-				}
-			}
-		}
-		if len(targetEnv) > 0 {
-			target["env"] = targetEnv
 		}
 	}
 }
@@ -1092,7 +1036,7 @@ func jsonContains(remote, managed interface{}) bool {
 	return true
 }
 
-func refreshAgentEnvBindings(currentEnv map[string]EnvBindingModel, remoteAdapterConfig map[string]interface{}) map[string]EnvBindingModel {
+func refreshAgentEnvBindings(currentEnv map[string]EnvBindingModel, remoteAdapterConfig map[string]interface{}, adapterConfig types.String) map[string]EnvBindingModel {
 	if currentEnv == nil {
 		return nil
 	}
@@ -1104,12 +1048,14 @@ func refreshAgentEnvBindings(currentEnv map[string]EnvBindingModel, remoteAdapte
 		return make(map[string]EnvBindingModel)
 	}
 
-	result := make(map[string]EnvBindingModel, len(currentEnv))
-	for k, currentBinding := range currentEnv {
-		remoteVal, exists := remoteEnv[k]
-		if !exists {
+	declaredAdapter, _ := agentConfigObject(adapterConfig)
+	adapterEnv, _ := declaredAdapter["env"].(map[string]interface{})
+	result := make(map[string]EnvBindingModel, len(remoteEnv))
+	for k, remoteVal := range remoteEnv {
+		if _, ownedByAdapter := adapterEnv[k]; ownedByAdapter {
 			continue
 		}
+		currentBinding, declared := currentEnv[k]
 		switch v := remoteVal.(type) {
 		case string:
 			result[k] = envBindingFromJSON(map[string]interface{}{"type": "plain", "value": v})
@@ -1119,10 +1065,14 @@ func refreshAgentEnvBindings(currentEnv map[string]EnvBindingModel, remoteAdapte
 			case "plain", "secret_ref", "user_secret_ref":
 				result[k] = envBindingFromJSON(v)
 			default:
-				result[k] = currentBinding
+				if declared {
+					result[k] = currentBinding
+				}
 			}
 		default:
-			result[k] = currentBinding
+			if declared {
+				result[k] = currentBinding
+			}
 		}
 	}
 	return result
@@ -1227,46 +1177,10 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 				for k, v := range apiEnv {
 					existingEnv[k] = v
 				}
-				for k := range state.Env {
-					if _, stillPresent := plan.Env[k]; !stillPresent {
-						delete(existingEnv, k)
-					}
-				}
 				adapterMap["env"] = existingEnv
-			}
-		} else {
-			if existingEnv, ok := adapterMap["env"].(map[string]interface{}); ok {
-				for k := range state.Env {
-					delete(existingEnv, k)
-				}
-				if len(existingEnv) == 0 {
-					delete(adapterMap, "env")
-				} else {
-					adapterMap["env"] = existingEnv
-				}
 			}
 		}
 		replaceAdapterConfig = true
-	}
-	// Delete previously owned bindings after preservation so a removed secret
-	// reference is not accidentally restored as an unowned server binding.
-	if existingEnv, ok := adapterMap["env"].(map[string]interface{}); ok {
-		for key := range state.Env {
-			if _, exists := plan.Env[key]; !exists {
-				delete(existingEnv, key)
-			}
-		}
-		priorAdapter, _ := agentConfigObject(state.AdapterConfig)
-		desiredAdapter, _ := agentConfigObject(plan.AdapterConfig)
-		priorEnv, _ := priorAdapter["env"].(map[string]interface{})
-		desiredEnv, _ := desiredAdapter["env"].(map[string]interface{})
-		for key := range priorEnv {
-			if _, exists := desiredEnv[key]; !exists {
-				if _, topLevel := plan.Env[key]; !topLevel {
-					delete(existingEnv, key)
-				}
-			}
-		}
 	}
 	if !plan.Metadata.IsNull() && !plan.Metadata.IsUnknown() && plan.Metadata.ValueString() != "" {
 		if err := json.Unmarshal([]byte(plan.Metadata.ValueString()), &metaMap); err != nil {
@@ -1453,7 +1367,7 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 	}
 
 	if plan.Env != nil {
-		plan.Env = refreshAgentEnvBindings(plan.Env, updated.AdapterConfig)
+		plan.Env = refreshAgentEnvBindings(plan.Env, updated.AdapterConfig, plan.AdapterConfig)
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)

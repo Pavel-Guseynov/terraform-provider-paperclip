@@ -585,6 +585,8 @@ func TestPaperclipSecretCoverage(t *testing.T) {
 		p := r.URL.Path
 
 		switch {
+		case r.Method == http.MethodGet && p == "/api/companies/comp-1/agents":
+			_, _ = w.Write([]byte(`[]`))
 		case r.Method == http.MethodPost && p == "/api/companies/comp-1/secrets":
 			var opts client.CreateSecretOptions
 			_ = json.NewDecoder(r.Body).Decode(&opts)
@@ -1524,7 +1526,7 @@ func TestEnvBindingsApplyNon404Error(t *testing.T) {
 }
 
 func TestRefreshAgentEnvBindings(t *testing.T) {
-	if refreshAgentEnvBindings(nil, nil) != nil {
+	if refreshAgentEnvBindings(nil, nil, types.StringNull()) != nil {
 		t.Fatal("expected nil when currentEnv is nil")
 	}
 
@@ -1537,12 +1539,12 @@ func TestRefreshAgentEnvBindings(t *testing.T) {
 		"DELETED":   {Type: types.StringValue("plain")},
 	}
 
-	resNil := refreshAgentEnvBindings(currentEnv, nil)
+	resNil := refreshAgentEnvBindings(currentEnv, nil, types.StringNull())
 	if len(resNil) != 0 {
 		t.Fatal("expected empty map when remoteAdapterConfig is nil")
 	}
 
-	resNoEnv := refreshAgentEnvBindings(currentEnv, map[string]interface{}{"other": 1})
+	resNoEnv := refreshAgentEnvBindings(currentEnv, map[string]interface{}{"other": 1}, types.StringNull())
 	if len(resNoEnv) != 0 {
 		t.Fatal("expected empty map when remote has no env")
 	}
@@ -1569,13 +1571,13 @@ func TestRefreshAgentEnvBindings(t *testing.T) {
 				"allowMissingOverride": true,
 			},
 			"OTHER": 12345,
-			"EXTRA": "ignored",
+			"EXTRA": "discovered",
 		},
 	}
 
-	res := refreshAgentEnvBindings(currentEnv, remote)
-	if len(res) != 5 {
-		t.Fatalf("expected 5 refreshed bindings, got %d", len(res))
+	res := refreshAgentEnvBindings(currentEnv, remote, types.StringNull())
+	if len(res) != 6 || res["EXTRA"].Value.ValueString() != "discovered" {
+		t.Fatalf("expected 6 refreshed bindings including undeclared EXTRA, got %+v", res)
 	}
 	if res["PLAIN_STR"].Value.ValueString() != "val1" {
 		t.Fatalf("unexpected PLAIN_STR value: %v", res["PLAIN_STR"])
@@ -1616,7 +1618,7 @@ func TestRefreshAgentEnvBindings(t *testing.T) {
 			},
 		},
 	}
-	resSingle := refreshAgentEnvBindings(currentSingle, remoteSingle)
+	resSingle := refreshAgentEnvBindings(currentSingle, remoteSingle, types.StringNull())
 	if !resSingle["SEC_NO_VER"].Version.IsNull() {
 		t.Fatalf("expected null version for SEC_NO_VER, got %v", resSingle["SEC_NO_VER"].Version)
 	}

@@ -145,6 +145,17 @@ from an older host can still return its generation-specific path; configure the
 stable alias and let the native upgrade reconcile it, never copy the generation
 path into persistent settings.
 
+`paperclip_agent` refresh exposes undeclared `secret_ref` and `user_secret_ref`
+env bindings as drift, and apply clears them without reading credential values.
+A configured top-level `env` (including `{}`) owns undeclared remote bindings;
+keys explicitly declared in `adapter_config.env` retain that owner. Otherwise,
+declare `adapter_config` to reconcile its env, using `{}` to clear it.
+Before deleting `paperclip_secret`, the provider lists company agents and refuses
+deletion when any non-terminated agent's env references the secret ID, naming
+the agents. A failed lookup also prevents the DELETE. Remove those bindings
+before destroying the secret. The lookup and DELETE are separate requests,
+so this preflight does not provide an atomic guard against concurrent edits.
+
 `paperclip_skill_assignment` owns the complete desired skill list for one agent.
 It sends `POST /api/agents/:id/skills/sync` in replace mode, with plain key
 strings for unpinned skills (null or empty `version_id`) and
