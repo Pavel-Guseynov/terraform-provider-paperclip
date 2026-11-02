@@ -47,7 +47,7 @@ resource "paperclip_agent" "engineer" {
 - `env` (Map of Objects, see [below for nested schema](#nestedatt--env)) Optional environment bindings for the agent (merged into adapter_config.env). When configured, including an empty map, undeclared remote bindings appear as drift and are cleared on apply, including secret_ref and user_secret_ref. Keys declared in adapter_config.env retain that owner; no credential value is read.
 - `icon` (String) Optional icon identifier for the agent.
 - `metadata` (String) Optional JSON metadata object for the agent.
-- `paused` (Boolean) Whether the agent is declaratively paused. Setting true pauses the agent; setting false resumes it.
+- `paused` (Boolean) Whether the agent is paused. Board-owned unless configured: omitting it records the board's state without pausing or resuming. Explicit true pauses the agent; explicit false resumes it.
 - `reports_to` (String) Optional manager agent ID within the same company.
 - `retirement` (String) Administrative retirement strategy on destroy ('delete' for hard deletion, 'terminate' for key revocation and termination). Defaults to 'delete'.
 - `role` (String) Agent role (e.g. engineer, committer, reviewer).

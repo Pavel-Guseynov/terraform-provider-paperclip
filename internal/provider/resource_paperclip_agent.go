@@ -218,10 +218,9 @@ func (r *PaperclipAgentResource) Schema(ctx context.Context, req resource.Schema
 				},
 			},
 			"paused": schema.BoolAttribute{
-				Description: "Whether the agent is declaratively paused. Setting true pauses the agent; setting false resumes it.",
+				Description: "Whether the agent is paused. Board-owned unless configured: omitting it records the board's state without pausing or resuming. Explicit true pauses the agent; explicit false resumes it.",
 				Optional:    true,
 				Computed:    true,
-				Default:     booldefault.StaticBool(false),
 			},
 			"retirement": schema.StringAttribute{
 				Description: "Administrative retirement strategy on destroy ('delete' for hard deletion, 'terminate' for key revocation and termination). Defaults to 'delete'.",
@@ -510,9 +509,6 @@ func (r *PaperclipAgentResource) ModifyPlan(ctx context.Context, req resource.Mo
 		if plan.Retirement.IsUnknown() || plan.Retirement.IsNull() {
 			plan.Retirement = types.StringValue("delete")
 		}
-		if plan.Paused.IsUnknown() || plan.Paused.IsNull() {
-			plan.Paused = types.BoolValue(false)
-		}
 		resp.Diagnostics.Append(resp.Plan.Set(ctx, &plan)...)
 	}
 
@@ -520,12 +516,20 @@ func (r *PaperclipAgentResource) ModifyPlan(ctx context.Context, req resource.Mo
 		var state PaperclipAgentResourceModel
 		if !req.State.Get(ctx, &state).HasError() {
 			// Attribute JSON modifiers can remove the only configured difference
-			// after the framework has marked computed status unknown. Preserve the
-			// refreshed status only when the entire remaining plan is unchanged.
+			// after the framework has marked computed runtime state unknown. Preserve
+			// refreshed values only when the entire remaining plan is unchanged.
 			unchanged := plan
 			unchanged.Status = state.Status
-			if plan.Status.IsUnknown() && reflect.DeepEqual(unchanged, state) {
-				resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("status"), state.Status)...)
+			if plan.Paused.IsUnknown() {
+				unchanged.Paused = state.Paused
+			}
+			if reflect.DeepEqual(unchanged, state) {
+				if plan.Status.IsUnknown() {
+					resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("status"), state.Status)...)
+				}
+				if plan.Paused.IsUnknown() {
+					resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("paused"), state.Paused)...)
+				}
 			}
 			if err := validateAgentRuntimeTransition(state.RuntimeConfig, plan.RuntimeConfig); err != nil {
 				resp.Diagnostics.AddAttributeError(path.Root("runtime_config"), "Unsupported runtime transition", err.Error())
@@ -652,6 +656,10 @@ func (r *PaperclipAgentResource) Configure(ctx context.Context, req resource.Con
 func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan PaperclipAgentResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	configuredPaused := types.BoolNull()
+	if !req.Config.Raw.IsNull() {
+		resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("paused"), &configuredPaused)...)
+	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -798,10 +806,17 @@ func (r *PaperclipAgentResource) Create(ctx context.Context, req resource.Create
 			return
 		}
 
-		if plan.Paused.ValueBool() && created.Status != "paused" {
-			if err := r.client.PauseAgent(ctx, created.ID); err != nil {
-				resp.Diagnostics.AddError("Error pausing Paperclip agent", err.Error())
-				return
+		if !configuredPaused.IsNull() && !configuredPaused.IsUnknown() && configuredPaused.ValueBool() != (created.Status == "paused") {
+			if configuredPaused.ValueBool() {
+				if err := r.client.PauseAgent(ctx, created.ID); err != nil {
+					resp.Diagnostics.AddError("Error pausing Paperclip agent", err.Error())
+					return
+				}
+			} else {
+				if err := r.client.ResumeAgent(ctx, created.ID); err != nil {
+					resp.Diagnostics.AddError("Error resuming Paperclip agent", err.Error())
+					return
+				}
 			}
 		}
 	}
@@ -1084,6 +1099,10 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	configuredPaused := types.BoolNull()
+	if !req.Config.Raw.IsNull() {
+		resp.Diagnostics.Append(req.Config.GetAttribute(ctx, path.Root("paused"), &configuredPaused)...)
+	}
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -1305,10 +1324,9 @@ func (r *PaperclipAgentResource) Update(ctx context.Context, req resource.Update
 		return
 	}
 
-	desiredPaused := plan.Paused.ValueBool()
 	currentlyPaused := updated.Status == "paused"
-	if desiredPaused != currentlyPaused {
-		if desiredPaused {
+	if !configuredPaused.IsNull() && !configuredPaused.IsUnknown() && configuredPaused.ValueBool() != currentlyPaused {
+		if configuredPaused.ValueBool() {
 			if err := r.client.PauseAgent(ctx, state.ID.ValueString()); err != nil {
 				resp.Diagnostics.AddError("Error pausing Paperclip agent", err.Error())
 				return

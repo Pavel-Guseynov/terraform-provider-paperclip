@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/Pavel-Guseynov/terraform-provider-paperclip/internal/client"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/path"
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 )
 
@@ -384,6 +387,192 @@ func TestAgentModifyPlan(t *testing.T) {
 	}
 }
 
+func TestAgentPausedOwnership(t *testing.T) {
+	for _, operation := range []string{"create", "update"} {
+		for _, tc := range []struct {
+			name       string
+			configured types.Bool
+			planned    types.Bool
+			status     string
+			wantCall   string
+			failResume bool
+		}{
+			{name: "omitted accepts board pause", configured: types.BoolNull(), planned: types.BoolUnknown(), status: "paused"},
+			{name: "omitted ignores inherited false", configured: types.BoolNull(), planned: types.BoolValue(false), status: "paused"},
+			{name: "omitted ignores inherited true", configured: types.BoolNull(), planned: types.BoolValue(true), status: "idle"},
+			{name: "unknown leaves board in control", configured: types.BoolUnknown(), planned: types.BoolUnknown(), status: "paused"},
+			{name: "explicit false resumes", configured: types.BoolValue(false), planned: types.BoolValue(false), status: "paused", wantCall: "resume"},
+			{name: "explicit true pauses", configured: types.BoolValue(true), planned: types.BoolValue(true), status: "idle", wantCall: "pause"},
+			{name: "explicit true already paused", configured: types.BoolValue(true), planned: types.BoolValue(true), status: "paused"},
+			{name: "explicit false already idle", configured: types.BoolValue(false), planned: types.BoolValue(false), status: "idle"},
+			{name: "resume failure is reported", configured: types.BoolValue(false), planned: types.BoolValue(false), status: "paused", wantCall: "resume", failResume: true},
+		} {
+			t.Run(operation+"/"+tc.name, func(t *testing.T) {
+				ctx := context.Background()
+				agent := client.PaperclipAgent{ID: "agent", CompanyID: "company", Name: "agent", Status: tc.status, Permissions: &client.PaperclipAgentPermissions{CanCreateSkills: true}}
+				var calls []string
+				writes := 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+					w.Header().Set("Content-Type", "application/json")
+					switch {
+					case req.Method == http.MethodGet && req.URL.Path == "/api/companies/company":
+						_ = json.NewEncoder(w).Encode(client.PaperclipCompany{ID: "company"})
+					case req.Method == http.MethodPost && req.URL.Path == "/api/companies/company/agents",
+						req.Method == http.MethodPatch && req.URL.Path == "/api/agents/agent":
+						writes++
+						_ = json.NewEncoder(w).Encode(agent)
+					case req.Method == http.MethodGet && req.URL.Path == "/api/agents/agent":
+						_ = json.NewEncoder(w).Encode(agent)
+					case req.Method == http.MethodPost && req.URL.Path == "/api/agents/agent/resume":
+						calls = append(calls, "resume")
+						if tc.failResume {
+							http.Error(w, `{"error":"test-owned resume refusal"}`, http.StatusConflict)
+							return
+						}
+						agent.Status = "idle"
+						w.WriteHeader(http.StatusOK)
+					case req.Method == http.MethodPost && req.URL.Path == "/api/agents/agent/pause":
+						calls = append(calls, "pause")
+						agent.Status = "paused"
+						w.WriteHeader(http.StatusOK)
+					default:
+						t.Errorf("unexpected request: %s %s", req.Method, req.URL.Path)
+						http.NotFound(w, req)
+					}
+				}))
+				defer server.Close()
+				r := NewPaperclipAgentResource().(*PaperclipAgentResource)
+				r.client, _ = client.NewClient(server.URL, "token")
+				var sr resource.SchemaResponse
+				r.Schema(ctx, resource.SchemaRequest{}, &sr)
+				model := PaperclipAgentResourceModel{CompanyID: types.StringValue("company"), Name: types.StringValue("agent"), CanCreateSkills: types.BoolValue(true), Paused: tc.configured}
+				config := tfsdk.Config{Schema: sr.Schema}
+				configPlan := tfsdk.Plan{Schema: sr.Schema}
+				if d := configPlan.Set(ctx, &model); d.HasError() {
+					t.Fatal(d)
+				}
+				config.Raw = configPlan.Raw
+				model.Paused = tc.planned
+				plan := tfsdk.Plan{Schema: sr.Schema}
+				if d := plan.Set(ctx, &model); d.HasError() {
+					t.Fatal(d)
+				}
+				var result tfsdk.State
+				if operation == "create" {
+					resp := resource.CreateResponse{State: tfsdk.State{Schema: sr.Schema}}
+					r.Create(ctx, resource.CreateRequest{Plan: plan, Config: config}, &resp)
+					if resp.Diagnostics.HasError() != tc.failResume {
+						t.Fatalf("unexpected create diagnostics: %v", resp.Diagnostics)
+					}
+					if tc.failResume && resp.Diagnostics.Errors()[0].Summary() != "Error resuming Paperclip agent" {
+						t.Fatal(resp.Diagnostics)
+					}
+					result = resp.State
+				} else {
+					model.ID = types.StringValue("agent")
+					state := tfsdk.State{Schema: sr.Schema}
+					if d := state.Set(ctx, &model); d.HasError() {
+						t.Fatal(d)
+					}
+					resp := resource.UpdateResponse{State: tfsdk.State{Schema: sr.Schema}}
+					r.Update(ctx, resource.UpdateRequest{Plan: plan, Config: config, State: state}, &resp)
+					if resp.Diagnostics.HasError() != tc.failResume {
+						t.Fatalf("unexpected update diagnostics: %v", resp.Diagnostics)
+					}
+					result = resp.State
+				}
+				var wantCalls []string
+				if tc.wantCall != "" {
+					wantCalls = []string{tc.wantCall}
+				}
+				if !reflect.DeepEqual(calls, wantCalls) || writes != 1 {
+					t.Fatalf("lifecycle calls = %v, want %v; writes = %d", calls, wantCalls, writes)
+				}
+				if !tc.failResume {
+					var got PaperclipAgentResourceModel
+					if d := result.Get(ctx, &got); d.HasError() {
+						t.Fatal(d)
+					}
+					if !got.Paused.Equal(types.BoolValue(agent.Status == "paused")) || got.Status.ValueString() != agent.Status {
+						t.Fatalf("state paused = %s, status = %s; board status = %s", got.Paused, got.Status, agent.Status)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestAgentCreatePlanLeavesPausedUnknown(t *testing.T) {
+	ctx := context.Background()
+	r := NewPaperclipAgentResource().(*PaperclipAgentResource)
+	var sr resource.SchemaResponse
+	r.Schema(ctx, resource.SchemaRequest{}, &sr)
+	plan := tfsdk.Plan{Schema: sr.Schema}
+	if d := plan.Set(ctx, &PaperclipAgentResourceModel{CompanyID: types.StringValue("company"), Name: types.StringValue("agent")}); d.HasError() {
+		t.Fatal(d)
+	}
+	config, err := tfprotov6.NewDynamicValue(plan.Raw.Type(), plan.Raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prior, err := tfprotov6.NewDynamicValue(plan.Raw.Type(), tftypes.NewValue(plan.Raw.Type(), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := providerserver.NewProtocol6(New("test")())()
+	resp, err := server.PlanResourceChange(ctx, &tfprotov6.PlanResourceChangeRequest{TypeName: "paperclip_agent", Config: &config, ProposedNewState: &config, PriorState: &prior})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range resp.Diagnostics {
+		if d.Severity == tfprotov6.DiagnosticSeverityError {
+			t.Fatalf("plan diagnostic: %s: %s", d.Summary, d.Detail)
+		}
+	}
+	planned, err := resp.PlannedState.Unmarshal(plan.Raw.Type())
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan.Raw = planned
+	var paused types.Bool
+	if d := plan.GetAttribute(ctx, path.Root("paused"), &paused); d.HasError() {
+		t.Fatal(d)
+	}
+	if !paused.IsUnknown() {
+		t.Fatalf("board-owned create paused must remain unknown, got %s", paused)
+	}
+}
+
+func TestAgentNoOpPlanPreservesBoardPaused(t *testing.T) {
+	for _, statusUnknown := range []bool{false, true} {
+		ctx := context.Background()
+		r := NewPaperclipAgentResource().(*PaperclipAgentResource)
+		var sr resource.SchemaResponse
+		r.Schema(ctx, resource.SchemaRequest{}, &sr)
+		model := PaperclipAgentResourceModel{ID: types.StringValue("agent"), CompanyID: types.StringValue("company"), Name: types.StringValue("agent"), Status: types.StringValue("paused"), Paused: types.BoolValue(true)}
+		state := tfsdk.State{Schema: sr.Schema}
+		if d := state.Set(ctx, &model); d.HasError() {
+			t.Fatal(d)
+		}
+		model.Paused = types.BoolUnknown()
+		if statusUnknown {
+			model.Status = types.StringUnknown()
+		}
+		plan := tfsdk.Plan{Schema: sr.Schema}
+		if d := plan.Set(ctx, &model); d.HasError() {
+			t.Fatal(d)
+		}
+		resp := resource.ModifyPlanResponse{Plan: plan}
+		r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: plan, State: state}, &resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatal(resp.Diagnostics)
+		}
+		if !resp.Plan.Raw.Equal(state.Raw) {
+			t.Fatalf("no-op plan changed board-owned state: %s", resp.Plan.Raw)
+		}
+	}
+}
+
 func TestAgentCreatePendingApprovalAndLifecycle(t *testing.T) {
 	ctx := context.Background()
 	pausedCalled := false
@@ -543,7 +732,7 @@ func TestAgentCreatePendingApprovalAndLifecycle(t *testing.T) {
 	})
 	var createResp3 resource.CreateResponse
 	createResp3.State = tfsdk.State{Schema: schemaResp.Schema}
-	r.Create(ctx, resource.CreateRequest{Plan: plan3}, &createResp3)
+	r.Create(ctx, resource.CreateRequest{Plan: plan3, Config: tfsdk.Config{Raw: plan3.Raw, Schema: plan3.Schema}}, &createResp3)
 	if createResp3.Diagnostics.HasError() {
 		t.Fatal(createResp3.Diagnostics)
 	}
@@ -591,7 +780,7 @@ func TestAgentCreatePendingApprovalAndLifecycle(t *testing.T) {
 	})
 	var createResp6 resource.CreateResponse
 	createResp6.State = tfsdk.State{Schema: schemaResp.Schema}
-	r.Create(ctx, resource.CreateRequest{Plan: plan6}, &createResp6)
+	r.Create(ctx, resource.CreateRequest{Plan: plan6, Config: tfsdk.Config{Raw: plan6.Raw, Schema: plan6.Schema}}, &createResp6)
 	if !createResp6.Diagnostics.HasError() {
 		t.Fatal("expected error on pause failure in Create")
 	}
@@ -1016,7 +1205,7 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 
 	var updResp1 resource.UpdateResponse
 	updResp1.State = tfsdk.State{Schema: schemaResp.Schema}
-	r.Update(ctx, resource.UpdateRequest{Plan: planPause, State: stateIdle}, &updResp1)
+	r.Update(ctx, resource.UpdateRequest{Plan: planPause, State: stateIdle, Config: tfsdk.Config{Raw: planPause.Raw, Schema: planPause.Schema}}, &updResp1)
 	if updResp1.Diagnostics.HasError() {
 		t.Fatal(updResp1.Diagnostics)
 	}
@@ -1054,7 +1243,7 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 
 	var updResp2 resource.UpdateResponse
 	updResp2.State = tfsdk.State{Schema: schemaResp.Schema}
-	r.Update(ctx, resource.UpdateRequest{Plan: planResume, State: statePaused}, &updResp2)
+	r.Update(ctx, resource.UpdateRequest{Plan: planResume, State: statePaused, Config: tfsdk.Config{Raw: planResume.Raw, Schema: planResume.Schema}}, &updResp2)
 	if updResp2.Diagnostics.HasError() {
 		t.Fatal(updResp2.Diagnostics)
 	}
@@ -1189,7 +1378,7 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 	})
 	var updResp7 resource.UpdateResponse
 	updResp7.State = tfsdk.State{Schema: schemaResp.Schema}
-	r.Update(ctx, resource.UpdateRequest{Plan: planPauseErr, State: statePauseErr}, &updResp7)
+	r.Update(ctx, resource.UpdateRequest{Plan: planPauseErr, State: statePauseErr, Config: tfsdk.Config{Raw: planPauseErr.Raw, Schema: planPauseErr.Schema}}, &updResp7)
 	if !updResp7.Diagnostics.HasError() {
 		t.Fatal("expected error on pause failure in Update")
 	}
@@ -1218,7 +1407,7 @@ func TestAgentUpdatePauseResumeAndRetirement(t *testing.T) {
 	})
 	var updResp8 resource.UpdateResponse
 	updResp8.State = tfsdk.State{Schema: schemaResp.Schema}
-	r.Update(ctx, resource.UpdateRequest{Plan: planResumeErr, State: stateResumeErr}, &updResp8)
+	r.Update(ctx, resource.UpdateRequest{Plan: planResumeErr, State: stateResumeErr, Config: tfsdk.Config{Raw: planResumeErr.Raw, Schema: planResumeErr.Schema}}, &updResp8)
 	if !updResp8.Diagnostics.HasError() {
 		t.Fatal("expected error on resume failure in Update")
 	}
