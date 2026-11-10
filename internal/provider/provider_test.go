@@ -1408,6 +1408,71 @@ func TestPaperclipGalleryConnectionIsConnectedAndAdoptedBySource(t *testing.T) {
 	}
 }
 
+// GUS-1773: a custom connection whose declared config names a gallery template
+// and whose gallery_key is not declared reports Paperclip's source as its
+// gallery_key and plans no gallery_key transition afterwards.
+func TestTemplateConnectionWithoutGalleryKeyConverges(t *testing.T) {
+	ctx := context.Background()
+	declaredConfig := `{"url":"https://api.githubcopilot.com/mcp/","sourceTemplateKey":"github","connectionMethodKey":"app-installation"}`
+	var record map[string]interface{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/companies/comp-1/tools/applications" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{"applications": []interface{}{map[string]interface{}{"id": "github-app", "companyId": "comp-1"}}})
+		case r.URL.Path == "/api/companies/comp-1/tools/connections" && r.Method == http.MethodPost:
+			_ = json.NewDecoder(r.Body).Decode(&record)
+			record["id"], record["companyId"] = "conn-template", "comp-1"
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(record)
+		case r.URL.Path == "/api/tool-connections/conn-template" && r.Method == http.MethodGet:
+			_ = json.NewEncoder(w).Encode(record)
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	r, connSchema := newConfiguredPaperclipConnectionResource(t, server.URL)
+	// An undeclared optional and computed gallery_key is unknown when planned.
+	createPlan := tfsdk.Plan{Schema: connSchema}
+	createPlan.Set(ctx, &PaperclipConnectionResourceModel{
+		CredentialSecretRefs: types.MapNull(secretRefType()),
+		CompanyID:            types.StringValue("comp-1"), AppID: types.StringValue("github-app"), Name: types.StringValue("GitHub App"),
+		Transport: types.StringValue("mcp_remote"), AuthKind: types.StringValue("api_key"),
+		Config: types.StringValue(declaredConfig), CredentialRefs: types.StringUnknown(),
+		CredentialPolicy: types.StringValue("shared"), GalleryKey: types.StringUnknown(),
+	})
+	var createResp resource.CreateResponse
+	createResp.State = tfsdk.State{Schema: connSchema}
+	r.Create(ctx, resource.CreateRequest{Plan: createPlan}, &createResp)
+	var created PaperclipConnectionResourceModel
+	createResp.State.Get(ctx, &created)
+	if createResp.Diagnostics.HasError() || created.GalleryKey.IsUnknown() || created.GalleryKey.ValueString() != "github" {
+		t.Fatalf("custom template connection did not record its reported source: %v %s", createResp.Diagnostics, created.GalleryKey)
+	}
+	var readResp resource.ReadResponse
+	readResp.State = createResp.State
+	r.Read(ctx, resource.ReadRequest{State: createResp.State}, &readResp)
+	var read PaperclipConnectionResourceModel
+	readResp.State.Get(ctx, &read)
+	if readResp.Diagnostics.HasError() || read.GalleryKey.ValueString() != "github" {
+		t.Fatalf("custom template connection did not read back: %v %s", readResp.Diagnostics, read.GalleryKey)
+	}
+	// A later plan leaves the undeclared gallery_key unknown; it keeps the
+	// recorded source instead of planning a refused transition.
+	read.GalleryKey = types.StringUnknown()
+	replan := tfsdk.Plan{Schema: connSchema}
+	replan.Set(ctx, &read)
+	modified := resource.ModifyPlanResponse{Plan: replan}
+	r.ModifyPlan(ctx, resource.ModifyPlanRequest{Plan: replan, State: readResp.State}, &modified)
+	var planned PaperclipConnectionResourceModel
+	modified.Plan.Get(ctx, &planned)
+	if modified.Diagnostics.HasError() || planned.GalleryKey.IsUnknown() || planned.GalleryKey.ValueString() != "github" {
+		t.Fatalf("custom template connection planned a gallery_key change: %v %s", modified.Diagnostics, planned.GalleryKey)
+	}
+}
+
 func TestAgentSchemaIdentityAttributes(t *testing.T) {
 	ctx := context.Background()
 	r := NewPaperclipAgentResource()

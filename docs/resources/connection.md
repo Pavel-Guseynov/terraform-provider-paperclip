@@ -41,7 +41,7 @@ resource "paperclip_connection" "gitea_conn" {
 - `credential_secret_refs` (Map of Objects, see [below for nested schema](#nestedatt--credential-secret-refs)) Protected company secret references keyed by native configPath. Versions use latest or a positive integer string. Contains reference identities only, never credential values.
 - `credential_source` (String) Native credential source. Custom creation uses paperclip_vault. Other sources require native setup and import; source transitions are rejected.
 - `enabled` (Boolean) Whether the native connection is enabled. Native creation defaults to false; omission retains its current value. Local stdio activation follows the target server's deployment and trusted-runtime policy.
-- `gallery_key` (String) Paperclip app gallery slug of an included connector, connected through its gallery definition and identified by config.sourceTemplateKey.
+- `gallery_key` (String) Paperclip app gallery slug of an included connector, connected through its gallery definition and identified by config.sourceTemplateKey. When omitted, the connection is created through the custom create path and this reports the config.sourceTemplateKey Paperclip records, or null.
 - `name` (String) Connection name; Paperclip names an included gallery connector.
 - `ownership` (String) Native ownership, immutable after creation. Custom creation defaults to customer; omission retains an imported value.
 - `status` (String) Native administrative status, defaulting to draft at creation. Omission retains its current value. Destroy archives the connection.

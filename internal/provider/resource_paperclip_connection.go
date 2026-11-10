@@ -96,8 +96,9 @@ func (r *PaperclipConnectionResource) Schema(ctx context.Context, req resource.S
 				},
 			},
 			"gallery_key": schema.StringAttribute{
-				Description: "Paperclip app gallery slug of an included connector, connected through its gallery definition and identified by config.sourceTemplateKey.",
+				Description: "Paperclip app gallery slug of an included connector, connected through its gallery definition and identified by config.sourceTemplateKey. When omitted, the connection is created through the custom create path and this reports the config.sourceTemplateKey Paperclip records, or null.",
 				Optional:    true,
+				Computed:    true,
 			},
 			"transport": schema.StringAttribute{
 				Description: "Native transport: local_stdio, mcp_remote, rest_api or chat_sdk. Immutable after creation.",
@@ -159,7 +160,21 @@ func (r *PaperclipConnectionResource) ModifyPlan(ctx context.Context, req resour
 		}
 		resp.Diagnostics.Append(r.validateConnection(ctx, plan, state, true)...)
 		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("credential_grant_ready"), true)...)
+		// An undeclared gallery_key keeps the source recorded for an existing
+		// connection; the native update API cannot change it.
+		if !req.State.Raw.IsNull() && plan.GalleryKey.IsUnknown() {
+			resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("gallery_key"), state.GalleryKey)...)
+		}
 	}
+}
+
+// reportedGalleryKey is the gallery template source Paperclip records in a
+// connection's config.sourceTemplateKey, or null when it records none.
+func reportedGalleryKey(config map[string]interface{}) types.String {
+	if source, ok := config["sourceTemplateKey"].(string); ok && source != "" {
+		return types.StringValue(source)
+	}
+	return types.StringNull()
 }
 
 // knownCredentialPolicy prefers the policy Paperclip reports, keeps a known
@@ -249,6 +264,9 @@ func (r *PaperclipConnectionResource) Create(ctx context.Context, req resource.C
 	plan.ID = types.StringValue(created.ID)
 	plan.CompanyID = types.StringValue(created.CompanyID)
 	plan.Name = types.StringValue(created.Name)
+	if plan.GalleryKey.IsUnknown() {
+		plan.GalleryKey = reportedGalleryKey(created.Config)
+	}
 	if created.AppID != "" {
 		plan.AppID = types.StringValue(created.AppID)
 	} else if plan.AppID.IsUnknown() {
@@ -331,11 +349,8 @@ func (r *PaperclipConnectionResource) Read(ctx context.Context, req resource.Rea
 	state.CredentialPolicy = knownCredentialPolicy(state.CredentialPolicy, conn.CredentialPolicy)
 	refreshConnectionFields(ctx, &state, conn)
 	// The gallery source identifies an included connector, so an adopted one
-	// matches its declaration and a custom one plans its replacement.
-	state.GalleryKey = types.StringNull()
-	if source, ok := conn.Config["sourceTemplateKey"].(string); ok && source != "" {
-		state.GalleryKey = types.StringValue(source)
-	}
+	// matches its declaration.
+	state.GalleryKey = reportedGalleryKey(conn.Config)
 	state.Config = refreshSemanticJSON(state.Config, conn.Config)
 	previousCredentialRefs := state.CredentialRefs
 	previousGrantReady := state.CredentialGrantReady
